@@ -56,6 +56,10 @@ export function PreviewResult({ result, evidenceRefs }: { result: PreviewRespons
                 <p><code>{field.sourcePaths.join(', ') || 'Derived input'}</code> →{' '}
                   <code>{field.mapping?.op ?? 'deterministic derivation'}</code> →{' '}
                   <code>{field.targetField}</code>{value !== undefined && <> · <code>{JSON.stringify(value)}</code></>}</p>
+                {field.mapping && <details>
+                  <summary>Mapping parameters</summary>
+                  <pre>{JSON.stringify(field.mapping, null, 2)}</pre>
+                </details>}
                 {field.sourceEventIds.length > 0 && <small>Source events {field.sourceEventIds.join(', ')}</small>}
                 {field.derivationInputs.length > 0 && <small>Derivation inputs {field.derivationInputs.join(', ')}</small>}
                 {field.evidenceRefs.map(id => <button type="button" className="citation-button" key={id}
