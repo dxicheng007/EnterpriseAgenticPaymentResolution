@@ -3,7 +3,8 @@ import { compile } from '@eapr/compiler/compile';
 import { hashCanonical, type ConnectorSpec, type VerificationReport } from '@eapr/contracts';
 import { baselineA, baselineEventsA, baselineManifestA, emptyTargetA, profileA, validSpecA } from '../../../tests/fixtures/index.js';
 import { evaluateReferenceState } from '../src/reference-model.js';
-import { mandatoryChecks, compareSubjectBaseline, validateReport } from '../src/verify.js';
+import { mandatoryChecks, validateReport } from '../src/verify.js';
+import { compareSubjectBaseline } from '../src/subject-comparison.js';
 
 function candidate(spec: ConnectorSpec = validSpecA) {
   const result = compile(spec, [profileA]);
