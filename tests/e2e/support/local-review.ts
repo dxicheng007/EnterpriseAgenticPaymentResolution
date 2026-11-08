@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, type Page, type Response } from '@playwright/test';
@@ -6,13 +6,16 @@ import { createServer } from 'vite';
 import { createEvidenceStore } from '@eapr/evidence';
 import { createLocalComposition } from '../../../apps/control/src/composition.js';
 import { loadDemo } from '../../../scripts/load-demo.js';
+import { migrationIdentities, readMigrationCatalog } from '../../../scripts/migrate.js';
+import { prepareVerificationPins } from '../../../scripts/prepare-verification.js';
 import { localPort } from '../../../scripts/native-db.js';
 import { createTestSystem, testNamespace } from '../../fixtures/harness.js';
 
-export async function openLocalReview() {
-  const root = await mkdtemp(join(tmpdir(), 'eapr-c3-browser-'));
+export async function openLocalReview({ verification = false } = {}) {
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'eapr-c3-browser-'));
   const origin = 'http://127.0.0.1:' + localPort('EAPR_WEB_PORT', 5173);
   const visibleRoot = join(root, 'visible');
+  const truthRoot = join(root, 'protected');
   let system: Awaited<ReturnType<typeof createTestSystem>> | undefined;
   let web: Awaited<ReturnType<typeof createServer>> | undefined;
 
@@ -35,11 +38,26 @@ export async function openLocalReview() {
       dbNamespace: testNamespace('c3browser'),
       async controlPluginFactory({ db, clock }) {
         const dependencies = { db, clock, store };
-        const { captures } = await loadDemo(dependencies, { visibleRoot, truthRoot: join(root, 'protected') });
-        return (await createLocalComposition(dependencies, { webOrigin: origin, captures })).featurePlugins;
+        const { captures } = await loadDemo(dependencies, { visibleRoot, truthRoot });
+        const options = { webOrigin: origin, captures };
+        if (!verification) return (await createLocalComposition(dependencies, options)).featurePlugins;
+        const pins = await prepareVerificationPins({ db, captures, truthRoot, store });
+        return (await createLocalComposition(dependencies, {
+          ...options,
+          verification: {
+            pins, registryRoot: join(root, 'artifacts'),
+            expectedMigrations: migrationIdentities(readMigrationCatalog().control),
+          },
+        })).featurePlugins;
       },
     });
-    web = await createServer({ configFile: 'apps/web/vite.config.ts' });
+    web = await createServer({
+      configFile: 'apps/web/vite.config.ts',
+      ...(verification && {
+        server: { fs: { deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '**/.local/**',
+          '**/.evidence/**', '**/fixtures/truth/**'] } },
+      }),
+    });
     await web.listen();
     return { origin, system, store, visibleRoot, close };
   } catch (error) {
