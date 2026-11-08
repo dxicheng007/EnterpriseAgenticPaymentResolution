@@ -4,7 +4,11 @@ Run `npm run dev` from the repository root with Node 24 and PostgreSQL 18 on PAT
 
 The catalog reports `verificationAvailable: true` once both captures have valid construction pins and the control registry and routes are ready. Preview a candidate before requesting verification. Preview registers the exact artifact, profiles, manifest, and snapshot. The reviewer session can then submit a verification job and read its summary. The availability flag does not grant approval. The evaluator reports eligibility separately, and missing mandatory coverage keeps the candidate ineligible.
 
-Existing visible demo data is reused. A missing, malformed, or legacy protected fixture yields `VERIFICATION_FIXTURE_SETUP_REQUIRED`. A mismatch with the captured dataset or an immutable fixture conflict yields `VERIFICATION_FIXTURE_CONFLICT`. Health, evidence, and preview remain available when only protected setup fails. Corrupt visible input still prevents startup.
+Existing visible demo data is reused. An unreadable or invalid expected file or companion, or a companion present for only one company, yields `VERIFICATION_FIXTURE_SETUP_REQUIRED`. Decoded inputs that disagree with each other or with the capture, and immutable pin conflicts, yield `VERIFICATION_FIXTURE_CONFLICT`. Health, evidence, and preview remain available when only protected setup fails. Corrupt visible input still prevents startup.
+
+The operator uses `expected-a.json` and `expected-b.json` from the selected private root. When both `evidence-a.json` and `evidence-b.json` are present, setup matches them to the expected files and assembles each complete snapshot's evidence from the captured database and original-byte store. Both bundles pass validation before publication starts. This reserves fixture version `2` for evidence bundles. A schema-less fixture cannot use version `2`.
+
+Historical roots with both companions absent retain their original fixture versions and financial checks. The evidence support check is unavailable for these pins. A valid v2 pin makes protected evidence available to the evaluator. Coverage and eligibility depend on the assertions the evaluator runs for the candidate.
 
 ## Select regenerated construction fixtures
 
@@ -14,10 +18,10 @@ Use the same repository and local database configuration as the demo. The databa
 node --import tsx scripts/prepare-verification.ts --upgrade --new-root .local/verification-upgrade-1
 ```
 
-The operator command regenerates the defined synthetic dataset in the new directory. It compares the regenerated visible manifests, members, original byte hashes, and source metadata against the existing visible data and captures. The command uses the original captured snapshots to pin the strict truth. It does not import source events or change the original visible or private files.
+The operator command regenerates the defined synthetic dataset in the new directory. It compares the regenerated visible manifests, members, original byte hashes, and source metadata against the existing visible data and captures. The regenerated private root includes both companions. The command pins v2 using the existing captured snapshots, events, and evidence. Original visible files, historical pins, and reports are preserved.
 
-After both pins succeed, the command atomically publishes a private, mode-0600 selection with the exact capture bindings. It saves any previous selection bytes in a separate backup. The next supervisor startup validates the selection and reuses the immutable pins. Restart the demo through its existing supervisor lifecycle to pick up the selection.
+After both v2 pins succeed, the command atomically publishes a private, mode-0600 selection with the exact capture bindings. It saves any previous selection bytes in a separate backup. The next supervisor startup validates the selection and reuses the immutable pins. Restart the demo through its existing supervisor lifecycle to pick up the selection.
 
-If the data differs, the new directory remains available for local inspection and the previous selection stays in effect. The workflow supports exact regeneration of this synthetic dataset only. It cannot reconstruct arbitrary financial history. The generator currently fixes the fixture version. An identical existing bundle can be reused. A different bundle under the same key requires a new version from the fixture producer and evaluator owners. Selecting a different output directory does not change that key.
+If the data differs, the new directory remains available for local inspection and the previous selection stays in effect. The workflow supports exact regeneration of this synthetic dataset only. It cannot reconstruct arbitrary financial history. An identical existing bundle can be reused. The immutable key is the fixture ID and reserved version `2` in the evaluator store, shared across upgrade directories. A different bundle under that key requires a reviewed version from the fixture producer and evaluator owners. If publication stops after the first pin, the immutable pin remains unselected and the previous selection stays in effect.
 
 Keep selections, generated private files, and protected bundles out of commits, browser content, and evidence packets. Record only redacted setup codes, supported capture identities, and job summaries when collecting evidence.
