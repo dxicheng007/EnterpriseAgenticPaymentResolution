@@ -1,10 +1,14 @@
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { LocalApiError, requestLocal } from '../../../../../packages/client/src/http.js';
+import { getSourceCoverage } from '../../../../../packages/client/src/sources.js';
 import { previewConnector } from '../../../../../packages/client/src/preview.js';
 import { DemoCandidatesResponseSchema, type DemoCandidatesResponse } from '../../../../../packages/contracts/src/local-demo.js';
+import type { SourceCoverageResponse } from '../../../../../packages/contracts/src/source-coverage.js';
 import type { PreviewResponse } from '../../../../../packages/contracts/src/runtime.js';
 import { Diagnostics, RequestFailure } from '../sources/review-details.js';
 import { PreviewResult } from './PreviewResult.js';
+import { SourceCoverage } from './SourceCoverage.js';
+import { summarizeSourceCoverage } from './source-coverage-values.js';
 import { VerificationPanel } from './VerificationPanel.js';
 
 type Candidate = DemoCandidatesResponse['candidates'][number];
@@ -69,7 +73,7 @@ function CandidateList({ refresh }: { refresh: () => void }) {
       </label>
       <button type="button" onClick={refresh}>Refresh candidates</button>
     </div>
-    {candidate && <CandidatePreview key={candidate.id} candidate={candidate} verificationAvailable={catalog.verificationAvailable} />}
+    {candidate && <CandidatePreview key={JSON.stringify([candidate.id, candidate.snapshotId])} candidate={candidate} verificationAvailable={catalog.verificationAvailable} />}
   </>;
 }
 
@@ -78,7 +82,28 @@ function CandidatePreview({ candidate, verificationAvailable }: { candidate: Can
   const [error, setError] = useState<unknown>();
   const [pending, setPending] = useState(false);
   const current = useRef<AbortController | undefined>(undefined);
+  const [coverage, setCoverage] = useState<SourceCoverageResponse>();
+  const [coverageError, setCoverageError] = useState<unknown>();
+  const [coverageAttempt, setCoverageAttempt] = useState(0);
+  const { companyId, sourceRef, snapshotId, request, scope } = candidate;
   useEffect(() => () => current.current?.abort(), []);
+  useEffect(() => {
+    const abort = new AbortController();
+    void getSourceCoverage(companyId, snapshotId, abort.signal).then(response => {
+      if (abort.signal.aborted) return;
+      if (response.sourceRef !== sourceRef) {
+        setCoverageError(new LocalApiError(200, 'MALFORMED_RESPONSE', 'Source coverage did not match the selected candidate source.'));
+        return;
+      }
+      setCoverage(response);
+    }, failure => {
+      if (!abort.signal.aborted) setCoverageError(failure);
+    });
+    return () => abort.abort();
+  }, [companyId, sourceRef, snapshotId, coverageAttempt]);
+
+  const summary = useMemo(() => coverage && summarizeSourceCoverage(coverage, request.profiles),
+    [coverage, request.profiles]);
 
   async function runPreview() {
     if (current.current) return;
@@ -98,7 +123,6 @@ function CandidatePreview({ candidate, verificationAvailable }: { candidate: Can
     }
   }
 
-  const { scope, request } = candidate;
   const evidenceRefs = [
     ...request.spec.evidenceRefs,
     ...request.profiles.flatMap(profile => [
@@ -109,15 +133,22 @@ function CandidatePreview({ candidate, verificationAvailable }: { candidate: Can
   ];
   return <>
     <section className="review-card">
+      <p className="review-eyebrow">Development fixture · empty target</p>
       <h2>{candidate.label}</h2>
+      <p>{request.profiles.length === 1
+        ? 'This preview covers one customer from the company snapshot.'
+        : `This preview uses ${request.profiles.length} submitted profiles from the company snapshot.`}</p>
       <dl className="review-facts">
         <dt>Company</dt><dd>{scope.companyId}</dd>
         <dt>Seller</dt><dd>{scope.sellerEntityId}</dd>
-        <dt>Account</dt><dd>{scope.accountId}</dd>
-        <dt>Source</dt><dd>{candidate.sourceRef}</dd>
-        <dt>Snapshot</dt><dd>{candidate.snapshotId}</dd>
-        <dt>As of</dt><dd>{request.asOf}</dd>
-        <dt>Target</dt><dd>Empty development fixture</dd>
+        <dt>Candidate scope account</dt><dd>{scope.accountId}</dd>
+        {request.profiles.map((profile, index) => <Fragment key={index}>
+          <dt>{request.profiles.length === 1 ? 'Source account IDs' : `Source account IDs for ${profile.id}`}</dt>
+          <dd>{profile.sourceAccountIds.join(', ') || 'None supplied'}</dd>
+        </Fragment>)}
+        <dt>Source</dt><dd>{sourceRef}</dd>
+        <dt>Snapshot</dt><dd>{snapshotId}</dd>
+        <dt>Captured as of</dt><dd>{request.asOf}</dd>
       </dl>
       <details>
         <summary>Source contracts</summary>
@@ -130,10 +161,23 @@ function CandidatePreview({ candidate, verificationAvailable }: { candidate: Can
       {pending && <p role="status">Running preview…</p>}
       {error != null && <RequestFailure error={error} next="Retry the preview or refresh the candidate list." />}
     </section>
-    {result && <PreviewResult result={result} evidenceRefs={result.artifact ? evidenceRefs : []}
-      profileScopes={request.profiles.map(profile => profile.scope)} />}
+    <PreviewResult result={result} evidenceRefs={result?.artifact ? evidenceRefs : []}
+      profileScopes={request.profiles.map(profile => profile.scope)} coverage={summary}
+      sourceCoverage={<SourceCoverage response={coverage} summary={summary} failure={coverageError} retry={() => {
+        setCoverageError(undefined);
+        setCoverageAttempt(value => value + 1);
+      }} />} />
+    <section className="review-card">
+      <h2>Next available step</h2>
+      {result ? <p>Review the proposed imports, holds, and their citations.
+        {verificationAvailable && result.artifact && ' Request independent verification for this artifact below.'}
+        {verificationAvailable && !result.artifact && ' Review the compilation blockers before requesting independent verification.'}
+      </p> : <p>Inspect the captured citations, then run the preview to review proposed imports and holds.</p>}
+      <p>Live agent construction is pending. It will investigate source identities, contracts, and receivables and propose separate profiles.
+        Later enablement requires explicit per-customer review.</p>
+    </section>
     <VerificationPanel key={result?.artifact?.hash ?? 'no-artifact'}
-      available={verificationAvailable} connectorId={request.spec.id} snapshotId={candidate.snapshotId}
+      available={verificationAvailable} connectorId={request.spec.id} snapshotId={snapshotId}
       artifact={result?.artifact ?? null} />
   </>;
 }

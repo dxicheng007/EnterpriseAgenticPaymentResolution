@@ -65,3 +65,41 @@
   border-bottom: 1px solid color-mix(in srgb, currentColor 22%, transparent);
 }
 .citation-button { margin: .25rem; overflow-wrap: anywhere; }
+
+.coverage-totals, .coverage-accounts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  gap: .75rem;
+}
+.coverage-totals > div, .coverage-accounts > article, .coverage-unresolved {
+  padding: .85rem;
+  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+  border-radius: .45rem;
+}
+.coverage-totals { margin: 1rem 0; padding: 0; border: 0; }
+.coverage-totals dt { font-size: 1.05rem; font-weight: 700; }
+.coverage-totals dd { margin-top: .25rem; font-weight: normal; }
+.coverage-accounts h4, .coverage-unresolved h3 { margin-top: 0; }
+.coverage-accounts .review-facts {
+  grid-template-columns: auto minmax(0, 1fr);
+  margin-block: .75rem;
+  padding: 0;
+  border: 0;
+}
+.coverage-accounts .review-facts dd { font-weight: 600; }
+.coverage-profiles details { margin-block: .25rem; }
+.coverage-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  list-style: none;
+  gap: .35rem;
+  padding: 0;
+}
+.coverage-kinds li {
+  padding: .15rem .45rem;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  border-radius: .35rem;
+}
+.coverage-profiles, .preview-holds { padding-inline-start: 1.25rem; }
+.coverage-unresolved { margin-top: 1rem; }
+.balance-diff dd:first-of-type { font-size: 1.55rem; }

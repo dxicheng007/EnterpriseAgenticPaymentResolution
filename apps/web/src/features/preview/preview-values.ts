@@ -1,5 +1,6 @@
 import type { Diagnostic, Hold, Scope } from '../../../../../packages/contracts/src/common.js';
 import type { PreviewResponse } from '../../../../../packages/contracts/src/runtime.js';
+import type { SourceCoverageSummary } from './source-coverage-values.js';
 
 
 const dollars = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
@@ -72,4 +73,19 @@ export function previewIssues(result: PreviewResponse, profileScopes: readonly S
     selected, unmapped, unresolved,
     additional: unmatched(result.diagnostics, consolidated.flatMap(hold => hold.diagnostics), diagnosticKey),
   };
+}
+
+export function unmappedHoldGroups(hold: Hold, coverage: SourceCoverageSummary | undefined) {
+  if (hold.scope || hold.code !== 'UNKNOWN_ACCOUNT' || !coverage) return [];
+  const ids = new Set(hold.eventIds);
+  const documented = coverage.accounts.flatMap(({ account, eventIds }) => {
+    const matched = eventIds.filter(id => ids.has(id));
+    if (!matched.length) return [];
+    return [{ label: account.displayName + ' · ' + account.sellerEntityId + ' / ' + account.sourceAccountId,
+      eventCount: matched.length }];
+  });
+  const unresolvedCount = coverage.undocumented.reduce((total, row) =>
+    total + row.eventIds.filter(id => ids.has(id)).length, 0);
+  if (!unresolvedCount) return documented;
+  return [...documented, { label: 'Source identity unresolved', eventCount: unresolvedCount }];
 }
