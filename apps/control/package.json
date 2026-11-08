@@ -1,1 +1,8 @@
-{"name":"@eapr/control","private":true,"type":"module"}
+{
+  "name": "@eapr/control",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@fastify/multipart": "10.1.8"
+  }
+}

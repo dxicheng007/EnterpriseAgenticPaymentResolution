@@ -1,0 +1,14 @@
+{
+  "name": "@eapr/finance",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./balance": "./src/balance.ts",
+    "./validate": "./src/validate.ts",
+    "./allocations": "./src/allocations.ts",
+    "./reversals": "./src/reversals.ts"
+  },
+  "dependencies": {
+    "@eapr/contracts": "*"
+  }
+}

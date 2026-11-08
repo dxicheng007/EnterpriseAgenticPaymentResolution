@@ -6,7 +6,7 @@ import { launchControl, createWorkerClient } from '../apps/control/src/server.js
 import { launchWorker } from '../apps/worker/src/server.js';
 import { createControlDb } from '../packages/storage/src/control-db.js';
 import { createRuntimeDb } from '../packages/storage/src/runtime-db.js';
-import { migrate } from './migrate.js';
+import { migrate, migrationIdentities, readMigrationCatalog } from './migrate.js';
 import { localPort, provisionDemo, startNativeDb } from './native-db.js';
 import { seed } from './seed.js';
 
@@ -29,10 +29,11 @@ async function serve(role: 'worker' | 'control') {
     ? createRuntimeDb({ connectionString: required('RUNTIME_DATABASE_URL') })
     : createControlDb({ connectionString: required('CONTROL_DATABASE_URL') });
   try {
+    const expectedMigrations = migrationIdentities(readMigrationCatalog()[role === 'worker' ? 'runtime' : 'control']);
     const app = role === 'worker'
-      ? await launchWorker({ db: pool, clock, serviceToken }, workerPort)
+      ? await launchWorker({ db: pool, clock, serviceToken, expectedMigrations }, workerPort)
       : await launchControl({
-          db: pool, clock, workerClient: createWorkerClient('http://127.0.0.1:' + workerPort, serviceToken),
+          db: pool, clock, expectedMigrations, workerClient: createWorkerClient('http://127.0.0.1:' + workerPort, serviceToken),
         }, localPort('EAPR_CONTROL_PORT', 3001));
     try {
       process.send?.('ready');

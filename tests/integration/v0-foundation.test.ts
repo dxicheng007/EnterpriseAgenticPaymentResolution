@@ -9,12 +9,15 @@ import { publishActivity, readActivity } from '../../packages/storage/src/activi
 import { createControlDb } from '../../packages/storage/src/control-db.js';
 import { createRuntimeDb } from '../../packages/storage/src/runtime-db.js';
 import { withTransaction } from '../../packages/storage/src/transaction.js';
-import { migrate } from '../../scripts/migrate.js';
+import { migrate, migrationIdentities, migrationStreams, readMigrationCatalog } from '../../scripts/migrate.js';
 import { dropTest, localPort, provisionTest, startNativeDb, stopNativeDb, type DatabasePair } from '../../scripts/native-db.js';
 import { seed } from '../../scripts/seed.js';
 import { createTestSystem, testNamespace } from '../fixtures/harness.js';
 
 beforeAll(startNativeDb);
+const baseMigrations = readMigrationCatalog({ throughVersion: 1 });
+const migrateBase = (pair: DatabasePair, streams: Parameters<typeof migrate>[1] = migrationStreams) =>
+  migrate(pair, streams, baseMigrations);
 const clock = () => new Date('2026-11-08T00:00:00.000Z');
 const controlPort = localPort('EAPR_CONTROL_PORT', 3001);
 const workerPort = localPort('EAPR_WORKER_PORT', 3002);
@@ -41,8 +44,8 @@ test('public health requires both real migrations and reaches worker over authen
     const runtimeDb = createRuntimeDb({ connectionString: pair.runtime.appUrl });
     const serviceToken = randomBytes(32).toString('hex');
     const workerClient = createWorkerClient(workerUrl, serviceToken);
-    const worker = await launchWorker({ db: runtimeDb, serviceToken, clock }, workerPort);
-    const control = await launchControl({ db: controlDb, workerClient, clock }, controlPort);
+    const worker = await launchWorker({ db: runtimeDb, serviceToken, clock, expectedMigrations: migrationIdentities(baseMigrations.runtime) }, workerPort);
+    const control = await launchControl({ db: controlDb, workerClient, clock, expectedMigrations: migrationIdentities(baseMigrations.control) }, controlPort);
     const getHealth = async () => {
       const response = await fetch(controlUrl + '/api/health');
       return { status: response.status, body: await response.json() };
@@ -57,15 +60,15 @@ test('public health requires both real migrations and reaches worker over authen
           migrationVersions: { control: null, runtime: null },
         },
       });
-      await migrate(pair, ['control']);
+      await migrateBase(pair, ['control']);
       expect(await getHealth()).toMatchObject({
         status: 503, body: {
           status: 'not_ready', controlDb: 'ready', runtimeDb: 'migration_required',
           migrationVersions: { control: 1, runtime: null },
         },
       });
-      await migrate(pair, ['runtime']);
-      await migrate(pair); // Reapplication checks the immutable migration ledger.
+      await migrateBase(pair, ['runtime']);
+      await migrateBase(pair); // Reapplication checks the immutable migration ledger.
       expect(await getHealth()).toEqual({
         status: 200, body: {
           status: 'ready', controlDb: 'ready', runtimeDb: 'ready',
@@ -88,7 +91,7 @@ test('public health requires both real migrations and reaches worker over authen
 
 test('both service roles are denied cross-database CONNECT and DDL', async () => {
   await withDatabases('roles', async pair => {
-    await migrate(pair);
+    await migrateBase(pair);
     for (const [own, other] of [[pair.control, pair.runtime], [pair.runtime, pair.control]]) {
       const local = new Client({ connectionString: own.appUrl });
       const wrong = new URL(own.appUrl);
@@ -111,7 +114,7 @@ test('both service roles are denied cross-database CONNECT and DDL', async () =>
 
 test('seed twice preserves one version in each database and committed activity survives native restart', async () => {
   await withDatabases('restart', async pair => {
-    await migrate(pair);
+    await migrateBase(pair);
     await seed(pair, clock);
     await seed(pair, clock);
     const controlDb = createControlDb({ connectionString: pair.control.appUrl });
@@ -141,9 +144,10 @@ test('seed twice preserves one version in each database and committed activity s
       expect(await readActivity(reconstructed, 1, 10)).toEqual([saved]);
       const runtime = createRuntimeDb({ connectionString: pair.runtime.appUrl });
       const token = randomBytes(32).toString('hex');
-      const worker = await launchWorker({ db: runtime, serviceToken: token, clock }, workerPort);
+      const worker = await launchWorker({ db: runtime, serviceToken: token, clock, expectedMigrations: migrationIdentities(baseMigrations.runtime) }, workerPort);
       const control = await launchControl({
         db: reconstructed, workerClient: createWorkerClient(workerUrl, token), clock,
+        expectedMigrations: migrationIdentities(baseMigrations.control),
       }, controlPort);
       try {
         expect((await fetch(controlUrl + '/api/health')).status).toBe(200);
@@ -159,7 +163,7 @@ test('seed twice preserves one version in each database and committed activity s
 
 test('rollback discards an activity insert and its sequence increment', async () => {
   await withDatabases('rollback', async pair => {
-    await migrate(pair);
+    await migrateBase(pair);
     const db = createControlDb({ connectionString: pair.control.appUrl });
     try {
       await expect(withTransaction(db, async client => {
@@ -182,7 +186,7 @@ function barrier<T = void>() {
 
 test('transaction start order cannot cause reconnect to lose a later committed publication', async () => {
   await withDatabases('reconnect', async pair => {
-    await migrate(pair);
+    await migrateBase(pair);
     const db = createControlDb({ connectionString: pair.control.appUrl });
     const started = barrier();
     const release = barrier();
@@ -216,7 +220,7 @@ test('transaction start order cannot cause reconnect to lose a later committed p
 
 test('a waiting publisher cannot commit while another transaction holds the counter lock', async () => {
   await withDatabases('lock', async pair => {
-    await migrate(pair);
+    await migrateBase(pair);
     const db = createControlDb({ connectionString: pair.control.appUrl });
     const locked = barrier<number>();
     const waiting = barrier<number>();
@@ -262,7 +266,7 @@ test('a waiting publisher cannot commit while another transaction holds the coun
 
 test('serialization failures retry the whole transaction at most three times', async () => {
   await withDatabases('retries', async pair => {
-    await migrate(pair);
+    await migrateBase(pair);
     const db = createControlDb({ connectionString: pair.control.appUrl });
     let attempts = 0;
     try {
@@ -280,7 +284,7 @@ test('serialization failures retry the whole transaction at most three times', a
 });
 
 test('deterministic harness runs without a provider and fails unavailable capabilities explicitly', async () => {
-  const system = await createTestSystem({ modelMode: 'disabled', dbNamespace: testNamespace('harness') });
+  const system = await createTestSystem({ modelMode: 'disabled', dbNamespace: testNamespace('harness'), migrationThroughVersion: 1 });
   try {
     expect(await system.control.getHealth()).toMatchObject({ status: 200 });
     await expect(system.sourceAdmin.inject('anything')).rejects.toMatchObject({ code: 'FEATURE_NOT_IMPLEMENTED' });

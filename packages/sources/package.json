@@ -1,0 +1,11 @@
+{
+  "name": "@eapr/sources",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@eapr/contracts": "*",
+    "csv-parse": "7.0.3",
+    "csv-stringify": "6.9.0"
+  }
+}

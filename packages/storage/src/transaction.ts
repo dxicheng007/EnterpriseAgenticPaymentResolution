@@ -35,11 +35,15 @@ export async function withTransaction<T>(pool: Pool, fn: (client: PoolClient) =>
   }
 }
 
-export async function probeMigration(pool: Pool): Promise<import('../../contracts/src/activity.js').ServiceHealth> {
+export type MigrationIdentity = { version: number; sha256: string };
+
+export async function probeMigration(pool: Pool, expected: readonly MigrationIdentity[]): Promise<import('../../contracts/src/activity.js').ServiceHealth> {
   try {
-    const result = await pool.query<{ version: number }>('SELECT version FROM migration_ledger ORDER BY version DESC');
-    const latest = result.rows[0]?.version ?? null;
-    if (result.rows.some(row => row.version === 1)) {
+    const result = await pool.query<MigrationIdentity>('SELECT version, sha256 FROM public.migration_ledger ORDER BY version');
+    const latest = result.rows.at(-1)?.version ?? null;
+    if (expected.length > 0 && result.rows.length === expected.length && result.rows.every(
+      (row, index) => row.version === expected[index].version && row.sha256 === expected[index].sha256,
+    )) {
       return { status: 'ready', database: 'ready', migrationVersion: latest };
     }
     return { status: 'not_ready', database: 'migration_required', migrationVersion: latest };

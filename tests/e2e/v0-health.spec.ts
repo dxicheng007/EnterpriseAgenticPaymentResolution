@@ -4,7 +4,7 @@ import { localPort } from '../../scripts/native-db.js';
 import { createTestSystem, testNamespace } from '../fixtures/harness.js';
 
 test('renders ready and degraded PostgreSQL states and recovers on retry', async ({ page, browser }) => {
-  const system = await createTestSystem({ modelMode: 'disabled', dbNamespace: testNamespace('browser') });
+  const system = await createTestSystem({ modelMode: 'disabled', dbNamespace: testNamespace('browser'), migrationThroughVersion: 1 });
   let web: Awaited<ReturnType<typeof createServer>> | undefined;
   try {
     web = await createServer({ configFile: 'apps/web/vite.config.ts' });

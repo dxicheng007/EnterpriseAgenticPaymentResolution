@@ -3,6 +3,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdir
 import { join, relative, resolve } from 'node:path';
 import { z } from 'zod';
 import { hashBytes, hashCanonical } from '../packages/contracts/src/canonical.js';
+import { migrationIdentities, migrationStreams, readMigrationCatalog } from './migrate.js';
 import { localPort } from './native-db.js';
 
 const registry = {
@@ -208,6 +209,7 @@ function verifyV0() {
     }
 
     const passed = results.every(result => result.result === 'passed');
+    const catalog = readMigrationCatalog({ throughVersion: 1 });
     const packet = {
       schemaVersion: 1, runId, slice: 'V0', source, jointAcceptance: 'pending',
       result: passed ? 'passed' : 'failed', mode: { sourceFixtures: 'development-only', model: 'disabled', database: 'native' },
@@ -225,9 +227,9 @@ function verifyV0() {
         demoNamespace: process.env.EAPR_DEMO_NAMESPACE ?? 'eapr_v0',
         testPrefix: process.env.EAPR_TEST_PREFIX ?? 'eapr_test_v0',
       },
-      migrations: ['control', 'runtime'].map(stream => ({
-        stream, expectedVersion: 1, sha256: hashBytes(readFileSync('db/' + stream + '/001_base.sql')),
-      })),
+      migrations: migrationStreams.flatMap(stream => migrationIdentities(catalog[stream]).map(({ version, sha256 }) => ({
+        stream, expectedVersion: version, sha256,
+      }))),
       requiredTests: registry.V0, requiredCases: requiredV0Cases, commands: results, browserTraces,
     };
     writeFileSync(join(evidence, 'manifest.json'), JSON.stringify(packet, null, 2) + '\n', { mode: 0o600 });

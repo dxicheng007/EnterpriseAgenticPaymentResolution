@@ -204,6 +204,8 @@ export const emptyTargetA = TargetStateSchema.parse({
   customers: [], accounts: [], billingConfigurations: [],
 });
 
+export const emptyTargetB = TargetStateSchema.parse({ ...emptyTargetA, scope: scopeB });
+
 function recordBase(event: RawSourceEvent, kind: FinancialKind) {
   const identity = { sourceRef: event.sourceRef, sellerEntityId: scopeA.sellerEntityId, kind, recordId: event.recordId };
   return {

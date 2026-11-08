@@ -9,7 +9,7 @@ const local = resolve('.local');
 const dataDir = resolve(local, 'pgdata');
 const configPath = resolve(local, 'env');
 const demoNamespace = process.env.EAPR_DEMO_NAMESPACE ?? 'eapr_v0';
-if (!/^eapr_(?:review_)?v0$/.test(demoNamespace)) throw new Error('Unsafe demo database namespace');
+if (!/^eapr_(?:review_)?(?:v0|t1|t2)$/.test(demoNamespace)) throw new Error('Unsafe demo database namespace');
 const bootstrapRole = 'eapr_v0_bootstrap';
 const port = localPort('EAPR_PG_PORT', 55432);
 
@@ -108,8 +108,17 @@ export function stopNativeDb() {
   }
 }
 
+export function testLeasePrefix() {
+  const prefix = process.env.EAPR_TEST_PREFIX ?? 'eapr_test_v0';
+  if (!/^eapr_test_(?:review_)?(?:v0|t1|t2)$/.test(prefix)) throw new Error('Unsafe test database lease');
+  return prefix;
+}
+
 function validateTestNamespace(namespace: string) {
-  if (!/^eapr_test_(?:review_)?v0_[a-z0-9]{1,28}$/.test(namespace)) throw new Error('Unsafe test database namespace');
+  const prefix = testLeasePrefix() + '_';
+  if (!namespace.startsWith(prefix) || !/^[a-z0-9]{1,28}$/.test(namespace.slice(prefix.length))) {
+    throw new Error('Unsafe test database namespace');
+  }
 }
 
 async function provision(namespace: string, credentials: Credentials, reuse: boolean): Promise<DatabasePair> {

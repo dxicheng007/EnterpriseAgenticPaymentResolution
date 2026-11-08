@@ -2,17 +2,17 @@ import { timingSafeEqual } from 'node:crypto';
 import Fastify, { type FastifyInstance, type FastifyPluginAsync } from 'fastify';
 import type { Pool } from 'pg';
 import type { Clock } from '../../../packages/storage/src/control-db.js';
-import { probeMigration } from '../../../packages/storage/src/transaction.js';
+import { probeMigration, type MigrationIdentity } from '../../../packages/storage/src/transaction.js';
 
-type WorkerServices = {
+export type WorkerServices = {
   db: Pool;
   serviceToken: string;
   clock: Clock;
 };
 
-type WorkerDependencies = WorkerServices & { featurePlugins?: FastifyPluginAsync<WorkerServices>[] };
+type WorkerDependencies = WorkerServices & { expectedMigrations: readonly MigrationIdentity[]; featurePlugins?: FastifyPluginAsync<WorkerServices>[] };
 
-export function buildWorker({ db, serviceToken, clock, featurePlugins = [] }: WorkerDependencies): FastifyInstance {
+export function buildWorker({ db, serviceToken, clock, expectedMigrations, featurePlugins = [] }: WorkerDependencies): FastifyInstance {
   if (!serviceToken) throw new Error('Worker service credential is required');
   const worker = Fastify();
   const expected = Buffer.from('Bearer ' + serviceToken);
@@ -24,7 +24,7 @@ export function buildWorker({ db, serviceToken, clock, featurePlugins = [] }: Wo
         diagnostics: [], correlationId: request.id,
       });
     }
-    const health = await probeMigration(db);
+    const health = await probeMigration(db, expectedMigrations);
     return reply.code(health.status === 'ready' ? 200 : 503).header('Cache-Control', 'no-store').send(health);
   });
   for (const plugin of featurePlugins) worker.register(plugin, { db, clock, serviceToken });

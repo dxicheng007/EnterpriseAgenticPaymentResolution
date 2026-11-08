@@ -1,0 +1,11 @@
+{
+  "name": "@eapr/evidence",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@eapr/contracts": "*",
+    "pdfjs-dist": "5.7.284",
+    "pdf-lib": "1.17.1"
+  }
+}

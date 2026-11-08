@@ -2,7 +2,7 @@ import Fastify, { type FastifyInstance, type FastifyPluginAsync } from 'fastify'
 import type { Pool } from 'pg';
 import { ServiceHealthSchema, type Diagnostic, type HealthResponse, type ServiceHealth } from '../../../packages/contracts/src/index.js';
 import type { Clock } from '../../../packages/storage/src/control-db.js';
-import { probeMigration } from '../../../packages/storage/src/transaction.js';
+import { probeMigration, type MigrationIdentity } from '../../../packages/storage/src/transaction.js';
 
 export interface WorkerClient {
   getHealth(): Promise<ServiceHealth>;
@@ -29,21 +29,21 @@ export function createWorkerClient(baseUrl: string, serviceToken: string): Worke
   };
 }
 
-type ControlServices = {
+export type ControlServices = {
   db: Pool;
   workerClient: WorkerClient;
   clock: Clock;
 };
 
-type ControlDependencies = ControlServices & { featurePlugins?: FastifyPluginAsync<ControlServices>[] };
+type ControlDependencies = ControlServices & { expectedMigrations: readonly MigrationIdentity[]; featurePlugins?: FastifyPluginAsync<ControlServices>[] };
 
 const unavailable: ServiceHealth = { status: 'not_ready', database: 'unavailable', migrationVersion: null };
 
-export function buildControl({ db, workerClient, clock, featurePlugins = [] }: ControlDependencies): FastifyInstance {
+export function buildControl({ db, workerClient, clock, expectedMigrations, featurePlugins = [] }: ControlDependencies): FastifyInstance {
   const control = Fastify();
   control.get('/api/health', async (_request, reply) => {
     const [local, remote] = await Promise.all([
-      probeMigration(db),
+      probeMigration(db, expectedMigrations),
       Promise.resolve().then(() => workerClient.getHealth()).catch(() => unavailable),
     ]);
     const diagnostics: Diagnostic[] = [];
