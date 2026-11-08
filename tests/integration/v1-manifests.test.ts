@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import {
   BootstrapManifestSchema, RawSourceEventSchema, UploadMetadataSchema, canonicalJson, hashBytes, hashCanonical,
-  hashManifest, type BootstrapManifest, type ManifestFile, type RawSourceEvent,
+  hashEvent, hashManifest, type BootstrapManifest, type ManifestFile, type RawSourceEvent,
 } from '@eapr/contracts';
 import { createEvidenceStore } from '@eapr/evidence';
 import {
@@ -182,9 +182,30 @@ it('pins a B epoch and serializes publication with live append across all three 
     const semanticPage = await source.fetchChanges(companyB.sourceRef,'b-semantics','0');
     expect(semanticPage.events).toEqual([semantic]);
     expect(semantic).toMatchObject({kind:'semantic_change',semanticVersion:'sem-b-2',payload:{revision:'sem-b-2'}});
+    const {sellerEntityId: _seller, ...missingSeller} = record.rawIdentity;
+    for (const rawIdentity of [{...record.rawIdentity,sellerEntityId:'different-seller'},missingSeller]) {
+      const draft = {...record,rawIdentity};
+      const rejected = {...draft,contentHash:hashEvent(draft)};
+      const original = structuredClone(rejected);
+      await expect(operator.batchB(token,readyMeta,[rejected]))
+        .rejects.toMatchObject({status:422,code:'SOURCE_CONTENT_INVALID'});
+      expect(rejected).toEqual(original);
+      expect((await source.fetchChanges(companyB.sourceRef,'b-files',cursor)))
+        .toMatchObject({after:cursor,next:cursor,events:[]});
+      expect((await dependencies.db.query('SELECT file_id FROM source_files WHERE batch_id = $1',
+        [readyMeta.batch!.batchId])).rowCount).toBe(0);
+    }
     const added = await operator.batchB(token,readyMeta,[record]);
     expect(added.events).toEqual([record]);
     expect((await source.fetchChanges(companyB.sourceRef,'b-files',cursor)).events).toEqual([record]);
+    const knownAccount = (await source.getSnapshotRecords(initial.snapshot.id))
+      .find(event=>event.streamId === 'b-files')!.rawIdentity.sourceAccountId!;
+    const known = eventB({kind:'invoice',recordId:'known-invoice-b',sourceAccountId:knownAccount,
+      effectiveDate:'2026-10-03',fields:{amount_minor:100,due_on:'2026-10-31'}},record.sequence+1,live.observedAt);
+    const knownMeta = UploadMetadataSchema.parse({...readyMeta,documentId:'known-b-batch',
+      batch:{...readyMeta.batch,batchId:'batch-b-known',sequence:5}});
+    expect((await operator.batchB(token,knownMeta,[known])).events).toEqual([known]);
+    expect((await source.fetchChanges(companyB.sourceRef,'b-files',String(record.sequence))).events).toEqual([known]);
     expect(record.semanticVersion).toBe('sem-b-2');
     expect(canonicalJson((await source.getSnapshot(initial.snapshot.id)))).toBe(canonicalJson(initial.snapshot));
 

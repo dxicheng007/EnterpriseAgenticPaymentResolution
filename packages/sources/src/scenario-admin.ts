@@ -112,6 +112,9 @@ export function createScenarioAdmin(dependencies:UploadDependencies, env:{DEMO_O
         throw new SourceError(400,'SOURCE_METADATA_INVALID','Operator batch must target the B file stream');
       }
       const checked = events.map(event=>validateSourceEvent(companyB,event));
+      if (checked.some(event=>event.rawIdentity.sellerEntityId !== companyB.sellerEntityId)) {
+        throw new SourceError(422,'SOURCE_CONTENT_INVALID','B CSV requires the registered seller identity');
+      }
       const upload = await uploadSource(dependencies,metadata,encodeBatch(checked));
       return {upload,events:checked};
     },
