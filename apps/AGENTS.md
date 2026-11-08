@@ -10,6 +10,8 @@ Follow the [repository instructions](../AGENTS.md) and [PRD local process bounda
 
 Inject dependencies through the service builders and register assigned feature routes through the existing `featurePlugins` option. Preserve the service boundaries and shared response schemas. Control uses its worker client for worker operations. The worker never connects to the control database or receives model calls, an SDK, or a model key.
 
+The [preview feature plugin](control/src/routes/preview.ts) exposes the frozen preview route when explicitly mounted. It requires an injected read authorizer, immutable source snapshot reader and scoped target reader. Candidate registration is optional and uses the injected registry writer. The default local composition has no preview mount until real adapters are available.
+
 ## Planned surfaces
 
 - Source evidence, preview and review surfaces follow [V1](../docs/superpowers/plans/2026-11-08-implementation-plan.md#v1--inspect-both-acquired-companies-and-their-evidence), [V2](../docs/superpowers/plans/2026-11-08-implementation-plan.md#v2--preview-an-executable-connector-without-writing-the-parent), and the frozen [verification protocol](../docs/superpowers/plans/2026-11-08-contract-freeze.md#f6--health-and-protected-verification-protocol). Agents can request protected verification within their capabilities. They cannot choose expected outputs, fixtures, or runner paths.

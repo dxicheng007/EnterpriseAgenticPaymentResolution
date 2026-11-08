@@ -9,6 +9,8 @@ Follow the [repository instructions](../AGENTS.md), [shared test interfaces](../
 | [Browser](e2e/v0-health.spec.ts) | Exercise visible service readiness and recovery using Playwright and controlled services. |
 | [Fixture exports](fixtures/index.ts) | Provide schema-validated public development-only data, with frozen identities, versions, computed hashes, and expected examples. |
 
+The [preview integration tests](integration/v2-preview.test.ts) exercise real control HTTP, a test-only worker HTTP read, and unchanged control/runtime PostgreSQL schema and ledger state. Source captures, target records and candidate registration are explicit development fixtures. Actual persisted parent reads and registry integration require their own checks.
+
 Use deterministic barriers for transaction ordering, as specified in [F7](../docs/superpowers/plans/2026-11-08-contract-freeze.md#f7--durable-ui-activity-and-cursor-protocol). Preserve spec-derived expected results when the implementation disagrees. Fix the implementation or raise the precise spec gap through the repository clarification rule.
 
 Public development fixtures are separate from future live construction and protected holdouts. Follow [F6](../docs/superpowers/plans/2026-11-08-contract-freeze.md#f6--health-and-protected-verification-protocol) for independent expected calculations, immutable truth, and evaluator-only access. Schema acceptance alone cannot establish compiler, financial, or live behavior.
