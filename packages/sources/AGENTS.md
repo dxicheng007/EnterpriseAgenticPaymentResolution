@@ -10,3 +10,5 @@ Follow the [repository instructions](../../AGENTS.md), the [package boundaries](
 Keep raw identity separate from approved customer scope. This package records source data and capture state. Compiler, finance and runtime own interpretation, money, and target writes.
 
 [Company B](src/company-b.ts) decodes the fixed CSV envelope and declares independent file, receipt, and semantic streams. [Manifest services](src/manifest.ts) serve pinned captures and [change pages](src/change-feed.ts). [Scenario administration](src/scenario-admin.ts) is a separate operator-only import that requires its own token and explicit enablement. Keep it out of product tools.
+
+[Source coverage](src/source-coverage.ts) reads one complete captured aggregate and its original associations to explain cited source identities. Keep the supported identity grammar separate from candidate and financial interpretation.
