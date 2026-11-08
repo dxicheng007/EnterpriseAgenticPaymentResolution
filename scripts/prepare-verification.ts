@@ -14,9 +14,11 @@ import { localSourceCatalog } from '../apps/control/src/composition.js';
 import {
   createVerificationSelector, type SafeVerificationPin, type VerificationSetupCode,
 } from '../apps/control/src/verification-composition.js';
-import { pinProtectedFixture } from '../packages/evaluator/src/fixture-store.js';
+import { pinProtectedEvidenceFixture, pinProtectedFixture } from '../packages/evaluator/src/fixture-store.js';
+import { decodeEvidenceProducer, prepareProtectedEvidenceBundle, type EvidenceFixtureInput } from '../packages/evaluator/src/evidence-fixtures.js';
 import { decodeTruth } from '../packages/evaluator/src/fixtures.js';
 import { createControlDb } from '../packages/storage/src/control-db.js';
+import { assembleEvidenceVerificationInput } from './evidence-verification-input.js';
 import { generateFixtures } from './generate-fixtures.js';
 import { loadVisible, localDemoRecipe } from './load-demo.js';
 import { getDemoPair } from './native-db.js';
@@ -87,10 +89,11 @@ function decodeUtf8(bytes: Buffer) {
 type PinPreparation = { db: Pool; captures: DemoCapture[]; truthRoot: string; store?: EvidenceStore };
 
 async function readCaptured({ db, captures, store }: Omit<PinPreparation, 'truthRoot'>) {
-  const service = createSourceService({ db, store: store ?? await createEvidenceStore(evidenceRoot), clock: () => new Date() },
+  const evidenceStore = store ?? await createEvidenceStore(evidenceRoot);
+  const service = createSourceService({ db, store: evidenceStore, clock: () => new Date() },
     localSourceCatalog);
   if (captures.length !== companies.length) throw conflict();
-  return Promise.all(companies.map(async company => {
+  const captured = await Promise.all(companies.map(async company => {
     const companyId = 'company-' + company;
     const capture = captures.find(entry => entry.companyId === companyId);
     const source = localSourceCatalog.get(companyId);
@@ -106,14 +109,16 @@ async function readCaptured({ db, captures, store }: Omit<PinPreparation, 'truth
       manifest.companyId !== companyId) throw conflict();
     const events = await service.getSnapshotRecords(snapshot.id);
     return {
-      company, manifest, snapshot, events,
+      company, source, dossier, manifest, snapshot, events,
       binding: { companyId, sourceRef: source.sourceRef, manifestId: manifest.id, manifestHash: manifest.hash,
         snapshotHash: snapshot.contentHash },
     };
   }));
+  return { captured, evidenceStore };
 }
 
-type Captured = Awaited<ReturnType<typeof readCaptured>>;
+type Captures = Awaited<ReturnType<typeof readCaptured>>;
+type Captured = Captures['captured'];
 
 async function requireSafeProtectedStore() {
   await physicalDirectory(localRoot);
@@ -124,7 +129,19 @@ async function requireSafeProtectedStore() {
   }
 }
 
-async function pinCaptured(captured: Captured, truthRoot: string): Promise<SafeVerificationPin[]> {
+async function readCompanion(truthRoot: string, company: typeof companies[number]) {
+  try {
+    const json = decodeUtf8(await boundedPrivateFile(join(truthRoot, 'evidence-' + company + '.json'), maxPrivateBytes));
+    return { json, producer: decodeEvidenceProducer(json) };
+  } catch (error) {
+    if (missing(error)) return undefined;
+    throw setupRequired();
+  }
+}
+
+async function pinCaptured(
+  db: Pool, { captured, evidenceStore }: Captures, truthRoot: string, requireEvidence = false,
+): Promise<SafeVerificationPin[]> {
   const inputs = await Promise.all(captured.map(async ({ company, manifest, snapshot, events }) => {
     try {
       await physicalDirectory(truthRoot);
@@ -134,14 +151,36 @@ async function pinCaptured(captured: Captured, truthRoot: string): Promise<SafeV
       throw setupRequired();
     }
   }));
+  const companions = await Promise.all(companies.map(company => readCompanion(truthRoot, company)));
+  const [companionA, companionB] = companions;
+  if ((companionA === undefined) !== (companionB === undefined) ||
+      (requireEvidence && companionA === undefined)) throw setupRequired();
 
   try {
     if (inputs.some(({ truth }) => truth.purpose !== 'construction')) throw conflict();
+    const evidenceInputs: EvidenceFixtureInput[] = [];
+    if (companionA && companionB) {
+      for (const [index, { json, producer }] of [companionA, companionB].entries()) {
+        const capture = captured[index]!;
+        const { source, dossier, snapshot, manifest } = capture;
+        const { truth, truthJson } = inputs[index]!;
+        if (producer.fixtureSetId !== truth.fixtureSetId || producer.producerFixtureSetVersion !== truth.fixtureSetVersion ||
+            producer.producerTruthHash !== truth.hash || canonicalJson(producer.generator) !== canonicalJson(truth.generator) ||
+            producer.companyId !== source.companyId || producer.sourceRef !== source.sourceRef ||
+            producer.sellerEntityId !== source.sellerEntityId || producer.manifestId !== manifest.id ||
+            producer.manifestHash !== manifest.hash ||
+            canonicalJson([...dossier.evidenceIds].sort()) !== canonicalJson([...snapshot.evidenceIds].sort())) throw conflict();
+        const input = await assembleEvidenceVerificationInput(db, evidenceStore, capture, truthJson, json, producer);
+        await prepareProtectedEvidenceBundle(input);
+        evidenceInputs.push(input);
+      }
+    }
     await requireSafeProtectedStore();
     const pins: SafeVerificationPin[] = [];
     for (const [index, input] of inputs.entries()) {
-      const result = await pinProtectedFixture(input);
-      if (result.purpose !== 'construction' || result.snapshotHash !== captured[index]!.binding.snapshotHash) throw conflict();
+      const result = companionA ? await pinProtectedEvidenceFixture(evidenceInputs[index]!) : await pinProtectedFixture(input);
+      if ((companionA && result.fixtureSetVersion !== '2') || result.purpose !== 'construction' ||
+          result.snapshotHash !== captured[index]!.binding.snapshotHash) throw conflict();
       pins.push({
         ...captured[index]!.binding, fixtureSetId: result.fixtureSetId, fixtureSetVersion: result.fixtureSetVersion,
         purpose: result.purpose,
@@ -154,14 +193,16 @@ async function pinCaptured(captured: Captured, truthRoot: string): Promise<SafeV
   }
 }
 
-export async function prepareVerificationPins({ truthRoot, ...options }: PinPreparation) {
-  let captured: Captured;
+async function requireCaptured(options: Omit<PinPreparation, 'truthRoot'>) {
   try {
-    captured = await readCaptured(options);
+    return await readCaptured(options);
   } catch {
     throw conflict();
   }
-  return pinCaptured(captured, truthRoot);
+}
+
+export async function prepareVerificationPins({ truthRoot, ...options }: PinPreparation) {
+  return pinCaptured(options.db, await requireCaptured(options), truthRoot);
 }
 
 function selectionBindings(captured: Captured) {
@@ -189,16 +230,11 @@ async function previousSelection() {
 }
 
 export async function prepareSelectedVerificationPins(options: Omit<PinPreparation, 'truthRoot'>) {
-  let captured: Captured;
-  try {
-    captured = await readCaptured(options);
-  } catch {
-    throw conflict();
-  }
+  const captures = await requireCaptured(options);
   let selection: z.infer<typeof selectionSchema>;
   try {
     const bytes = await previousSelection();
-    if (!bytes) return pinCaptured(captured, originalTruthRoot);
+    if (!bytes) return pinCaptured(options.db, captures, originalTruthRoot);
     selection = selectionSchema.parse(JSON.parse(decodeUtf8(bytes)));
     if (!isAbsolute(selection.truthRoot) || resolve(selection.truthRoot) !== selection.truthRoot ||
       selection.truthRoot !== join(dirname(selection.truthRoot), 'protected')) throw setupRequired();
@@ -206,8 +242,8 @@ export async function prepareSelectedVerificationPins(options: Omit<PinPreparati
   } catch {
     throw setupRequired();
   }
-  if (canonicalJson(selection.bindings) !== canonicalJson(selectionBindings(captured))) throw conflict();
-  return pinCaptured(captured, selection.truthRoot);
+  if (canonicalJson(selection.bindings) !== canonicalJson(selectionBindings(captures.captured))) throw conflict();
+  return pinCaptured(options.db, captures, selection.truthRoot);
 }
 
 type Visible = Awaited<ReturnType<typeof loadVisible>>;
@@ -250,7 +286,7 @@ async function verifyVisibleCapture(db: Pool, store: EvidenceStore, dataset: Vis
       apiRows.find(row => row.event_id === event.id)?.api_original_hash !== hash) throw conflict();
     await store.get(hash);
   }
-  // Complete event membership, including CSV events, is checked by pinProtectedFixture
+  // Complete event membership, including CSV events, is checked by the protected fixture store
   // against the independent regenerated truth and the original captured aggregate.
 }
 
@@ -293,7 +329,8 @@ export async function upgradeVerification(db: Pool, newRoot: string) {
     const store = await createEvidenceStore(evidenceRoot);
     const original = await Promise.all(companies.map(company => loadVisible(visibleRoot, company)));
     const captures = original.map(({ capture }) => capture);
-    const captured = await readCaptured({ db, store, captures });
+    const context = await readCaptured({ db, store, captures });
+    const { captured } = context;
     const generatedVisible = join(requestedRoot, 'generated-visible');
     const truthRoot = join(requestedRoot, 'protected');
     await generateFixtures({ ...localDemoRecipe, visibleRoot: generatedVisible, truthRoot });
@@ -302,10 +339,11 @@ export async function upgradeVerification(db: Pool, newRoot: string) {
       if (visibleFingerprint(regenerated[index]!) !== visibleFingerprint(dataset)) throw conflict();
       await verifyVisibleCapture(db, store, dataset, captured[index]!);
     }
-    const pins = await pinCaptured(captured, truthRoot);
+    const pins = await pinCaptured(db, context, truthRoot, true);
     await publishSelection(truthRoot, captured);
     return pins;
-  } catch {
+  } catch (error) {
+    if (error instanceof VerificationSetupError) throw error;
     throw conflict();
   }
 }

@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
-import { cp, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, truncate, unlink, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, truncate, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -102,7 +102,11 @@ test('real reviewer jobs use operator pins for the registered source captures', 
           protectedPaths.push(new URL('../../.local/protected-evaluator/' +
             hashCanonical([unique.fixtureSetId, unique.fixtureSetVersion]) + '.json', import.meta.url));
         }
+        // The namespaced expected-only copies deliberately retain the legacy mode.
+        await unlink(join(roots.truthRoot, 'evidence-a.json'));
+        await unlink(join(roots.truthRoot, 'evidence-b.json'));
         const pins = await prepare();
+        expect(pins.map(pin => pin.fixtureSetVersion)).toEqual(['1', '1']);
         for (const pin of pins) pinsByCompany.set(pin.companyId, pin);
         expect(await prepare()).toEqual(pins);
         expect(await readSourceState()).toEqual(before);
@@ -199,7 +203,9 @@ test('real reviewer jobs use operator pins for the registered source captures', 
           evaluatorBuildHash: await evaluatorBuildHash(), eligible: false,
         });
         expect(report.checks).toContainEqual(expect.objectContaining({ id: 'baseline_reconcile', status: 'passed' }));
-        expect(report.checks).toContainEqual(expect.objectContaining({ status: 'unavailable' }));
+        expect(report.checks).toContainEqual(expect.objectContaining({
+          id: 'evidence_support', status: 'unavailable', cases: 0,
+        }));
         expect(report.unexplainedDifferenceCents).toBe(0);
         expect(JSON.stringify(finished)).not.toContain(pin.fixtureSetId);
         expect(JSON.stringify(finished)).not.toContain(roots.truthRoot);
@@ -320,15 +326,102 @@ test('the operator upgrade selects only exact regeneration in an isolated demo r
         'activity_events',
       ].map(table => system.db.control.query('SELECT to_jsonb(t) AS row FROM ' + table + ' AS t ORDER BY to_jsonb(t)').then(result => hashCanonical(result.rows))));
       const before = await sourceState();
-      const run = spawnSync(process.execPath, [
-        '--import', createRequire(import.meta.url).resolve('tsx'), 'tests/fixtures/verification-startup.ts',
-      ], {
-        cwd: directory, timeout: 15_000, encoding: 'utf8',
+      const tsx = ['--import', createRequire(import.meta.url).resolve('tsx')];
+      const runOptions = {
+        cwd: directory, timeout: 15_000, encoding: 'utf8' as const,
         env: { CONTROL_DATABASE_URL: system.db.control.options.connectionString },
-      });
+      };
+      const runPrivate = (body: string) => spawnSync(process.execPath, [...tsx, '--input-type=module', '-e', `
+        import { strict as assert } from 'node:assert';
+        import { join } from 'node:path';
+        import { createControlDb } from './packages/storage/src/control-db.ts';
+        import { loadVisible } from './scripts/load-demo.ts';
+        import { prepareVerificationPins, upgradeVerification } from './scripts/prepare-verification.ts';
+        const db = createControlDb({ connectionString: process.env.CONTROL_DATABASE_URL });
+        const local = join(process.cwd(), '.local');
+        try { ${body} }
+        catch { process.stderr.write('PRIVATE_UPGRADE_ASSERTION_FAILED\\n'); process.exitCode = 1; }
+        finally { await db.end(); }
+      `], runOptions);
+      const legacyRoot = join(directory, '.local', 'legacy-input');
+      await mkdir(legacyRoot);
+      for (const company of ['a', 'b']) {
+        const name = 'expected-' + company + '.json';
+        await cp(join(demo, 'protected', name), join(legacyRoot, name));
+      }
+      const legacy = runPrivate(`
+        const captures = await Promise.all(['a', 'b'].map(async company =>
+          (await loadVisible(join(local, 'demo', 'visible'), company)).capture));
+        const pins = await prepareVerificationPins({ db, captures, truthRoot: join(local, 'legacy-input') });
+        assert.deepEqual(pins.map(pin => pin.fixtureSetVersion), ['1', '1']);
+      `);
+      expect(legacy.stderr).toBe('');
+      expect(legacy.status).toBe(0);
+      const protectedStore = join(directory, '.local', 'protected-evaluator');
+      const legacyPins = await readdir(protectedStore);
+      const fingerprint = async (root: string, files: string[]) =>
+        Promise.all(files.map(async name => hashBytes(await readFile(join(root, name)))));
+      const oldPins = await fingerprint(protectedStore, legacyPins);
+      const inventory = async (root: string) => {
+        const files = (await readdir(root, { recursive: true, withFileTypes: true }))
+          .filter(entry => entry.isFile()).map(entry => join(entry.parentPath, entry.name)).sort();
+        return Promise.all(files.map(async path => hashBytes(await readFile(path))));
+      };
+      const sourceRoots = ['visible', 'evidence'].map(name => join(demo, name));
+      const oldSources = await Promise.all(sourceRoots.map(inventory));
+
+      const run = spawnSync(process.execPath, [...tsx, 'tests/fixtures/verification-startup.ts'], runOptions);
       expect(run.stderr).toBe('');
       expect(run.status).toBe(0);
       expect(run.stdout.trim()).toBe('UPGRADE_FIXTURE_CASES_PASSED');
+      expect(await fingerprint(protectedStore, legacyPins)).toEqual(oldPins);
+
+      const v2Names = (await readdir(protectedStore)).filter(name => !legacyPins.includes(name));
+      const v2Pins = await Promise.all(v2Names.map(async name => {
+        const file = join(protectedStore, name);
+        const bundle = JSON.parse(await readFile(file, 'utf8'));
+        return { file, companyId: bundle.evidence.producer.companyId, version: bundle.pin.fixtureSetVersion };
+      }));
+      expect(v2Pins.map(pin => pin.version)).toEqual(['2', '2']);
+      const v2A = v2Pins.find(pin => pin.companyId === 'company-a')!.file;
+      const v2B = v2Pins.find(pin => pin.companyId === 'company-b')!.file;
+      const selection = join(demo, 'verification-selection.json');
+      const previous = hashBytes(await readFile(selection));
+      const previousInventory = await readdir(demo);
+      const generator = join(directory, 'scripts', 'generate-fixtures.ts');
+      const generatorSource = await readFile(generator, 'utf8');
+      await writeFile(generator, generatorSource.replace(/^ +await writeEvidenceFacts\(join\(truth,'evidence-[ab]\.json'\).*$/gm, ''));
+      try {
+        const missing = runPrivate(`
+          await assert.rejects(upgradeVerification(db, join(local, 'missing-companions')), {
+            code: 'VERIFICATION_FIXTURE_SETUP_REQUIRED',
+          });
+        `);
+        expect(missing.stderr).toBe('');
+        expect(missing.status).toBe(0);
+        expect(hashBytes(await readFile(selection))).toBe(previous);
+        expect(await readdir(demo)).toEqual(previousInventory);
+      } finally {
+        await writeFile(generator, generatorSource);
+      }
+      // This protected store belongs entirely to the disposable checkout. Make
+      // B's key unwritable after successful preflight, then verify A's orphan.
+      const aHash = hashBytes(await readFile(v2A));
+      await unlink(v2A);
+      await rename(v2B, v2B + '.test-saved');
+      await mkdir(v2B);
+      const blocked = runPrivate(`
+        await assert.rejects(upgradeVerification(db, join(local, 'blocked-second-pin')), {
+          code: 'VERIFICATION_FIXTURE_CONFLICT',
+        });
+      `);
+      expect(blocked.stderr).toBe('');
+      expect(blocked.status).toBe(0);
+      expect(hashBytes(await readFile(v2A))).toBe(aHash);
+      expect(hashBytes(await readFile(selection))).toBe(previous);
+      expect(await readdir(demo)).toEqual(previousInventory);
+      expect(await fingerprint(protectedStore, legacyPins)).toEqual(oldPins);
+      expect(await Promise.all(sourceRoots.map(inventory))).toEqual(oldSources);
       expect(await sourceState()).toEqual(before);
     } finally {
       await system.close();
@@ -342,7 +435,7 @@ test('the control composition import graph stays outside the operator and evalua
   const moduleUrl = new URL('../../apps/control/src/composition.ts', import.meta.url).href;
   const script = String.raw`
     import { registerHooks } from 'node:module';
-    const forbidden = /(?:^|\/)(?:prepare-verification|generate-fixtures|canonical-fixtures|case-recipes|cases|reference-model|fixtures|fixture-store|subject-runner|subject-comparison|evaluator-runner)\.(?:ts|js)$/;
+    const forbidden = /(?:^|\/)(?:prepare-verification|evidence-verification-input|generate-fixtures|canonical-fixtures|case-recipes|cases|reference-model|fixtures|fixture-store|subject-runner|subject-comparison|evaluator-runner)\.(?:ts|js)$/;
     const hooks = registerHooks({
       resolve(specifier, context, nextResolve) {
         if (forbidden.test(specifier)) throw new Error('Unexpected private dependency');
