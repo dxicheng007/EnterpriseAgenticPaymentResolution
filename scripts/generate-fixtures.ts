@@ -1,14 +1,15 @@
-import { lstat, mkdir, realpath, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import {
   BootstrapManifestSchema, UploadMetadataSchema, canonicalJson, hashBytes, hashCanonical, hashManifest,
-  type Id, type IsoInstant, type ManifestFile, type UploadMetadata,
+  TransactionCentsSchema, type BootstrapManifest, type Id, type IsoInstant, type ManifestFile,
+  type RawSourceEvent, type UploadMetadata,
 } from '@eapr/contracts';
 import { companyA } from '../packages/sources/src/company-a.js';
 import { sourceFileId } from '../packages/sources/src/uploads.js';
-import { fixtureA, fixtureB, textPdf } from '../packages/sources/src/canonical-fixtures.js';
+import { fixtureA, fixtureB, textPdf, type ScenarioRecord } from '../packages/sources/src/canonical-fixtures.js';
 
 import { companyB, encodeBatch } from '../packages/sources/src/company-b.js';
 import { streamContentHash } from '../packages/sources/src/dossier.js';
@@ -35,6 +36,70 @@ function disjoint(a: string,b: string) {
   if (contains(a,b) || contains(b,a)) throw new Error('Visible and protected fixture roots must be disjoint');
 }
 
+async function requireNewTruthFile(path:string) {
+  try {
+    await lstat(path);
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return;
+    throw error;
+  }
+  throw new Error('Protected fixture output already exists');
+}
+
+type FixtureEvidence = {fileId:Id; originalSha256:string; text:string};
+
+function ordered<T>(items:readonly T[], key:(item:T)=>string):T[] {
+  if (new Set(items.map(key)).size !== items.length) throw new Error('Duplicate protected fixture member');
+  return [...items].sort((a,b)=>key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0);
+}
+
+async function generatorBuildHash() {
+  const paths = ['scripts/generate-fixtures.ts','packages/sources/src/canonical-fixtures.ts','package-lock.json'];
+  return hashCanonical(await Promise.all(paths.map(async path=>({
+    path, sha256:hashBytes(await readFile(join(repositoryRoot,path))),
+  }))));
+}
+
+async function writeTruth(input:{
+  path:string; company:'a'|'b'; seed:Id; tag:Id; buildHash:string; sellerEntityId:Id;
+  manifest:BootstrapManifest; events:readonly RawSourceEvent[]; records:readonly ScenarioRecord[];
+  evidence:readonly FixtureEvidence[]; anchoredAccount?:Id;
+}) {
+  const {manifest,events} = input;
+  const inputEvents = ordered(events.map(({id,contentHash})=>({id,contentHash})),event=>event.id);
+  const financial = new Map(ordered(events.filter(event=>event.kind !== 'semantic_change'),
+    event=>event.kind + ':' + event.recordId).map(event=>[event.kind + ':' + event.recordId,event]));
+  const records = ordered(input.records, record=>record.kind + ':' + record.recordId).map(record=>{
+    const {sourceAccountId,effectiveDate,...facts} = record;
+    const key = record.kind + ':' + record.recordId;
+    const event = financial.get(key);
+    if (!event || event.rawIdentity.sourceAccountId !== sourceAccountId ||
+      event.effectiveAt !== effectiveDate + 'T00:00:00.000Z') throw new Error('Protected fixture member mismatch');
+    financial.delete(key);
+    return {sourceAccountId, record:{...facts,amountCents:TransactionCentsSchema.parse(facts.amountCents),
+      sourceEventId:event.id,sourceRecordVersion:event.recordVersion,effectiveAt:event.effectiveAt,currency:'USD' as const}};
+  });
+  if (financial.size) throw new Error('Protected fixture member missing');
+  const byAccount = new Map<Id, typeof records>();
+  for (const item of records) {
+    const bucket = byAccount.get(item.sourceAccountId) ?? [];
+    bucket.push(item);
+    byAccount.set(item.sourceAccountId,bucket);
+  }
+  const accounts = ordered([...byAccount].map(([sourceAccountId,bucket])=>({
+    sourceAccountId, records:bucket.map(item=>item.record),
+    balanceAnchorCents:sourceAccountId === input.anchoredAccount ? 80000 : null,
+  })),account=>account.sourceAccountId);
+  const preimage = {
+    schemaVersion:1,fixtureSetId:'truth-' + input.company + ':' + input.tag + ':' + hashCanonical(manifest.asOf).slice(0,12),
+    fixtureSetVersion:'1',purpose:'construction',generator:{seed:input.seed,buildHash:input.buildHash},
+    companyId:manifest.companyId,sourceRef:manifest.sourceRef,sellerEntityId:input.sellerEntityId,asOf:manifest.asOf,
+    manifestId:manifest.id,manifestHash:manifest.hash,inputEvents,accounts,
+    evidence:ordered(input.evidence,evidence=>evidence.fileId),
+  };
+  await writeFile(input.path,canonicalJson({...preimage,hash:hashCanonical(preimage)}),{flag:'wx',mode:0o600});
+}
+
 export async function generateFixtures(input: {seed:Id; asOf:IsoInstant; visibleRoot:string; truthRoot:string}) {
   if (!input.visibleRoot || !input.truthRoot) throw new Error('Both output roots are required');
   const visible = await physicalDestination(resolve(input.visibleRoot));
@@ -45,12 +110,14 @@ export async function generateFixtures(input: {seed:Id; asOf:IsoInstant; visible
     if (served === 'fixtures/truth') disjoint(visible,servedRoot);
     else disjoint(truth,servedRoot);
   }
+  await Promise.all(['expected-a.json','expected-b.json'].map(name=>requireNewTruthFile(join(truth,name))));
+  const buildHash = await generatorBuildHash();
   const fixture = fixtureA(input.seed,input.asOf);
   await mkdir(visible,{recursive:true,mode:0o700});
   await mkdir(truth,{recursive:true,mode:0o700});
   const files: ManifestFile[] = [];
   const uploads: {metadata:UploadMetadata; path:string}[] = [];
-  const expectedEvidence: {fileId:Id; text:string}[] = [];
+  const expectedEvidence: FixtureEvidence[] = [];
   async function emit(name:string, bytes:Uint8Array, kind:UploadMetadata['kind'], text:string) {
     const documentId = 'doc-a-' + fixture.tag + '-' + name.split('.')[0];
     const metadata = UploadMetadataSchema.parse({
@@ -61,7 +128,7 @@ export async function generateFixtures(input: {seed:Id; asOf:IsoInstant; visible
     await writeFile(join(visible,name),bytes,{flag:'wx'});
     files.push({fileId,documentId,documentVersion:1,kind,sha256});
     uploads.push({metadata,path:name});
-    expectedEvidence.push({fileId,text});
+    expectedEvidence.push({fileId,originalSha256:sha256,text});
   }
   for (const [index,account] of fixture.accounts.entries()) {
     const title = 'Fixed monthly agreement ' + account.contractId;
@@ -110,11 +177,12 @@ export async function generateFixtures(input: {seed:Id; asOf:IsoInstant; visible
   for (const [name,value] of Object.entries(jsonFiles)) {
     await writeFile(join(visible,name),canonicalJson(value),{flag:'wx'});
   }
-  await writeFile(join(truth,'expected-a.json'),canonicalJson({
-    seed:input.seed, asOf:fixture.asOf, expectedEvidence,
-    expectedExplainedAccount:fixture.accounts[0]!.accountId, expectedOutstandingCents:80000,
-  }),{flag:'wx',mode:0o600});
-  const b = await writeCompanyB(visible,truth,input.seed,input.asOf);
+  await writeTruth({
+    path:join(truth,'expected-a.json'),company:'a',seed:input.seed,tag:fixture.tag,buildHash,
+    sellerEntityId:companyA.sellerEntityId,manifest:pinned,events:fixture.events,records:fixture.records,
+    evidence:expectedEvidence,anchoredAccount:fixture.accounts[0]!.accountId,
+  });
+  const b = await writeCompanyB(visible,truth,input.seed,input.asOf,buildHash);
   return {
     manifestIds:[pinned.id,b.id], manifestHashes:[pinned.hash,b.hash], fileCount:files.length+b.fileCount,eventCount:fixture.events.length+b.eventCount,
     visiblePaths:[...uploads.map(upload=>upload.path),...Object.keys(jsonFiles),...apiOriginals.map(item=>item.path),...b.paths],
@@ -122,11 +190,11 @@ export async function generateFixtures(input: {seed:Id; asOf:IsoInstant; visible
 }
 
 
-async function writeCompanyB(visible:string,truth:string,seed:Id,asOf:IsoInstant) {
+async function writeCompanyB(visible:string,truth:string,seed:Id,asOf:IsoInstant,buildHash:string) {
   const fixture = fixtureB(seed,asOf);
   const files: ManifestFile[] = [];
   const uploads: {metadata:UploadMetadata;path:string}[] = [];
-  const expectedEvidence: {fileId:Id;text:string}[] = [];
+  const expectedEvidence: FixtureEvidence[] = [];
   async function emit(
     name:string,bytes:Uint8Array,kind:UploadMetadata['kind'],batch?:UploadMetadata['batch'],text?:string,
   ) {
@@ -140,7 +208,7 @@ async function writeCompanyB(visible:string,truth:string,seed:Id,asOf:IsoInstant
     const manifestBatch = batch ? {batchId:batch.batchId,streamId:batch.streamId,sequence:batch.sequence} : {};
     files.push({fileId,documentId,documentVersion:1,kind,sha256,...manifestBatch});
     uploads.push({metadata,path:name});
-    if (text !== undefined) expectedEvidence.push({fileId,text});
+    if (text !== undefined) expectedEvidence.push({fileId,originalSha256:sha256,text});
     await writeFile(join(visible,name),bytes,{flag:'wx'});
   }
   for (const [index,batch] of fixture.files.entries()) {
@@ -191,10 +259,10 @@ async function writeCompanyB(visible:string,truth:string,seed:Id,asOf:IsoInstant
   for (const [name,value] of Object.entries(jsonFiles)) {
     await writeFile(join(visible,name),canonicalJson(value),{flag:'wx'});
   }
-  await writeFile(join(truth,'expected-b.json'),canonicalJson({
-    seed,asOf:fixture.asOf,expectedEvidence,
-    expectedUnresolvedEventId:fixture.ambiguous.id,expectedUnresolvedDiagnostic:'UNKNOWN_ACCOUNT',
-  }),{flag:'wx',mode:0o600});
+  await writeTruth({
+    path:join(truth,'expected-b.json'),company:'b',seed,tag:fixture.tag,buildHash,
+    sellerEntityId:companyB.sellerEntityId,manifest:pinned,events,records:fixture.records,evidence:expectedEvidence,
+  });
   return {
     id:pinned.id,hash:pinned.hash,fileCount:files.length,eventCount:events.length,
     paths:[...uploads.map(upload=>upload.path),...Object.keys(jsonFiles),...apiOriginals.map(item=>item.path)],
