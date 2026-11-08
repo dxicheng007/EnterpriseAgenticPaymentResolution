@@ -1,0 +1,5 @@
+# Preview and verification UI
+
+Follow the [apps guide](../../../../AGENTS.md) and [frozen preview](../../../../../docs/superpowers/plans/2026-11-08-contract-freeze.md#f3--target-records-mutations-finance-and-preview) and [verification](../../../../../docs/superpowers/plans/2026-11-08-contract-freeze.md#f6--health-and-protected-verification-protocol) contracts. [App](../../App.tsx) mounts [PreviewPage](PreviewPage.tsx) after the local reviewer session opens. The page uses the [development candidate response](../../../../../packages/contracts/src/local-demo.ts), the [preview contract](../../../../../packages/contracts/src/runtime.ts), and the [public job and summary schemas](../../../../../packages/contracts/src/review.ts). [PreviewResult](PreviewResult.tsx) displays returned amounts and operation lineage. [VerificationPanel](VerificationPanel.tsx) requests and polls a job for the pinned preview bindings, and [VerificationReport](VerificationReport.tsx) separates mandatory status, coverage, and eligibility.
+
+Run `npm run test:unit -- packages/client/test` for focused client, report rendering, and amount/lineage display checks.

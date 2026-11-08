@@ -17,3 +17,25 @@ dl {
 }
 dd { margin: 0; font-weight: 600; }
 button { font: inherit; padding: .4rem .7rem; }
+
+.app-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem max(1.5rem, calc((100vw - 70rem) / 2));
+  border-bottom: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+}
+.app-header p { margin: .2rem 0; font-size: .875rem; }
+.app-header nav { display: flex; gap: .5rem; }
+.app-header nav a {
+  color: inherit;
+  padding: .35rem .65rem;
+  border-radius: .35rem;
+}
+.app-header nav a[aria-current] {
+  text-decoration: none;
+  font-weight: 700;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
