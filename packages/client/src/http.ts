@@ -17,13 +17,21 @@ export class LocalApiError extends Error {
 }
 
 let csrfToken: string | undefined;
+const expirationListeners = new Set<() => void>();
+
+export function onSessionExpiration(listener: () => void) {
+  expirationListeners.add(listener);
+  return () => { expirationListeners.delete(listener); };
+}
 
 export function setCsrfToken(token: string) {
   csrfToken = token;
 }
 
 export function clearCsrfToken() {
+  if (csrfToken === undefined) return;
   csrfToken = undefined;
+  for (const listener of expirationListeners) listener();
 }
 
 export async function requestLocal<T>(
