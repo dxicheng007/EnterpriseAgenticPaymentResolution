@@ -14,8 +14,8 @@ import { localSourceCatalog } from '../apps/control/src/composition.js';
 import type { DemoCapture } from '../apps/control/src/demo-candidates.js';
 import { generateFixtures } from './generate-fixtures.js';
 
-const seed = 'local-demo-v1';
-const asOf = '2026-10-01T00:00:00.000Z';
+export const localDemoRecipe = { seed: 'local-demo-v1', asOf: '2026-10-01T00:00:00.000Z' } as const;
+const { seed, asOf } = localDemoRecipe;
 const uploadsSchema = z.array(strict({ metadata: UploadMetadataSchema, path: z.string() }));
 const originalsSchema = z.array(strict({ eventId: IdSchema, path: z.string() }));
 
@@ -60,7 +60,7 @@ async function visibleBytes(root: string, path: string) {
   }
 }
 
-async function loadVisible(root: string, company: 'a' | 'b') {
+export async function loadVisible(root: string, company: 'a' | 'b') {
   const source = localSourceCatalog.get('company-' + company)!;
   const json = async (path: string): Promise<unknown> =>
     JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await visibleBytes(root, path)));
@@ -72,7 +72,7 @@ async function loadVisible(root: string, company: 'a' | 'b') {
     throw new Error('Visible demo manifest does not match the pinned dataset');
   }
   // The public account directory is generated alongside the manifest. Candidate facts come from captured evidence.
-  await visibleBytes(root, 'accounts-' + company + '.json');
+  const accountDirectoryHash = hashBytes(await visibleBytes(root, 'accounts-' + company + '.json'));
   const uploads = uploadsSchema.parse(await json('uploads-' + company + '.json'));
   if (new Set(uploads.map(upload => upload.path)).size !== uploads.length) {
     throw new Error('Visible demo upload paths conflict');
@@ -109,7 +109,7 @@ async function loadVisible(root: string, company: 'a' | 'b') {
   for (const event of events) {
     const path = paths.get(event.id);
     if (!path || !expectedIds.delete(event.id)) throw new Error('Visible demo API membership conflicts');
-    records.push({ event, bytes: await visibleBytes(root, path) });
+    records.push({ event, path, bytes: await visibleBytes(root, path) });
   }
   const contractPath = company === 'a' ? 'contract-1.pdf' : 'b-contract-1.pdf';
   const capture: DemoCapture = {
@@ -118,24 +118,21 @@ async function loadVisible(root: string, company: 'a' | 'b') {
   };
   // CSV batches append in predecessor order through the accepted ingestion service.
   documents.sort((left, right) => (left.metadata.batch?.sequence ?? 0) - (right.metadata.batch?.sequence ?? 0));
-  return { source, manifest, documents, records, capture };
+  return { source, manifest, documents, records, capture, accountDirectoryHash };
 }
 
 export async function loadDemo(dependencies: UploadDependencies, roots: DemoRoots) {
   const requestedVisible = resolve(roots.visibleRoot);
   const requestedTruth = resolve(roots.truthRoot);
-  let [visible, truth] = await Promise.all([directory(requestedVisible), directory(requestedTruth)]);
-  if (!visible && !truth) {
+  if (requestedVisible === requestedTruth || inside(requestedVisible, requestedTruth) || inside(requestedTruth, requestedVisible)) {
+    throw new Error('Local demo requires separate visible and protected fixture roots');
+  }
+  let visible = await directory(requestedVisible);
+  if (!visible && !await directory(requestedTruth)) {
     await generateFixtures({ seed, asOf, visibleRoot: requestedVisible, truthRoot: requestedTruth });
-    [visible, truth] = await Promise.all([directory(requestedVisible), directory(requestedTruth)]);
+    visible = await directory(requestedVisible);
   }
-  if (!visible || !truth || visible === truth || inside(visible, truth) || inside(truth, visible)) {
-    throw new Error('Local demo requires complete, separate visible and protected fixture roots');
-  }
-  // Check generation completed without opening either protected expectation.
-  for (const name of ['expected-a.json', 'expected-b.json']) {
-    if (!(await lstat(resolve(truth, name))).isFile()) throw new Error('Protected demo fixture generation is incomplete');
-  }
+  if (!visible) throw new Error('Local demo requires a complete visible fixture root');
   const datasets = await Promise.all([loadVisible(visible, 'a'), loadVisible(visible, 'b')]);
   const prepared = await Promise.all(datasets.map(({ source, records }) => Promise.all(records.map(({ event, bytes }) =>
     prepareApiRecord(source, dependencies.store, event, bytes)))));
