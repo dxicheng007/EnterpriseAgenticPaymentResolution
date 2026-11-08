@@ -1,0 +1,18 @@
+{
+  "name": "@eapr/evaluator",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./verify": "./src/verify.ts",
+    "./registry": "./src/registry.ts",
+    "./runner": "./src/runner.ts",
+    "./protocol": "./src/protocol.ts"
+  },
+  "dependencies": {
+    "@eapr/contracts": "*",
+    "@eapr/compiler": "*",
+    "@eapr/storage": "*",
+    "pg": "8.23.1",
+    "zod": "4.6.7"
+  }
+}
