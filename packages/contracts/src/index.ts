@@ -8,3 +8,4 @@ export * from './review.js';
 export * from './activity.js';
 export * from './canonical.js';
 export * from './local-demo.js';
+export * from './source-coverage.js';
