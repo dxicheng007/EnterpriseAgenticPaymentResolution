@@ -4,18 +4,21 @@ import { join } from 'node:path';
 import { expect, type Page, type Response } from '@playwright/test';
 import { createServer } from 'vite';
 import { createEvidenceStore } from '@eapr/evidence';
-import { createLocalComposition } from '../../../apps/control/src/composition.js';
+import { createSourceService, readManifest } from '@eapr/sources';
+import { createLocalComposition, localSourceCatalog } from '../../../apps/control/src/composition.js';
 import { loadDemo } from '../../../scripts/load-demo.js';
 import { migrationIdentities, readMigrationCatalog } from '../../../scripts/migrate.js';
 import { prepareVerificationPins } from '../../../scripts/prepare-verification.js';
 import { localPort } from '../../../scripts/native-db.js';
 import { createTestSystem, testNamespace } from '../../fixtures/harness.js';
+import { browserVerificationFixtures } from './verification-fixtures.js';
 
 export async function openLocalReview({ verification = false } = {}) {
   const root = await mkdtemp(join(await realpath(tmpdir()), 'eapr-c3-browser-'));
   const origin = 'http://127.0.0.1:' + localPort('EAPR_WEB_PORT', 5173);
   const visibleRoot = join(root, 'visible');
   const truthRoot = join(root, 'protected');
+  const fixtures = verification ? browserVerificationFixtures({ root, originalTruthRoot: truthRoot }) : undefined;
   let system: Awaited<ReturnType<typeof createTestSystem>> | undefined;
   let web: Awaited<ReturnType<typeof createServer>> | undefined;
 
@@ -25,6 +28,7 @@ export async function openLocalReview({ verification = false } = {}) {
     } finally {
       try {
         await system?.close();
+        await fixtures?.close();
       } finally {
         await rm(root, { recursive: true, force: true });
       }
@@ -40,8 +44,16 @@ export async function openLocalReview({ verification = false } = {}) {
         const dependencies = { db, clock, store };
         const { captures } = await loadDemo(dependencies, { visibleRoot, truthRoot });
         const options = { webOrigin: origin, captures };
-        if (!verification) return (await createLocalComposition(dependencies, options)).featurePlugins;
-        const pins = await prepareVerificationPins({ db, captures, truthRoot, store });
+        if (!fixtures) return (await createLocalComposition(dependencies, options)).featurePlugins;
+        const sources = createSourceService(dependencies, localSourceCatalog);
+        const bindings = await Promise.all(captures.map(async ({ companyId, manifestId }) => {
+          const manifest = await readManifest(db, companyId, manifestId);
+          const snapshot = await sources.getSnapshot('snapshot:' + manifestId);
+          return { companyId, manifestId, sourceRef: manifest.sourceRef,
+            manifestHash: manifest.hash, snapshotHash: snapshot.contentHash };
+        }));
+        const pins = await fixtures.prepare(bindings,
+          truthRoot => prepareVerificationPins({ db, captures, truthRoot, store }));
         return (await createLocalComposition(dependencies, {
           ...options,
           verification: {
