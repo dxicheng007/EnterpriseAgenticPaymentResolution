@@ -1,0 +1,17 @@
+# Independent preview scope review
+
+Verdict: PASS. Specification: PASS. Code quality: PASS. No actionable findings.
+
+Reviewer: fresh delegated Astra review, task /root/astra_preview_scope_verify. Exact base 33eaeddc26712c23d55ddf36801d4144bcdb2e86; reviewed head 464bd0a504ea360b977548f6db6c98549895f5cd in acquisition-review-ui/EnterpriseAgenticPaymentResolution. HEAD verified; checkout clean before and after. No source edits or commits.
+
+The five-file diff stays within the presentation assignment. PreviewResult displays zero-write count and balances before expanded grouped holds. Unscoped UNKNOWN_ACCOUNT remains blocked without claims of known identity or harmlessness; selected full-scope holds remain selected issues, and semantic/identity or other explicit scopes remain unresolved. Original diagnostic severity, message, source IDs, fields, events and dependencies remain visible. Shared Diagnostics and backend policies are unchanged.
+
+preview-values.ts:24–75 covers all current strict Hold/Diagnostic/Scope fields in ordered structural keys. Counted cross-array subtraction retains max multiplicity for each exact hold, preserving all occurrences within either source array. Top-level diagnostics subtract only occurrences actually represented in consolidated holds. No input mutation occurs. PreviewPage.ts:70–135 pins context through the immutable validated catalog candidate, keyed remount, request source and abort behavior; no current-selection lookup is attached to a stale response.
+
+Independent evidence:
+- Read assigned exact diff once, handoff brief including selected-profile wording, implementation report, applicable root/apps/packages/tests instructions, frozen preview contract and verification conventions.
+- Node 24 focused command: npm run test:unit -- packages/client/test/preview-display.test.ts: PASS, 1 file / 6 tests. First attempt could not write Vite temporary config under sandbox; authorized escalated retry passed. No assertion failure.
+- Independent Node 24 probe imported the reviewed pure helper directly. PASS for 175 combinations of 0–4 hold occurrences, 0–4 unsupported occurrences and 0–6 global diagnostic occurrences; asserted max hold multiplicity, min matched count, residual diagnostic multiplicity and unchanged inputs. Additional assertions checked selected scope, different seller scope, semantic/identity issues, warning severity, reordered events/dependencies, repeated nested diagnostics and missing profile context.
+- Visually inspected implementer browser artifacts: /private/tmp/eapr-c3-preview-browser/v2-preview-previews-both-c-990c7-eal-runtime-state-unchanged/preview-company-a-scope.png and preview-company-b-hold.png. A shows source-snapshot context and 19 matching entries once; B visibly retains evt:pay-b:unresolved-d22feb38e846, Blocker · UNKNOWN_ACCOUNT, and the original identity message. These are inspected supplied artifacts, not an independently rerun browser session.
+
+Limits: focused independent display/helper checks and supplied screenshot inspection, not full slice, live-data, financial correctness, eligibility or activation verification. Existing browser scenario was inspected and implementer reports it passed; reviewer did not repeat its database/browser lifecycle because no additional concrete browser risk remained after request-context inspection and display probes. No PostgreSQL or service was started, and no pins changed. Joint user acceptance remains pending.

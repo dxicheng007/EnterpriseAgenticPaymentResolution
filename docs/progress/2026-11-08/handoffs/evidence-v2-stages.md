@@ -1,0 +1,54 @@
+# Evidence v2 sequencing addendum — C1 storage, then C2 and B
+
+Architecture-only addendum. Existing evidence-v2-contract.md and evidence-v2-handoffs.md remain fixed. Reviewed actual merged main `9f9765d358b8444492bdb4511630e9ec85badfcf`, including accepted producer bb59309 and five-check38660d7. Source companion files now exist; `readProtectedFixture` now returns `{truth,snapshot,events}` and evaluator-runner passes snapshot to buildCasePlan. Preserve both behaviors.
+
+**Decision: split C.** There is a stable independently testable boundary: fully validated, immutable private evidence input versus interpretation of a submitted artifact/profile. C1 must include complete provenance validation, not a permissive envelope to unblock B. B can consume independently accepted C1 while C2 independently checks profile/mapping/lineage facts, avoiding a shared fixture-store edit race. A small real-capture integration fixture in C1 removes dependence on unfinished B production assembly. This fixture is test composition, not another product implementation.
+
+## C1 — complete private input/store acceptance, no check enablement
+
+Allowed implementation files:
+
+- New `packages/evaluator/src/evidence-fixtures.ts`: strict private schemas/types, normalization, producer/v1-v2 binding, re-extraction/locator/member validation, canonical hashes.
+- `packages/evaluator/src/fixture-store.ts`: new operator pin entry point and dual strict readers; preserve v1 publication and read semantics, especially returned snapshot and exported verifyCaptureBinding.
+- `packages/evaluator/src/launcher.ts`: include every newly executed verifier/extraction/CSV dependency in evaluatorBuildHash; preserve five-check build dependencies.
+- New `packages/evaluator/test/evidence-fixtures.test.ts`, narrow additions to `packages/evaluator/test/fixtures.test.ts`, new `tests/integration/evidence-v2-store.test.ts`, and if useful new `tests/fixtures/evidence-v2-capture.ts` used only by tests. Test helper must not be exported through product packages.
+
+No C1 edits to cases.ts, case-recipes.ts, capture-boundary.ts, reference-model.ts, subject-comparison.ts, protocol.ts, evaluator-runner.ts, public contracts, product routes, scripts/prepare-verification.ts, or producer scripts. If needed, type-only import adjustments must be agreed explicitly; changing evaluator-runner is not needed just to ignore a new evidence return member.
+
+Frozen operator API, direct private-module import:
+
+```
+pinProtectedEvidenceFixture({
+  producerTruthJson, producerJson, manifest, snapshot, events,
+  originals, citations, resolvedSupport, demoBindings
+}, root?)
+  -> {fixtureSetId, fixtureSetVersion, purpose, snapshotHash}
+```
+
+All parameter types and exact shapes are from evidence-v2-contract.md. C1 exports the needed private input types and producer decoder from evidence-fixtures.ts for B direct imports; no contracts-root or product barrel export. Settle function spelling before B begins: `decodeEvidenceProducer(text:string):ProducerV1` for bounded strict producer JSON decoding, and `decodeProtectedEvidenceBundle(text:string,manifest:BootstrapManifest)` for bounded strict async v2 bundle decoding returning `Promise<{truth,snapshot,events,evidence}>`. These private decoder names are routine module boundaries; serialized contract and operator pin API do not change. Pin and reader share the same full verifier, not different permissive validators.
+
+`readProtectedFixture(id,version,manifest)` retains its existing arguments and fixed protected root. V1 returns `{truth,snapshot,events,evidence:undefined}`; v2 returns `{truth,snapshot,events,evidence}`. Test-root roundtrip uses pin's root argument, reads the resulting bytes and calls the same private decodeProtectedEvidenceBundle that production reader uses. Include at least one actual fixed-root reader roundtrip in an isolated evaluator worktree using a unique generated fixture seed, cleaning only paths newly owned by that test. No optional caller-controlled root is added to evaluator wire/reader. Unknown/malformed versions fail closed.
+
+C1 owns complete strict field/enumeration/range/set/hash/version validation, original producer truth preservation, metadata-only v2 rebind, complete aggregate membership, actual-source association consistency, canonical base64/byte/text hashes, original re-extraction and exact locators, API payload/event mapping and CSV row/event coverage, resolved support containment and demo-binding policy consistency. It also enforces fact cross-references, declared interval structure and independent scope consistency specified by the contract. It does **not** compare candidate profiles/mappings/subject outputs to those facts or count evidence_support cases. Its success means trustworthy input available to C2, not evidence_support passed.
+
+## C1's valid positive fixtures: real capture, no invented association
+
+Correction after C1 implementation inspection: use accepted generator `generateFixtures` with a unique test seed and fixed valid asOf into fresh physically resolved temp visible/private roots. Do NOT call loadDemo/loadVisible for these unique-seed fixtures: loadVisible validates the fixed localDemoRecipe even when roots already exist. A test-only capture helper reads the generated manifests/upload metadata/API original associations with existing strict schemas and ingests them through actual prepareApiRecord, storeSourceUpload, publishManifest and createSourceService.captureSnapshot, preserving CSV predecessor order. No product loader changes or relaxed fixed-recipe checks. Use real isolated PostgreSQL/createTestSystem and createEvidenceStore; disable model mode. Read producer expected-a/b.json and evidence-a/b.json from that test's private root. Do not hardcode producer facts, copied citation IDs, economic identities or fee values in the positive fixture.
+
+The test helper follows existing service APIs: readManifest/readDossier, createSourceService.getSnapshot/getSnapshotRecords, readEvidence/readEvidenceBytes for every actual aggregate evidence ID. It uses a test-only scoped SQL association query joining source_evidence to source_files/source_events, asserts actual source/company/snapshot/file-or-API association, and maps only the frozen minimal Original binding. It must not reconstruct eventId by interpreting sourceId text, nor fabricate a DB-proof field absent from the frozen contract. Tests inspect real source_events.api_source_id/API original association and real CSV rows. The evaluator validates the serialized relationship independently, while trusted operator capture is the provenance boundary; serialized hashes do not prove an arbitrary caller queried a DB.
+
+Resolve support tuples by exact same-file literal containment in actual returned ranges, choosing lexical first citation as frozen. Derive demoBindings only from generated identity facts and the existing explicit demo policy, not profiles. This test helper may duplicate the few lines of capture assembly needed to exercise the operator API; keep it test-local and small. B later implements the durable setup helper independently and proves its own real-capture integration. B must not import test helper into product/scripts.
+
+Minimum C1 evidence: both generated A/B positive roundtrips (amendment facts, same-name buyers, unknown B excluded); v1 immutability/read snapshot preserved; exact repeated v2 pin idempotent/changed same version conflicts; producer hash versus rebound hash distinctions; byte/hash/base64/locator/UTF-16/scope/capture/membership/API-event/CSV-row mutations; duplicate/prototype/size limits; no partial pin after failure. Semantic candidate tests belong to C2. Mutations that recompute transport hashes must still exercise appropriate structural/provenance constraints. Do not claim C1 detects an arbitrary trusted producer lying about a business value solely by substring/hash checks: the producer boundary is independent trusted truth and C2 compares the subject against it.
+
+Run focused C1 unit/store integration and typecheck, then existing evaluator tests covering accepted five-check snapshot behavior. Demonstrate actual evaluator report with v2 selected still has evidence_support unavailable/cases0 and existing financial/check behavior unchanged; use a separate test-owned candidate/job or existing runner entry rather than enabling the check. No B selection publication is needed. Report exact commands/results and limitations. Independent review must accept C1 exact head before B consumes it.
+
+## After C1 acceptance — two bounded workstreams
+
+**C2 checker:** owns new `packages/evaluator/src/evidence-support.ts`, evaluator-runner integration, narrow cases/subject comparison integration only as needed for actual checks, launcher build update, and focused evaluator tests. Uses accepted C1 `{truth,snapshot,events,evidence}`; no schema/hash/store changes. Checks independent applicable identity/contract/material mapping and actual subject lineage as in frozen brief. V1 remains unavailable. Unexpected unsupported ensure_* cannot inherit financial pass; do not require planBatch to emit new bootstrap outputs. No subject-wire truth or expected answers. Only after every supported assertion actually executes may evidence_support pass; unsupported reasoning remains unavailable. Preserve previously accepted twelve-check behavior.
+
+**B assembly:** owns scripts/prepare-verification.ts, a private script helper if needed, and its narrow setup integration tests. Consumes C1 direct operator API and producer decoder; collects real DB-scoped originals/citations and exact support/bindings, selects complete immutable v2 for both captures through existing fresh-root workflow. No evaluator files or test-helper imports. B may test against C1 while C2 is unfinished: expected evidence_support is unavailable, not a failing assembly. Availability versus eligibility remains separate. Do not upgrade main/root live data during this implementation task.
+
+Both branches start from the same accepted C1 commit. C2 and B share no owner paths. Integrate independently reviewed B and C2, then run one actual composed A/B verification smoke proving v2 input selected, real status/report binding and old v1 history intact. Do not claim B+C2 combination proved from their separate tests alone. If C2 discovers a genuine input-contract defect, stop only dependent work, send exact mismatch to root, and coordinate a focused C1 correction before rebasing B; never quietly extend fields/hash preimages from either branch.
+
+This split adds one small capture test fixture but reduces risk: provenance/storage cannot be accidentally validated solely by a profile checker, B gets a stable real API early, and checker rollout cannot turn a structurally accepted bundle into an automatic pass. No new business semantics or extra public outputs are introduced.
