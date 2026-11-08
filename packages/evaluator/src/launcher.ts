@@ -4,7 +4,7 @@ import type { VerificationLauncher } from './jobs.js';
 import { runEvaluator } from './runner.js';
 
 const buildFiles = [
-  './case-recipes.ts', './cases.ts', './evaluator-runner.ts', './fixture-store.ts', './fixtures.ts', './jobs.ts', './launcher.ts', './protocol.ts',
+  './capture-boundary.ts', './case-recipes.ts', './cases.ts', './evaluator-runner.ts', './fixture-store.ts', './fixtures.ts', './jobs.ts', './launcher.ts', './protocol.ts',
   './reference-model.ts', './registry.ts', './runner.ts', './subject-comparison.ts', './subject-runner.ts', './verify.ts', '../../../package-lock.json',
 ];
 

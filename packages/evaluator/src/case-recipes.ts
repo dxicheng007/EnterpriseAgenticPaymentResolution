@@ -7,10 +7,12 @@ import type { ProtectedFixtureSet } from './fixtures.js';
 import type { FinancialRecord } from './reference-model.js';
 
 type Company = 'a' | 'b';
+type EventOptions = { effectiveAt?: string; sequence?: number };
 type ProbeFact =
   | { kind: 'invoice'; amountCents: number; dueDate: string }
   | { kind: 'payment' | 'credit'; amountCents: number }
-  | { kind: 'allocation'; amountCents: number; fundingKind: 'payment' | 'credit'; fundingRecordId: string; invoiceRecordId: string };
+  | { kind: 'allocation'; amountCents: number; fundingKind: 'payment' | 'credit'; fundingRecordId: string; invoiceRecordId: string }
+  | { kind: 'reversal'; reversedKind: 'payment' | 'credit'; reversedRecordId: string };
 
 const kinds = ['invoice', 'payment', 'credit', 'allocation', 'reversal', 'semantic_change'] as const;
 const namesB: Record<string, string> = {
@@ -108,7 +110,7 @@ export function chooseRecipe(
         term.validFrom <= date && (term.validToExclusive === null || date < term.validToExclusive));
       return terms.length === 1 && terms[0].fixedMonthlyFeeCents === 300000 && terms[0].currency === 'USD' &&
         terms[0].cadence === 'monthly' && terms[0].anchorDay === Number(date.slice(8)) &&
-        terms[0].evidenceRefs.length ? [{ accountId, date, record }] : [];
+        terms[0].evidenceRefs.length ? [{ accountId, date, record, term: terms[0] }] : [];
     });
   });
   choices.sort((a, b) => a.date === b.date ? 0 : a.date > b.date ? -1 : 1);
@@ -125,37 +127,63 @@ export function chooseRecipe(
   const probeId = (label: string) => prefix + ':' + label;
   const field = (key: string) => name(company, key);
 
-  function make(label: string, fact: ProbeFact) {
+  function envelope(
+    label: string, kind: EventKind, fields: JsonObject, options: EventOptions, semanticVersion = profile.semanticVersion,
+  ): RawSourceEvent {
     const recordId = probeId(label);
-    const id = probeId('evt-' + label);
-    const contract = sourceContract(sourceCompany, fact.kind);
-    const identity = { sourceRef: profile.sourceRef, sellerEntityId: profile.scope.sellerEntityId, kind: fact.kind, recordId };
-    const payload: JsonObject = {
-      [field('id')]: recordId, [field('version')]: 1, [field('account')]: accountId, [field('effective_date')]: date,
-      [field('amount')]: company === 'a' ? decimal(fact.amountCents) : fact.amountCents,
-    };
+    const effectiveAt = options.effectiveAt ?? invoice.effectiveAt;
+    const contract = sourceContract(sourceCompany, kind);
+    return rehash({
+      id: probeId('evt-' + label), recordId, recordVersion: 1, kind, effectiveAt,
+      sequence: options.sequence ?? (sequence + ++index), streamId: streamId(sourceCompany, kind), resource: contract.resource,
+      sourceRef: profile.sourceRef, observedAt: truth.asOf, schemaVersion: contract.schemaVersion, semanticVersion,
+      rawIdentity: { sellerEntityId: profile.scope.sellerEntityId, companyId: profile.scope.companyId, sourceAccountId: accountId },
+      payload: {
+        ...fields, [field('id')]: recordId, [field('version')]: 1, [field('account')]: accountId,
+        [field('effective_date')]: effectiveAt.slice(0, 10),
+      },
+      contentHash: '0'.repeat(64),
+    });
+  }
+
+  function make(label: string, fact: ProbeFact, options: EventOptions = {}) {
+    const payload: JsonObject = {};
+    if (fact.kind === 'reversal') {
+      payload[field('reversed_kind')] = fact.reversedKind;
+      payload[field('reversed_id')] = fact.reversedRecordId;
+    } else {
+      payload[field('amount')] = company === 'a' ? decimal(fact.amountCents) : fact.amountCents;
+    }
     if (fact.kind === 'invoice') payload[field('due_date')] = fact.dueDate;
     if (fact.kind === 'allocation') {
       payload[field('funding_kind')] = fact.fundingKind;
       payload[field('funding_id')] = fact.fundingRecordId;
       payload[field('invoice_id')] = fact.invoiceRecordId;
     }
-    const event = rehash({
-      id, recordId, recordVersion: 1, kind: fact.kind, effectiveAt: invoice.effectiveAt,
-      sequence: sequence + ++index, streamId: streamId(sourceCompany, fact.kind), resource: contract.resource,
-      sourceRef: profile.sourceRef, observedAt: truth.asOf, schemaVersion: contract.schemaVersion,
-      semanticVersion: profile.semanticVersion,
-      rawIdentity: { sellerEntityId: profile.scope.sellerEntityId, companyId: profile.scope.companyId, sourceAccountId: accountId },
-      payload, contentHash: '0'.repeat(64),
-    });
+    const event = envelope(label, fact.kind, payload, options);
+    const identity = { sourceRef: profile.sourceRef, sellerEntityId: profile.scope.sellerEntityId, kind: fact.kind, recordId: event.recordId };
     const record = {
-      ...fact, id: targetRecordId(identity), identity, scope: profile.scope, sourceEventId: id, sourceRecordVersion: 1,
-      effectiveAt: invoice.effectiveAt, currency: 'USD' as const,
+      ...fact, id: targetRecordId(identity), identity, scope: profile.scope, sourceEventId: event.id, sourceRecordVersion: 1,
+      effectiveAt: event.effectiveAt, currency: 'USD' as const,
     };
     return { event, record };
   }
 
-  return { company, accountId, date, invoice, probeId, make, field };
+  function semantic(label: string, semanticVersion: string, options: EventOptions = {}) {
+    return envelope(label, 'semantic_change', { revision: semanticVersion }, options, semanticVersion);
+  }
+
+  function laterInstant(days: number) {
+    const effectiveAt = new Date(Date.parse(invoice.effectiveAt) + days * 86_400_000).toISOString();
+    const date = effectiveAt.slice(0, 10);
+    const applicable = profile.contractTerms.filter(term =>
+      term.validFrom <= date && (term.validToExclusive === null || date < term.validToExclusive));
+    return effectiveAt <= truth.asOf && applicable.length === 1 && applicable[0].id === choice.term.id
+      ? effectiveAt : undefined;
+  }
+
+  return { company, accountId, date, invoice, probeId, make, field, semantic, laterInstant,
+    streamFor: (kind: EventKind) => streamId(sourceCompany, kind) };
 }
 
 export function rehash(event: RawSourceEvent): RawSourceEvent {

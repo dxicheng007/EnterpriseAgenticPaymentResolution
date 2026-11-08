@@ -325,6 +325,7 @@ test('generated_b_zero_is_not_f8_balance, same_candidate_f8_transposition, diffe
     manifest: Awaited<ReturnType<typeof readManifest>>;
     events: Awaited<ReturnType<ReturnType<typeof createSourceService>['getSnapshotRecords']>>;
     truth: ReturnType<typeof decodeTruth>;
+    snapshot: Awaited<ReturnType<ReturnType<typeof createSourceService>['getSnapshot']>>;
     pin: Awaited<ReturnType<typeof pinProtectedFixture>>;
   };
   const captureFacts = new Map<string, CaptureFacts>();
@@ -356,7 +357,7 @@ test('generated_b_zero_is_not_f8_balance, same_candidate_f8_transposition, diffe
               { truthJson: originalJson, snapshot, manifest, events }, original, fixtureId);
           }
           const pin = await pinOwnedFixture({ truthJson, snapshot, manifest, events }, truth, ownedPins);
-          captureFacts.set(capture.manifestId, { manifest, events, truth, pin });
+          captureFacts.set(capture.manifestId, { manifest, snapshot, events, truth, pin });
         }
         const registry = createCandidateRegistry(services.db, join(directory, 'registry'));
         const composition = await createLocalComposition(dependencies, { webOrigin: origin, captures: loaded.captures, registry });
@@ -400,13 +401,15 @@ test('generated_b_zero_is_not_f8_balance, same_candidate_f8_transposition, diffe
         expect(preview.body.parentWrites).toBe(0);
         const artifact = preview.body.artifact!;
         const facts = [...captureFacts.values()].find(value => 'snapshot:' + value.manifest.id === candidate.snapshotId)!;
-        const { manifest, events, truth, pin } = facts;
+        const { manifest, snapshot, events, truth, pin } = facts;
         const profiles = candidate.request.profiles;
-        const plan = buildCasePlan({ artifact, profiles, manifest }, truth, events);
+        const plan = buildCasePlan({ artifact, profiles, manifest }, truth, events, snapshot);
         const generatedBalance = candidate.companyId === 'company-a' ? 80000 : 0;
         expect(preview.body.diffs[0].afterBalanceCents).toBe(generatedBalance);
-        expect(plan.find(check => check.id === 'baseline_reconcile')?.cases[0].expected.balanceCents).toBe(generatedBalance);
-        const newRecords = plan.find(check => check.id === 'new_record')!.cases;
+        const baseline = plan.find(check => check.id === 'baseline_reconcile')?.cases[0];
+        if (baseline?.kind !== 'planner') throw new Error('Missing captured baseline case');
+        expect(baseline.expected.balanceCents).toBe(generatedBalance);
+        const newRecords = plan.find(check => check.id === 'new_record')!.cases.filter(test => test.kind === 'planner');
         expect(newRecords.map(probe => [probe.provenance, probe.expected.balanceCents])).toEqual([
           ['independent-F8-probe', 80000], ['independent-F8-probe', 80000], ['independent-F8-probe', 50000],
           ['captured-baseline', generatedBalance],
@@ -417,9 +420,22 @@ test('generated_b_zero_is_not_f8_balance, same_candidate_f8_transposition, diffe
         if (candidate.companyId === 'company-b') {
           const unresolved = events.find(event => event.rawIdentity.sourceAccountId?.startsWith('cust-b-unknown-'))!;
           const unknown = plan.find(check => check.id === 'unknown_identity')!.cases[0];
+          if (unknown.kind !== 'planner') throw new Error('Missing unresolved planner case');
           expect(unknown.events).toEqual([unresolved]);
           expect(unknown.holds).toEqual([{ code: 'UNKNOWN_ACCOUNT', eventIds: [unresolved.id] }]);
         }
+        const boundary = plan.find(check => check.id === 'snapshot_boundary')!;
+        const boundaryCases = boundary.cases.filter(test => test.kind === 'planner');
+        const firstDeliveries = boundaryCases.filter(test => test.label.startsWith('after-captured-'));
+        const streamCursors = new Map(manifest.streams.map(stream => [stream.streamId, Number(stream.resumeAfter)]));
+        expect(firstDeliveries.map(test => test.events[0].streamId).sort()).toEqual([...streamCursors.keys()].sort());
+        for (const test of boundaryCases) {
+          const event = test.events[0];
+          expect(event.sequence).toBe(streamCursors.get(event.streamId)! + 1);
+          expect(snapshot.eventIds).not.toContain(event.id);
+          expect(test.expected.balanceCents).toBe(generatedBalance);
+        }
+        expect(boundary.cases.filter(test => test.kind === 'capture-validation')).toHaveLength(8);
         return { candidate, artifact, manifest, profiles, pin, plan };
       }));
 
@@ -432,7 +448,7 @@ test('generated_b_zero_is_not_f8_balance, same_candidate_f8_transposition, diffe
         expect(requested.status).toBe(202);
         const path = '/api/verification-jobs/' + requested.body.jobId;
         await expect.poll(async () => (await system.control.request<VerificationJob>(path, { headers })).body.state,
-          { timeout: 16000 }).toBe('completed');
+          { timeout: 24000 }).toBe('completed');
         const { body } = await system.control.request<VerificationJob>(path, { headers });
         expect(body.summary).toMatchObject({ eligible: false, coverageComplete: false, artifactHash });
         const text = JSON.stringify(body);
@@ -448,15 +464,25 @@ test('generated_b_zero_is_not_f8_balance, same_candidate_f8_transposition, diffe
         expect(report.profileHashes).toEqual(subject.profiles.map(profile => profile.hash));
         expect(report.eligible).toBe(false);
         expect(report.unexplainedDifferenceCents).toBe(0);
-        expect(report.coverage.eventKinds).toEqual(['allocation', 'credit', 'invoice', 'payment']);
+        expect(report.coverage.eventKinds).toEqual(['allocation', 'credit', 'invoice', 'payment', 'reversal']);
         expect(report.checks.map(check => [check.id, check.status, check.cases])).toEqual(subject.plan.map(check =>
           [check.id, check.cases.length ? 'passed' : 'unavailable', check.cases.length]));
+        expect(report.checks.filter(check => check.status === 'passed')).toHaveLength(12);
         expect(report.coverage.executed).toEqual([
           'baseline_reconcile', 'new_record', 'duplicate_delivery', 'retry_restart', 'invalid_money',
-          'allocation_scope', 'unknown_identity',
+          'allocation_scope', 'full_reversal', 'dependency_order', 'schema_drift', 'semantic_drift',
+          'unknown_identity', 'snapshot_boundary',
         ]);
         expect(report.checks.filter(check => check.status === 'passed').map(check => check.cases))
-          .toEqual([1, 4, 3, 3, subject.candidate.companyId === 'company-a' ? 3 : 5, 4, 2]);
+          .toEqual([1, 4, 3, 3, subject.candidate.companyId === 'company-a' ? 3 : 5, 4, 8, 4, 3, 3, 2,
+            subject.candidate.companyId === 'company-a' ? 11 : 13]);
+        expect(report.checks.filter(check => check.status === 'unavailable'))
+          .toEqual([expect.objectContaining({ id: 'evidence_support', cases: 0 })]);
+        const boundaryRun = await runCasePlan(subject.artifact, subject.plan.filter(check => check.id === 'snapshot_boundary'));
+        expect(boundaryRun.privateResults).toMatchObject([{
+          id: 'snapshot_boundary', captureValidationExecutions: 8, plannerExecutions: subject.candidate.companyId === 'company-a' ? 3 : 5,
+          failed: 0,
+        }]);
       }
 
       const b = subjects.find(subject => subject.candidate.companyId === 'company-b')!;
@@ -482,7 +508,7 @@ test('generated_b_zero_is_not_f8_balance, same_candidate_f8_transposition, diffe
       const dateResult = compile(wrongDate, b.profiles);
       if (!dateResult.ok) throw new Error('Expected B due-date mutation to compile');
       const facts = captureFacts.get(b.manifest.id)!;
-      const wrongDatePlan = buildCasePlan({ artifact: dateResult.value, profiles: b.profiles, manifest: b.manifest }, facts.truth, facts.events);
+      const wrongDatePlan = buildCasePlan({ artifact: dateResult.value, profiles: b.profiles, manifest: b.manifest }, facts.truth, facts.events, facts.snapshot);
       const wrongDateResult = await runCasePlan(dateResult.value, wrongDatePlan.filter(check => check.id === 'baseline_reconcile'));
       expect(wrongDateResult.checks).toMatchObject([{ id: 'baseline_reconcile', status: 'failed', cases: 1 }]);
       expect(wrongDateResult.difference).toBe(0);
@@ -498,4 +524,4 @@ test('generated_b_zero_is_not_f8_balance, same_candidate_f8_transposition, diffe
     await removeOwnedPins(ownedPins);
     await rm(directory, { recursive: true, force: true });
   }
-}, 45000);
+}, 60000);

@@ -36,7 +36,7 @@ async function readBounded(path: URL) {
   }
 }
 
-function verifyCaptureBinding(manifest: BootstrapManifest, snapshot: SourceSnapshot) {
+export function verifyCaptureBinding(manifest: BootstrapManifest, snapshot: SourceSnapshot) {
   const sort = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
   const evidenceIds = [...snapshot.evidenceIds].sort(sort);
   const eventIds = [...snapshot.eventIds].sort(sort);
@@ -86,7 +86,7 @@ export async function readProtectedFixture(id: string, version: string, manifest
     if (truth.fixtureSetId !== id || truth.fixtureSetVersion !== version) throw new Error();
     verifyTruthMembers(truth, manifest, bundle.snapshot, bundle.events);
     verifyCaptureBinding(manifest, bundle.snapshot);
-    return { truth, events: bundle.events };
+    return { truth, snapshot: bundle.snapshot, events: bundle.events };
   } catch {
     throw new Error('Protected fixture invalid');
   }
