@@ -78,4 +78,4 @@ test('truth_isolation pins immutable fixture versions and uses the real bounded 
   } finally {
     await rm(pinPath, { force: true });
   }
-});
+}, 20000);

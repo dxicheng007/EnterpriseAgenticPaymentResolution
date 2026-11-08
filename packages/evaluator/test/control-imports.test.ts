@@ -5,7 +5,7 @@ import { expect, test } from 'vitest';
 test('control evaluator entrypoints do not load the subject or protected oracle', () => {
   const script = String.raw`
     import { registerHooks } from 'node:module';
-    const protectedModules = /(?:^|\/)(?:case-recipes|cases|reference-model|fixtures|fixture-store|subject-runner|subject-comparison|evaluator-runner)\.(?:ts|js)$/;
+    const protectedModules = /(?:^|\/)(?:capture-boundary|case-recipes|cases|reference-model|fixtures|fixture-store|subject-runner|subject-comparison|evaluator-runner)\.(?:ts|js)$/;
     const hooks = registerHooks({
       resolve(specifier, context, nextResolve) {
         if (protectedModules.test(specifier)) throw new Error('Unexpected protected import: ' + specifier);

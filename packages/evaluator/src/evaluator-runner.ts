@@ -11,10 +11,10 @@ import { evaluatorBuildHash } from './launcher.js';
 async function evaluate(input: EvaluatorInput): Promise<VerificationReport> {
   const { jobId, artifact, profiles, manifest, fixtureSetId, fixtureSetVersion } = input;
   if (input.evaluatorBuildHash !== await evaluatorBuildHash()) throw new Error('Evaluator build mismatch');
-  const { truth, events } = await readProtectedFixture(fixtureSetId, fixtureSetVersion, manifest);
+  const { truth, snapshot, events } = await readProtectedFixture(fixtureSetId, fixtureSetVersion, manifest);
   if (truth.purpose !== 'construction') throw new Error('Verification fixture unavailable');
 
-  const plan = buildCasePlan({ artifact, profiles, manifest }, truth, events);
+  const plan = buildCasePlan({ artifact, profiles, manifest }, truth, events, snapshot);
   const { checks, eventKinds, difference } = await runCasePlan(artifact, plan);
   return VerificationReportSchema.parse({
     id: 'report:' + jobId, artifactHash: artifact.hash, profileHashes: profiles.map(profile => profile.hash),
