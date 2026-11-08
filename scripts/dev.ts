@@ -1,8 +1,10 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
+import { resolve } from 'node:path';
+import { z } from 'zod';
 import { createServer } from 'vite';
-import { launchControl, createWorkerClient } from '../apps/control/src/server.js';
+import { launchControl, createWorkerClient, type ControlServices } from '../apps/control/src/server.js';
 import { launchWorker } from '../apps/worker/src/server.js';
 import { createControlDb } from '../packages/storage/src/control-db.js';
 import { createRuntimeDb } from '../packages/storage/src/runtime-db.js';
@@ -20,6 +22,18 @@ function shutdownSignal(): Promise<void> {
   return Promise.race([once(process, 'SIGINT'), once(process, 'SIGTERM'), once(process, 'disconnect')]).then(() => {});
 }
 
+async function localFeaturePlugins(db: ControlServices['db'], clock: ControlServices['clock']) {
+  const { createLocalComposition } = await import('../apps/control/src/composition.js');
+  const { createEvidenceStore } = await import('@eapr/evidence');
+  const { IdSchema, strict } = await import('@eapr/contracts');
+  const captures = z.array(strict({
+    companyId: IdSchema, manifestId: IdSchema, contractFileId: IdSchema.nullable(),
+  })).parse(JSON.parse(required('EAPR_DEMO_CAPTURES')));
+  const store = await createEvidenceStore(required('EAPR_DEMO_EVIDENCE_ROOT'));
+  const webOrigin = 'http://127.0.0.1:' + localPort('EAPR_WEB_PORT', 5173);
+  return (await createLocalComposition({ db, clock, store }, { webOrigin, captures })).featurePlugins;
+}
+
 async function serve(role: 'worker' | 'control') {
   const serviceToken = required('EAPR_SERVICE_TOKEN');
   const clock = () => new Date();
@@ -33,7 +47,8 @@ async function serve(role: 'worker' | 'control') {
     const app = role === 'worker'
       ? await launchWorker({ db: pool, clock, serviceToken, expectedMigrations }, workerPort)
       : await launchControl({
-          db: pool, clock, expectedMigrations, workerClient: createWorkerClient('http://127.0.0.1:' + workerPort, serviceToken),
+          db: pool, clock, expectedMigrations, featurePlugins: await localFeaturePlugins(pool, clock),
+          workerClient: createWorkerClient('http://127.0.0.1:' + workerPort, serviceToken),
         }, localPort('EAPR_CONTROL_PORT', 3001));
     try {
       process.send?.('ready');
@@ -48,7 +63,10 @@ async function serve(role: 'worker' | 'control') {
 
 async function serveWeb() {
   const shutdown = shutdownSignal();
-  const web = await createServer({ configFile: 'apps/web/vite.config.ts' });
+  const web = await createServer({
+    configFile: 'apps/web/vite.config.ts',
+    server: { fs: { deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '**/.local/**', '**/.evidence/**', '**/fixtures/truth/**'] } },
+  });
   try {
     await web.listen();
     process.send?.('ready');
@@ -64,9 +82,28 @@ async function runLocal() {
   await migrate(db);
   await seed(db);
 
+  const { loadDemo } = await import('./load-demo.js');
+  const { createEvidenceStore } = await import('@eapr/evidence');
+  const evidenceRoot = resolve('.local/demo/evidence');
+  const controlDb = createControlDb({ connectionString: db.control.appUrl });
+  let captures;
+  try {
+    const store = await createEvidenceStore(evidenceRoot);
+    const loaded = await loadDemo({ db: controlDb, store, clock: () => new Date() }, {
+      visibleRoot: resolve('.local/demo/visible'), truthRoot: resolve('.local/demo/protected'),
+    });
+    captures = loaded.captures;
+    console.log('Local demo captured ' + loaded.fileCount + ' documents and ' + loaded.eventCount + ' events.');
+  } catch {
+    throw Object.assign(new Error('Local demo fixture loading failed'), { code: 'LOCAL_DEMO_LOAD_FAILED' });
+  } finally {
+    await controlDb.end();
+  }
+
   const serviceToken = randomBytes(32).toString('hex');
   const controlPort = localPort('EAPR_CONTROL_PORT', 3001);
   const workerPort = localPort('EAPR_WORKER_PORT', 3002);
+  const webPort = localPort('EAPR_WEB_PORT', 5173);
   const children: ChildProcess[] = [];
   const shutdown = shutdownSignal();
   const exits: Promise<string>[] = [];
@@ -89,8 +126,8 @@ async function runLocal() {
     await start('worker', { ...workerAccess, RUNTIME_DATABASE_URL: db.runtime.appUrl });
     await start('control', {
       ...workerAccess, CONTROL_DATABASE_URL: db.control.appUrl, EAPR_CONTROL_PORT: String(controlPort),
+      EAPR_WEB_PORT: String(webPort), EAPR_DEMO_EVIDENCE_ROOT: evidenceRoot, EAPR_DEMO_CAPTURES: JSON.stringify(captures),
     });
-    const webPort = localPort('EAPR_WEB_PORT', 5173);
     // Vite installs its own process signal handler. Keep it outside the supervising process.
     await start('web', { EAPR_WEB_PORT: String(webPort), EAPR_CONTROL_PORT: String(controlPort) });
     console.log('Web readiness: http://127.0.0.1:' + webPort);
@@ -113,7 +150,8 @@ try {
   else await runLocal();
 } catch (error) {
   console.error('Local service startup or shutdown failed. Check database readiness and port leases.',
-    error instanceof Error && 'code' in error && error.code === 'EADDRINUSE' ? 'EADDRINUSE' : '');
+    error instanceof Error && 'code' in error &&
+      (error.code === 'EADDRINUSE' || error.code === 'LOCAL_DEMO_LOAD_FAILED') ? error.code : '');
   process.exitCode = 1;
 } finally {
   if (process.connected) process.disconnect?.();

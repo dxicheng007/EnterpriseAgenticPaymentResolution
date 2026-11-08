@@ -2,11 +2,11 @@
 
 Build reviewable acquisition connectors from source evidence. A reviewer approves one customer and the exact rules for that customer's later automatic synchronization. The worker applies those rules deterministically to existing financial records. The product neither issues invoices nor moves money.
 
-## Current foundation
+## Current local implementation
 
-V0 contains shared contracts and development fixtures, PostgreSQL storage and durable activity primitives, control and worker health endpoints, a web health page, and native local setup and verification scripts. Source ingestion, compiler and finance execution, protected evaluation, live discovery, activation, and sync are planned slices.
+The foundation provides shared contracts, isolated PostgreSQL storage and durable activity, control and worker health, and native setup and verification scripts. Local development startup loads two synthetic acquisitions and mounts source dossiers, evidence reads, and deterministic connector preview against an explicitly empty target fixture. The loopback browser bootstraps a server-managed demo reviewer session. Protected evaluator modules are available for explicit composition. The default demo still reports verification unavailable. Live discovery, activation, persisted parent state, and sync remain planned.
 
-The stack is Node 24, strict TypeScript with npm workspaces, Fastify, React/Vite, PostgreSQL 18 with `pg`, Zod, Vitest, and Playwright. Native local PostgreSQL is implemented. PDF.js and pdf-lib are installed. PDF extraction, synthetic document generation, and design-time-only LLM integration are planned. The runtime worker must have no model calls, SDK, or key. See [workspace commands](package.json) and [compiler configuration](tsconfig.json).
+The stack is Node 24, strict TypeScript with npm workspaces, Fastify, React/Vite, PostgreSQL 18 with `pg`, Zod, Vitest, and Playwright. PDF.js extracts PDF text, and pdf-lib generates synthetic development documents. The runtime worker must have no model calls, SDK, or key. See [workspace commands](package.json), [compiler configuration](tsconfig.json), and [local process guides](apps/AGENTS.md).
 
 ## Read before changing behavior
 

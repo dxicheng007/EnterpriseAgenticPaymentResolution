@@ -11,6 +11,8 @@ Follow the [repository instructions](../AGENTS.md), [shared test interfaces](../
 
 The [preview integration tests](integration/v2-preview.test.ts) exercise real control HTTP, a test-only worker HTTP read, and unchanged control/runtime PostgreSQL schema and ledger state. Source captures, target records and candidate registration are explicit development fixtures. Actual persisted parent reads and registry integration require their own checks.
 
+The [local composition integration tests](integration/local-composition.test.ts) use real PostgreSQL, generated visible uploads, and captured evidence to exercise reviewer bootstrap, restart, both company previews, and unchanged runtime schema, ledgers, and activity. The target is an empty fixture. The [standalone evaluator integration tests](integration/v2-verification.test.ts) exercise the separately composed protected verification route.
+
 Use deterministic barriers for transaction ordering, as specified in [F7](../docs/superpowers/plans/2026-11-08-contract-freeze.md#f7--durable-ui-activity-and-cursor-protocol). Preserve spec-derived expected results when the implementation disagrees. Fix the implementation or raise the precise spec gap through the repository clarification rule.
 
 Public development fixtures are separate from future live construction and protected holdouts. Follow [F6](../docs/superpowers/plans/2026-11-08-contract-freeze.md#f6--health-and-protected-verification-protocol) for independent expected calculations, immutable truth, and evaluator-only access. Schema acceptance alone cannot establish compiler, financial, or live behavior.
