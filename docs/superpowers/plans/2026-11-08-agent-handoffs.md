@@ -4,6 +4,12 @@ These are copy-ready task descriptions for the user's Codex agents. They do not 
 
 Read `prdv2.md`, the [implementation plan](2026-11-08-implementation-plan.md), [shared contracts](2026-11-08-shared-contracts.md), and [verification playbook](2026-11-08-verification-playbook.md). Repository-relative paths in each task are authoritative. Use worktrees for concurrent coding and separate PostgreSQL namespaces/ports. Do not share a writable runtime database between agent worktrees.
 
+## Dispatch model and handoff
+
+The [orchestration policy](2026-11-08-agent-orchestration.md) governs every dispatch. A, B, and C are `gpt-6-astra` leads. Each prepares bounded tasks for `gpt-6.1-sol` implementation workers, including fixes. Root assigns permits and schedules a fresh `gpt-6-astra` reviewer who neither built nor supervised the candidate. The dispatch descriptions below assign lane ownership. Use the policy's task envelope for the actual worker assignment.
+
+Each brief must identify the producer and consumer of every interface crossing the task boundary. Pin the dependency SHAs and contract version/hash, name the exact module or endpoint and request/response types, and include concrete input/output and failure examples. Return the candidate commit and evidence to the lead and root. The reviewer receives that same brief and exact commit so the review tests the interface the consumer expects.
+
 ## Shared instructions for every builder
 
 > Implement only the assigned task IDs. Read their dependencies and interface contracts before editing. Keep the unit of work small enough to review independently. Add the named behavioral tests, observe their intended failure, implement the minimal behavior, then run the relevant verification command. Do not change acceptance assertions or fixture truth to fit your output. Do not modify other owners' files, shared schemas, lockfiles, or server composition without coordinating with the integrator. If an interface needs to change, propose the exact schema diff, consumer impact, and example before using it. Return commit SHA, changed files, commands/results, evidence packet, open issues, and fixture-versus-live limitations. Never mark joint acceptance complete on the user's behalf.
@@ -14,7 +20,7 @@ All agents use the same supported-money rules and source identity strategy. No r
 
 ### First: B/integrator — T0.1 foundation and contract publication
 
-> Own T0.1. Create the minimal runnable UI/control/worker/PostgreSQL setup and publish the shared contract types/examples. You own root dependencies/configuration, SQL migrations, and server composition. Use the shared-contract file as the required interface vocabulary. Deliver an isolated two-database health/persistence test and a browser health screen. Freeze the initial contract version before asking A and C to implement consumers. Do not build the full financial engine in this task.
+> Own T0.1. Lead the preflight contract freeze with A and C and get independent Astra review on the exact baseline before dispatching Sol for the runnable foundation. Create the minimal runnable UI/control/worker/PostgreSQL setup and publish the shared contract types/examples. You own root dependencies/configuration, SQL migrations, and server composition. Use the shared-contract file as the required interface vocabulary. Deliver an isolated two-database health/persistence test and a browser health screen. Publish the verified contract version and hash before asking A and C to implement consumers. Do not build the full financial engine in this task.
 
 While T0.1 is in progress, A may prepare a fixture/schema proposal and C a test/review-flow proposal without editing B's bootstrap files. These are preparatory artifacts, not completed feature slices.
 
@@ -40,7 +46,7 @@ While T0.1 is in progress, A may prepare a fixture/schema proposal and C a test/
 | 4 | Live failures in owned tools/prompts | Runtime failures in owned modules | T7.1 whole-product rehearsal | G7 joint acceptance |
 | Optional | Agent repair | Version switch | Version diff and review | V8 only after required demo |
 
-Do not infer that the table allows one agent to run several tasks simultaneously against the same files. Each lane queues overlapping changes; independent subagents can own disjoint modules/tests. B integrates shared contracts/root changes. C does not become the only integrator for all backend work just because C owns the demonstration.
+Each lane queues overlapping changes. The root permit ledger governs when independent workers can own disjoint modules/tests within the active slot limit. B integrates shared contracts and root changes. C owns demonstration coordination.
 
 ## Worktree and merge discipline
 
@@ -55,9 +61,11 @@ Do not infer that the table allows one agent to run several tasks simultaneously
 
 > Review task [ID] at commit [SHA] against the PRD, implementation task, shared interfaces, and verification playbook. Inspect actual code and tests, not just the builder's summary. Verify at least one success path and the most consequential negative/concurrency path with fresh output. Check financial identities, authority, raw evidence, runtime model isolation, and truthful fixture/live labeling as applicable. Report concrete defects with reproduction and severity, missing acceptance coverage, or “no actionable findings” with checks performed. Do not approve the user's joint-review gate or silently fix defects in the builder's branch.
 
-Use a fresh reviewer context for consequential financial/authorization code. The independent financial evaluator remains separate from the builder's implementation even when both reviewers belong to the user.
+Use a fresh `gpt-6-astra` reviewer for every candidate SHA, including repairs. The reviewer must be separate from the builder and supervising lead. The independent financial evaluator remains separate from the builder's implementation.
 
 ## Builder return format
+
+Attach the [candidate return envelope](2026-11-08-agent-orchestration.md#sol-to-lead-and-root-candidate-return) to this summary.
 
 ```text
 Task and delivered behavior:

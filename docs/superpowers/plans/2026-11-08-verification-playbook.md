@@ -7,7 +7,7 @@
 Each slice has three separate statuses:
 
 1. **Machine:** not run / failed / passed, tied to a specific commit, configuration, and source/artifact versions.
-2. **Independent review:** pending / changes requested / reviewed, performed by someone other than the builder of that slice. All reviewers can be the user's Codex agents; this does not require three humans.
+2. **Independent review:** pending / changes requested / reviewed, performed for each candidate SHA by a fresh `gpt-6-astra` reviewer separate from the builder and supervising lead. Follow the [orchestration policy](2026-11-08-agent-orchestration.md).
 3. **Joint acceptance:** pending / needs changes / accepted, recorded only after the user and coordinating assistant inspect the outcome together.
 
 Passing tests does not imply the user accepted the workflow. A screenshot does not prove transactions are correct. A model's own explanation or generated tests do not establish independent financial verification.
@@ -23,7 +23,9 @@ No automated command may set joint acceptance to accepted. No checkbox in these 
 - `assertions.json`: stable test IDs, expected/actual counts and cents, transaction receipts, and relevant cursor/epoch values.
 - `trace.json`: persisted observable task/tool/runtime events. No credentials, hidden model reasoning, or copied sensitive documents.
 - `screenshots/` and/or a Playwright trace for visible behaviors. These supplement SQL/API checks.
-- `review.md`: reviewer observations and separate joint-acceptance field initially `pending`.
+- `review.md`: reviewer model/session ID, builder and supervising lead IDs, exact reviewed and base SHAs, contract version/hash, and separate spec, quality, and verification judgments. Include the reviewer's own commands, results, evidence paths, and reproducible defects or coverage gaps. Joint acceptance starts `pending`.
+
+An independent verdict applies to its exact reviewed commit. Send every new Sol repair commit through a fresh Astra review. Record the integrated commit and the results of the combined slice checks separately from the candidate review. Only the user can grant joint acceptance at the walkthrough.
 
 Model names/configuration and call/token counts are included only when relevant. Never put API keys, database passwords, service tokens, raw environment dumps, or provider authorization headers in evidence.
 
@@ -139,7 +141,7 @@ Commit and dependency baseline:
 Artifact/profile/source-manifest hashes:
 Machine status: not_run | failed | passed
 Commands and evidence path:
-Independent reviewer and result:
+Independent Astra reviewer, exact reviewed SHA, and result:
 Joint acceptance: pending | needs_changes | accepted
 What we inspected together:
 What was fixture/stub/live/AI-off:

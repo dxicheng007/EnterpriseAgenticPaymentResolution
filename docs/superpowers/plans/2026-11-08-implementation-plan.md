@@ -24,6 +24,7 @@
 - “Support full payment/credit reversals only, including reversal of all associated allocations.”
 - All amounts use validated integer cents; PostgreSQL `BIGINT` values are parsed explicitly.
 - Product agents are not coding agents. The three implementation lanes are all the user's Codex agents. Keep the existing PRD personnel wording unchanged.
+- The [orchestration policy](2026-11-08-agent-orchestration.md) governs every implementation dispatch. Astra leads A, B, and C own architecture and handoffs, Sol workers implement and repair, and a fresh Astra reviewer verifies each candidate commit independently of its supervising lead and builder.
 - No builder declares a slice accepted merely because its own tests pass. Machine verification, independent review, and our joint acceptance are recorded separately.
 - Do not start optional repair or polish before the required no-AI sync and drift-containment gates pass.
 
@@ -103,6 +104,8 @@ Assertion fragments below are the required assertions within the named tests; th
 ### T0.1: Bootstrap through a visible PostgreSQL-backed health screen
 
 **Owner:** B/integrator; C may supply the health component in a separate file.
+
+**Readiness prerequisite.** Before dispatching implementation, the Astra leads resolve the [preflight contract decisions](2026-11-08-agent-orchestration.md#preflight-contract-decisions-still-to-freeze). B publishes a versioned baseline with its SHA-256, exact schemas, input/output examples, and test expectations. A fresh Astra reviewer verifies the baseline. For the activity test below, reversed completion is relative to transaction start. The scenario must follow publication-lock order on the shared sequence row.
 
 **Files:** Create root workspace/config/lockfile, `.env.example`, `.gitignore`, `infra/compose.yaml`, `infra/init-databases.sh`, `scripts/{dev,migrate,seed,verify-slice}.ts`, `db/control/001_base.sql`, `db/runtime/001_base.sql`, `packages/contracts/src/*` listed in shared contracts, `packages/storage/src/{control-db,runtime-db,transaction,activity}.ts`, `apps/{control,worker}/src/server.ts`, `apps/web/src/{main,App}.tsx`, `apps/web/src/features/health/HealthPage.tsx`. Tests: `tests/integration/v0-foundation.test.ts`, `tests/e2e/v0-health.spec.ts`, `tests/fixtures/{index,harness}.ts`.
 
