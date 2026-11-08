@@ -201,6 +201,7 @@ test('verification_route_scope, verification_job_scope, forged_report_rejected, 
     expect((await system.control.request(reviewPath, { headers })).status).toBe(403);
     await expect.poll(async () =>
       (await system.control.request<VerificationJob>(reviewPath, { headers: reviewerHeaders })).body.state,
+      { timeout: 12000 },
     ).toBe('completed');
     const completed = await system.control.request<VerificationJob>(reviewPath, { headers: reviewerHeaders });
     expect(completed.body.summary).toMatchObject({ eligible: false, coverageComplete: false });
@@ -209,6 +210,14 @@ test('verification_route_scope, verification_job_scope, forged_report_rejected, 
     const stored = await system.db.control.query('SELECT * FROM verification_reports WHERE job_id = $1', [review.body.jobId]);
     expect(stored.rows).toHaveLength(1);
     expect(stored.rows[0].report.eligible).toBe(false);
+    expect(stored.rows[0].report.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'new_record', status: 'passed', cases: 4 }),
+      expect.objectContaining({ id: 'duplicate_delivery', status: 'passed', cases: 3 }),
+      expect.objectContaining({ id: 'retry_restart', status: 'passed', cases: 3 }),
+      expect.objectContaining({ id: 'invalid_money', status: 'passed', cases: 3 }),
+      expect.objectContaining({ id: 'allocation_scope', status: 'passed', cases: 4 }),
+      expect.objectContaining({ id: 'unknown_identity', status: 'passed', cases: 2 }),
+    ]));
     await expect(system.db.control.query('UPDATE verification_reports SET report = report')).rejects.toMatchObject({ code: '42501' });
   } finally {
     release();
@@ -217,3 +226,184 @@ test('verification_route_scope, verification_job_scope, forged_report_rejected, 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('generated_b_zero_is_not_f8_balance, same_candidate_f8_transposition, different_artifact_pass_not_reused', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { createLocalComposition, localSourceCatalog } = await import('../../apps/control/src/composition.js');
+  const { createEvidenceStore } = await import('@eapr/evidence');
+  const { createSourceService, readManifest } = await import('@eapr/sources');
+  const { DemoCandidatesResponseSchema, VerificationReportSchema } = await import('@eapr/contracts');
+  const { loadDemo } = await import('../../scripts/load-demo.js');
+  const { decodeTruth } = await import('../../packages/evaluator/src/fixtures.js');
+  const { buildCasePlan, runCasePlan } = await import('../../packages/evaluator/src/cases.js');
+
+  const origin = 'http://127.0.0.1:5176';
+  const directory = await mkdtemp(join(tmpdir(), 'eapr-verification-captures-'));
+  const roots = { visibleRoot: join(directory, 'visible'), truthRoot: join(directory, 'private') };
+  const store = await createEvidenceStore(join(directory, 'evidence'));
+  type CaptureFacts = {
+    manifest: Awaited<ReturnType<typeof readManifest>>;
+    events: Awaited<ReturnType<ReturnType<typeof createSourceService>['getSnapshotRecords']>>;
+    truth: ReturnType<typeof decodeTruth>;
+    pin: Awaited<ReturnType<typeof pinProtectedFixture>>;
+  };
+  const captureFacts = new Map<string, CaptureFacts>();
+  const pinPaths: URL[] = [];
+  try {
+    const system = await createTestSystem({
+      modelMode: 'disabled', dbNamespace: testNamespace('verifyactual'),
+      async controlPluginFactory(services) {
+        const dependencies = { ...services, store };
+        const loaded = await loadDemo(dependencies, roots);
+        const sources = createSourceService(dependencies, localSourceCatalog);
+        for (const capture of loaded.captures) {
+          const manifest = await readManifest(services.db, capture.companyId, capture.manifestId);
+          const snapshot = await sources.getSnapshot('snapshot:' + capture.manifestId);
+          const events = await sources.getSnapshotRecords(snapshot.id);
+          const company = capture.companyId === 'company-a' ? 'a' : 'b';
+          const truthJson = await readFile(join(roots.truthRoot, 'expected-' + company + '.json'), 'utf8');
+          const truth = decodeTruth(truthJson);
+          const pin = await pinProtectedFixture({ truthJson, snapshot, manifest, events });
+          pinPaths.push(new URL('../../.local/protected-evaluator/' +
+            hashCanonical([pin.fixtureSetId, pin.fixtureSetVersion]) + '.json', import.meta.url));
+          captureFacts.set(capture.manifestId, { manifest, events, truth, pin });
+        }
+        const registry = createCandidateRegistry(services.db, join(directory, 'registry'));
+        const composition = await createLocalComposition(dependencies, { webOrigin: origin, captures: loaded.captures, registry });
+        const launcher = createProtectedVerificationLauncher(async candidate => {
+          const facts = captureFacts.get(candidate.manifest.id);
+          if (!facts || facts.manifest.hash !== candidate.manifest.hash) throw new Error('Fixture unavailable');
+          return facts.pin;
+        });
+        return [
+          ...composition.featurePlugins,
+          createVerificationPlugin({
+            registry, jobs: createVerificationJobs(services.db, launcher),
+            async authorizeVerification(request) {
+              const context = await composition.authorizeReviewer(request, { mutation: request.method === 'POST' });
+              return { caller: 'reviewer', ...context };
+            },
+          }),
+        ];
+      },
+    });
+    try {
+      const session = await fetch(system.control.origin + '/api/local-session', {
+        method: 'POST', headers: { origin, 'X-EAPR-Local-UI': '1', 'Sec-Fetch-Site': 'same-origin', 'content-type': 'application/json' },
+        body: '{}',
+      });
+      expect(session.status).toBe(200);
+      const cookie = session.headers.getSetCookie()[0].split(';', 1)[0];
+      const csrf = (await session.json()).csrfToken as string;
+      const headers = { cookie, origin, 'x-eapr-csrf': csrf };
+      const catalog = DemoCandidatesResponseSchema.parse(
+        (await system.control.request('/api/demo/candidates', { headers })).body,
+      );
+      expect(catalog.verificationAvailable).toBe(false);
+      expect(catalog.candidates.map(candidate => candidate.companyId)).toEqual(['company-a', 'company-b']);
+      const runtimeBefore = await system.db.runtime.query('SELECT * FROM activity_events ORDER BY sequence');
+      const subjects = await Promise.all(catalog.candidates.map(async candidate => {
+        const preview = await system.control.request<PreviewResponse>('/api/connectors/preview', {
+          method: 'POST', headers, body: candidate.request,
+        });
+        expect(preview.status).toBe(200);
+        expect(preview.body.parentWrites).toBe(0);
+        const artifact = preview.body.artifact!;
+        const facts = [...captureFacts.values()].find(value => 'snapshot:' + value.manifest.id === candidate.snapshotId)!;
+        const { manifest, events, truth, pin } = facts;
+        const profiles = candidate.request.profiles;
+        const plan = buildCasePlan({ artifact, profiles, manifest }, truth, events);
+        const generatedBalance = candidate.companyId === 'company-a' ? 80000 : 0;
+        expect(preview.body.diffs[0].afterBalanceCents).toBe(generatedBalance);
+        expect(plan.find(check => check.id === 'baseline_reconcile')?.cases[0].expected.balanceCents).toBe(generatedBalance);
+        const newRecords = plan.find(check => check.id === 'new_record')!.cases;
+        expect(newRecords.map(probe => [probe.provenance, probe.expected.balanceCents])).toEqual([
+          ['independent-F8-probe', 80000], ['independent-F8-probe', 80000], ['independent-F8-probe', 50000],
+          ['captured-baseline', generatedBalance],
+        ]);
+        for (const check of plan) {
+          for (const probe of check.cases) expect(probe.facts).toMatchObject({ artifactHash: artifact.hash, profileHash: profiles[0].hash });
+        }
+        if (candidate.companyId === 'company-b') {
+          const unresolved = events.find(event => event.rawIdentity.sourceAccountId?.startsWith('cust-b-unknown-'))!;
+          const unknown = plan.find(check => check.id === 'unknown_identity')!.cases[0];
+          expect(unknown.events).toEqual([unresolved]);
+          expect(unknown.holds).toEqual([{ code: 'UNKNOWN_ACCOUNT', eventIds: [unresolved.id] }]);
+        }
+        return { candidate, artifact, manifest, profiles, pin, plan };
+      }));
+
+      async function verify(
+        subject: typeof subjects[number], connectorId = subject.candidate.request.spec.id, artifactHash = subject.artifact.hash,
+      ) {
+        const requested = await system.control.request<VerificationJob>('/api/connectors/' + connectorId + '/verify', {
+          method: 'POST', headers, body: { artifactHash, manifestId: subject.manifest.id, profileHashes: subject.profiles.map(profile => profile.hash) },
+        });
+        expect(requested.status).toBe(202);
+        const path = '/api/verification-jobs/' + requested.body.jobId;
+        await expect.poll(async () => (await system.control.request<VerificationJob>(path, { headers })).body.state,
+          { timeout: 16000 }).toBe('completed');
+        const { body } = await system.control.request<VerificationJob>(path, { headers });
+        expect(body.summary).toMatchObject({ eligible: false, coverageComplete: false, artifactHash });
+        const text = JSON.stringify(body);
+        expect(text).not.toContain(subject.pin.fixtureSetId);
+        expect(text).not.toMatch(/expectedFactHash|recipeVersion|captured-baseline|independent-F8-probe|inputHash|targetHash|planner-fresh-process/);
+        const { rows } = await system.db.control.query('SELECT report FROM verification_reports WHERE job_id = $1', [requested.body.jobId]);
+        return VerificationReportSchema.parse(rows[0].report);
+      }
+
+      const verified = await Promise.all(subjects.map(subject => verify(subject)));
+      for (const [index, report] of verified.entries()) {
+        const subject = subjects[index];
+        expect(report.profileHashes).toEqual(subject.profiles.map(profile => profile.hash));
+        expect(report.eligible).toBe(false);
+        expect(report.unexplainedDifferenceCents).toBe(0);
+        expect(report.coverage.eventKinds).toEqual(['allocation', 'credit', 'invoice', 'payment']);
+        expect(report.checks.map(check => [check.id, check.status, check.cases])).toEqual(subject.plan.map(check =>
+          [check.id, check.cases.length ? 'passed' : 'unavailable', check.cases.length]));
+        expect(report.coverage.executed).toEqual([
+          'baseline_reconcile', 'new_record', 'duplicate_delivery', 'retry_restart', 'invalid_money',
+          'allocation_scope', 'unknown_identity',
+        ]);
+        expect(report.checks.filter(check => check.status === 'passed').map(check => check.cases))
+          .toEqual([1, 4, 3, 3, subject.candidate.companyId === 'company-a' ? 3 : 5, 4, 2]);
+      }
+
+      const b = subjects.find(subject => subject.candidate.companyId === 'company-b')!;
+      const bad = structuredClone(b.candidate.request);
+      bad.spec.id += '-bad-relationship';
+      // Captured B allocates payments only. Redirecting credit allocation funding is visible in the unequal F8 probe.
+      bad.spec.mappings.find(mapping => mapping.kind === 'allocation')!.fields.fundingKind = {
+        op: 'enum_lookup', path: '/receipt_type', values: { payment: 'payment', credit: 'payment' },
+      };
+      const badPreview = await system.control.request<PreviewResponse>('/api/connectors/preview', { method: 'POST', headers, body: bad });
+      expect(badPreview.status).toBe(200);
+      const badArtifact = badPreview.body.artifact!;
+      expect(badArtifact.hash).not.toBe(b.artifact.hash);
+      const wrong = await verify(b, bad.spec.id, badArtifact.hash);
+      expect(wrong.checks.find(check => check.id === 'baseline_reconcile')).toMatchObject({ status: 'passed', cases: 1 });
+      expect(wrong.checks.find(check => check.id === 'new_record')).toMatchObject({ status: 'failed', cases: 4 });
+      // The bad relationship blocks the connected invoice/payment/allocation group.
+      // The independent 20,000 credit survives as a standalone source record.
+      expect(wrong.unexplainedDifferenceCents).toBe(300000 + 200000 + 200000 + 20000);
+
+      const wrongDate = structuredClone(b.candidate.request.spec);
+      wrongDate.mappings.find(mapping => mapping.kind === 'invoice')!.fields.dueDate = { op: 'field', path: '/posted_on' };
+      const dateResult = compile(wrongDate, b.profiles);
+      if (!dateResult.ok) throw new Error('Expected B due-date mutation to compile');
+      const facts = captureFacts.get(b.manifest.id)!;
+      const wrongDatePlan = buildCasePlan({ artifact: dateResult.value, profiles: b.profiles, manifest: b.manifest }, facts.truth, facts.events);
+      const wrongDateResult = await runCasePlan(dateResult.value, wrongDatePlan.filter(check => check.id === 'baseline_reconcile'));
+      expect(wrongDateResult.checks).toMatchObject([{ id: 'baseline_reconcile', status: 'failed', cases: 1 }]);
+      expect(wrongDateResult.difference).toBe(0);
+      expect(subjects[0].profiles[0].parentCustomerId).toBe(b.profiles[0].parentCustomerId);
+      expect(subjects[0].profiles[0].scope.sellerEntityId).not.toBe(b.profiles[0].scope.sellerEntityId);
+      expect((await system.db.runtime.query('SELECT * FROM activity_events ORDER BY sequence')).rows).toEqual(runtimeBefore.rows);
+    } finally {
+      await system.close();
+    }
+  } finally {
+    await Promise.all(pinPaths.map(path => rm(path, { force: true })));
+    await rm(directory, { recursive: true, force: true });
+  }
+}, 45000);
