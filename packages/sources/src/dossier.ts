@@ -239,7 +239,7 @@ async function loadManifestById(db:Pool,manifestId:Id) {
   return BootstrapManifestSchema.parse(row.manifest);
 }
 
-function aggregateHash(manifest:BootstrapManifest,eventIds:Id[],evidenceIds:Id[]) {
+export function aggregateHash(manifest:BootstrapManifest,eventIds:Id[],evidenceIds:Id[]) {
   const compare = (a:string,b:string) => a < b ? -1 : a > b ? 1 : 0;
   return hashCanonical({
     manifestHash:manifest.hash,
@@ -250,7 +250,7 @@ function aggregateHash(manifest:BootstrapManifest,eventIds:Id[],evidenceIds:Id[]
   });
 }
 
-function documentCitations(snapshotId:Id,files:readonly StoredSourceFile[]): EvidenceRef[] {
+export function documentCitations(snapshotId:Id,files:readonly StoredSourceFile[]): EvidenceRef[] {
   return files.flatMap(file => {
     const {extraction} = file;
     const document = extraction.document;

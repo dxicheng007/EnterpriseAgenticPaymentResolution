@@ -1,23 +1,25 @@
 import multipart from '@fastify/multipart';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import {
-  ApiErrorSchema, IdSchema, UploadMetadataSchema, UploadResponseSchema, type Id, type UploadMetadata,
+  ApiErrorSchema, IdSchema, UploadMetadataSchema, UploadResponseSchema, strict, type Id, type UploadMetadata,
 } from '@eapr/contracts';
 import type { EvidenceStore } from '@eapr/evidence';
 import {
   MAX_METADATA_BYTES, MAX_UPLOAD_BYTES, readDossier, readEvidence, readEvidenceBytes,
-  SourceError, uploadSource, type UploadDependencies,
+  readSourceCoverage, SourceError, uploadSource, type SourceDefinition, type UploadDependencies,
 } from '@eapr/sources';
 
 type Authorization = {companyId:Id; sourceRef:Id; operation:'read'|'upload'|'operator'};
 export type AuthorizeSource = (request: FastifyRequest, access: Authorization) => Promise<void>;
 
 type SourcePluginOptions = {
-  catalog: ReadonlyMap<Id, {companyId:Id; sourceRef:Id}>;
+  catalog: ReadonlyMap<Id, SourceDefinition | Pick<SourceDefinition, 'companyId' | 'sourceRef'>>;
   authorizeSource: AuthorizeSource;
   store: EvidenceStore;
 
 };
+
+const sourceCoverageQuery = strict({snapshotId:IdSchema});
 
 function id(value: string, code: string) {
   const parsed = IdSchema.safeParse(value);
@@ -103,6 +105,22 @@ export function createSourcePlugin({catalog,authorizeSource,store}:SourcePluginO
         return reply.header('Cache-Control','no-store').send(await readDossier(db,companyId,manifestId));
       },
     );
+    app.get<{Params:{companyId:string}}>('/api/sources/:companyId/coverage',async (request,reply) => {
+      const query = sourceCoverageQuery.safeParse(request.query);
+      if (!query.success) throw new SourceError(400,'SOURCE_COVERAGE_INVALID','Source coverage query is invalid');
+      const companyId = id(request.params.companyId,'SOURCE_NOT_FOUND');
+      const source = catalog.get(companyId);
+      if (!source) throw new SourceError(404,'SOURCE_NOT_FOUND','Source was not found');
+      const {sourceRef} = source;
+      await authorizeSource(request,{companyId,sourceRef,operation:'read'});
+      if (!('contracts' in source)) throw new SourceError(503,'SOURCE_UNAVAILABLE','Source coverage is unavailable');
+      const result = await readSourceCoverage({db,store},source,query.data.snapshotId,async binding => {
+        if (binding.companyId !== companyId || binding.sourceRef !== sourceRef) {
+          throw new SourceError(409,'SOURCE_EPOCH_CONFLICT','Evidence does not match the authorized source');
+        }
+      });
+      return reply.header('Cache-Control','no-store').send(result);
+    });
     app.get<{Params:{id:string}}>('/api/evidence/:id',async (request,reply) => {
       const result = await readEvidence(db,id(request.params.id,'EVIDENCE_NOT_FOUND'),
         ({companyId,sourceRef}) => authorizeSource(request,{companyId,sourceRef,operation:'read'}));
