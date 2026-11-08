@@ -589,3 +589,35 @@ Metrics: time to verified connector, unresolved rules, customer enrollments, ini
 - **Bidirectional sync changes the problem.** Conflict resolution, ownership, echo prevention, and writeback authorization are deferred.
 
 V2 preserves the original objective—correct translation into the parent—while making the durable connection the product. The prototype is complete only when the agents can stop and the approved connection keeps working within its verified scope.
+
+
+## 21. Vertical implementation and joint verification
+
+The detailed implementation plan refines the architecture into observable product increments. It does not change the scope, database choice, standing customer approval, or model-free runtime requirement above. Each increment must exercise the relevant storage, service, and user-facing behavior; isolated backend/frontend completion is not a product acceptance claim.
+
+| Slice | Product acceptance outcome |
+|---|---|
+| V0 — Runnable foundation | Local UI reports healthy isolated PostgreSQL services and persisted state survives restart |
+| V1 — Source evidence | Both acquisitions have inspectable dossiers, exact citations, coverage, and coordinated snapshot boundaries |
+| V2 — Connector preview | Executable mappings and independent financial checks are reviewable without changing the parent |
+| V3 — Customer activation | One explicit reviewed action imports one customer's initial state and records bounded ongoing authority |
+| V4 — Agent construction | Observable live agents generate the connector actually used for review, with independently checked results |
+| V5 — Ongoing connection | New postactivation API/file records sync through that artifact with model access disabled |
+| V6 — Failure containment | Replay, restart, revocation, dependency gaps, and schema changes do not corrupt or silently omit financial effects |
+| V7 — Repeatable demonstration | The complete two-company scenario passes on the integrated commit with reproducible evidence and joint review |
+| V8 — Optional repair | An explicitly requested, newly verified and approved artifact resumes held work without repeating old financial effects |
+
+A fixture-generated artifact can unblock parallel implementation, but cannot satisfy the live-agent or final AI-free operation gate. V5's final acceptance uses V4's actual generated artifact and source records introduced after activation. Machine verification, independent agent review, and joint user acceptance are separate statuses; neither a passing test nor an agent completion message automatically records user acceptance.
+
+Required evidence for each completed slice: commit/configuration identity, source and artifact hashes, exact verification commands and results, API/database assertions, relevant UI traces, explicit fixture/live/AI-off mode, and remaining limitations. Store sensitive-free evidence locally; source credentials and hidden model reasoning are never included. Reviewers can reproduce the result instead of relying on the builder's account.
+
+The verification checkpoints are planned walkthroughs with the user. They can be grouped into a review session; they do not require asking for permission on every routine coding step. Independent tasks may proceed concurrently, while rejected behavior or interfaces must be corrected before dependent acceptance.
+
+Implementation documents:
+
+- [Vertical implementation plan and task checklist](docs/superpowers/plans/2026-11-08-implementation-plan.md)
+- [Shared contracts, exact interfaces, and file ownership](docs/superpowers/plans/2026-11-08-shared-contracts.md)
+- [Joint verification playbook and acceptance matrix](docs/superpowers/plans/2026-11-08-verification-playbook.md)
+- [Codex workstream handoffs and review prompts](docs/superpowers/plans/2026-11-08-agent-handoffs.md)
+
+These documents describe planned work. No product code, database deployment, or passing implementation tests are claimed by their creation.
