@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { expect, test } from 'vitest';
 import { compile } from '@eapr/compiler/compile';
 import { createPreviewPlugin } from '../../apps/control/src/routes/preview.js';
 import { createVerificationPlugin } from '../../apps/control/src/routes/verification.js';
 import { createProtectedVerificationLauncher } from '../../packages/evaluator/src/verify.js';
+import { decodeTruth, type ProtectedFixtureSet } from '../../packages/evaluator/src/fixtures.js';
 import { pinProtectedFixture } from '../../packages/evaluator/src/fixture-store.js';
 import { publicTruthFixture } from '../../packages/evaluator/test/public-truth-fixture.js';
 import { canonicalJson, hashBytes, hashCanonical, hashManifest, type PreviewResponse, type VerificationJob } from '@eapr/contracts';
@@ -227,14 +229,92 @@ test('verification_route_scope, verification_job_scope, forged_report_rejected, 
   }
 });
 
+const testPinRoot = new URL('../../.local/protected-evaluator/', import.meta.url);
+
+function pinPath(root: URL, truth: ProtectedFixtureSet) {
+  return new URL(hashCanonical([truth.fixtureSetId, truth.fixtureSetVersion]) + '.json', root);
+}
+
+function copyTruthForTest(original: ProtectedFixtureSet, fixtureSetId: string) {
+  const { hash: _originalHash, fixtureSetId: _originalId, ...facts } = original;
+  const copy = { ...facts, fixtureSetId };
+  const truthJson = canonicalJson({ ...copy, hash: hashCanonical(copy) });
+  const truth = decodeTruth(truthJson);
+  const { hash: _testHash, fixtureSetId: _testId, ...copiedFacts } = truth;
+  expect(hashCanonical(copiedFacts)).toBe(hashCanonical(facts));
+  return { truth, truthJson };
+}
+
+async function pinOwnedFixture(
+  input: Parameters<typeof pinProtectedFixture>[0],
+  truth: ProtectedFixtureSet,
+  owned: Set<string>,
+  root = testPinRoot,
+) {
+  const path = pinPath(root, truth);
+  try {
+    await lstat(path);
+    throw new Error('Test fixture pin path already exists');
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+  }
+  const pin = await pinProtectedFixture(input, root);
+  owned.add(path.href);
+  return pin;
+}
+
+async function removeOwnedPins(owned: Set<string>) {
+  await Promise.all([...owned].map(path => rm(new URL(path), { force: true })));
+  owned.clear();
+}
+
+async function provePinIsolation(
+  root: URL,
+  input: Parameters<typeof pinProtectedFixture>[0],
+  original: ProtectedFixtureSet,
+  fixtureId: string,
+) {
+  const differentCapture = {
+    ...input.snapshot, capturedAt: new Date(Date.parse(input.snapshot.capturedAt) + 1000).toISOString(),
+  };
+  await pinProtectedFixture(input, root);
+  const originalPath = pinPath(root, original);
+  const originalHash = hashBytes(await readFile(originalPath));
+  await expect(pinProtectedFixture({ ...input, snapshot: differentCapture }, root)).rejects.toThrow('Protected fixture invalid');
+
+  const first = copyTruthForTest(original, fixtureId + ':first');
+  const second = copyTruthForTest(original, fixtureId + ':second');
+  const existing = copyTruthForTest(original, fixtureId + ':existing');
+  const existingInput = { ...input, truthJson: existing.truthJson };
+  await pinProtectedFixture(existingInput, root);
+  const existingPath = pinPath(root, existing.truth);
+  const existingHash = hashBytes(await readFile(existingPath));
+
+  const owned = new Set<string>();
+  try {
+    await expect(pinOwnedFixture(existingInput, existing.truth, owned, root)).rejects.toThrow('Test fixture pin path already exists');
+    expect(owned.size).toBe(0);
+    await pinOwnedFixture({ ...input, truthJson: first.truthJson }, first.truth, owned, root);
+    const firstPath = pinPath(root, first.truth);
+    const firstHash = hashBytes(await readFile(firstPath));
+    await pinOwnedFixture({ ...input, snapshot: differentCapture, truthJson: second.truthJson }, second.truth, owned, root);
+    expect(owned.size).toBe(2);
+    expect(hashBytes(await readFile(firstPath))).toBe(firstHash);
+  } finally {
+    await removeOwnedPins(owned);
+  }
+  await expect(lstat(pinPath(root, first.truth))).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(lstat(pinPath(root, second.truth))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(hashBytes(await readFile(originalPath))).toBe(originalHash);
+  expect(hashBytes(await readFile(existingPath))).toBe(existingHash);
+}
+
 test('generated_b_zero_is_not_f8_balance, same_candidate_f8_transposition, different_artifact_pass_not_reused', async () => {
-  const { readFile } = await import('node:fs/promises');
   const { createLocalComposition, localSourceCatalog } = await import('../../apps/control/src/composition.js');
   const { createEvidenceStore } = await import('@eapr/evidence');
   const { createSourceService, readManifest } = await import('@eapr/sources');
   const { DemoCandidatesResponseSchema, VerificationReportSchema } = await import('@eapr/contracts');
   const { loadDemo } = await import('../../scripts/load-demo.js');
-  const { decodeTruth } = await import('../../packages/evaluator/src/fixtures.js');
   const { buildCasePlan, runCasePlan } = await import('../../packages/evaluator/src/cases.js');
 
   const origin = 'http://127.0.0.1:5176';
@@ -248,7 +328,9 @@ test('generated_b_zero_is_not_f8_balance, same_candidate_f8_transposition, diffe
     pin: Awaited<ReturnType<typeof pinProtectedFixture>>;
   };
   const captureFacts = new Map<string, CaptureFacts>();
-  const pinPaths: URL[] = [];
+  const nonce = randomUUID();
+  const ownedPins = new Set<string>();
+  const originalFiles = new Map<string, string>();
   try {
     const system = await createTestSystem({
       modelMode: 'disabled', dbNamespace: testNamespace('verifyactual'),
@@ -261,11 +343,19 @@ test('generated_b_zero_is_not_f8_balance, same_candidate_f8_transposition, diffe
           const snapshot = await sources.getSnapshot('snapshot:' + capture.manifestId);
           const events = await sources.getSnapshotRecords(snapshot.id);
           const company = capture.companyId === 'company-a' ? 'a' : 'b';
-          const truthJson = await readFile(join(roots.truthRoot, 'expected-' + company + '.json'), 'utf8');
-          const truth = decodeTruth(truthJson);
-          const pin = await pinProtectedFixture({ truthJson, snapshot, manifest, events });
-          pinPaths.push(new URL('../../.local/protected-evaluator/' +
-            hashCanonical([pin.fixtureSetId, pin.fixtureSetVersion]) + '.json', import.meta.url));
+          const path = join(roots.truthRoot, 'expected-' + company + '.json');
+          const bytes = await readFile(path);
+          originalFiles.set(path, hashBytes(bytes));
+          const originalJson = bytes.toString('utf8');
+          const original = decodeTruth(originalJson);
+          const fixtureId = 'test:verifyactual:' + nonce + ':' + company;
+          // Test-run isolation changes fixture metadata only. The generator emitted the original tuple.
+          const { truth, truthJson } = copyTruthForTest(original, fixtureId);
+          if (company === 'a') {
+            await provePinIsolation(pathToFileURL(join(directory, 'pin-regression') + '/'),
+              { truthJson: originalJson, snapshot, manifest, events }, original, fixtureId);
+          }
+          const pin = await pinOwnedFixture({ truthJson, snapshot, manifest, events }, truth, ownedPins);
           captureFacts.set(capture.manifestId, { manifest, events, truth, pin });
         }
         const registry = createCandidateRegistry(services.db, join(directory, 'registry'));
@@ -399,11 +489,13 @@ test('generated_b_zero_is_not_f8_balance, same_candidate_f8_transposition, diffe
       expect(subjects[0].profiles[0].parentCustomerId).toBe(b.profiles[0].parentCustomerId);
       expect(subjects[0].profiles[0].scope.sellerEntityId).not.toBe(b.profiles[0].scope.sellerEntityId);
       expect((await system.db.runtime.query('SELECT * FROM activity_events ORDER BY sequence')).rows).toEqual(runtimeBefore.rows);
+      expect(originalFiles.size).toBe(2);
+      for (const [path, hash] of originalFiles) expect(hashBytes(await readFile(path))).toBe(hash);
     } finally {
       await system.close();
     }
   } finally {
-    await Promise.all(pinPaths.map(path => rm(path, { force: true })));
+    await removeOwnedPins(ownedPins);
     await rm(directory, { recursive: true, force: true });
   }
 }, 45000);
