@@ -1,0 +1,13 @@
+node_modules/
+.local/
+.env
+.env.*
+!.env.example
+.evidence/
+.playwright/
+test-results/
+playwright-report/
+dist/
+registry/
+fixtures/visible/generated/
+fixtures/truth/

@@ -1,0 +1,11 @@
+{
+  "name": "@eapr/storage",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./control-db": "./src/control-db.ts",
+    "./runtime-db": "./src/runtime-db.ts",
+    "./transaction": "./src/transaction.ts",
+    "./activity": "./src/activity.ts"
+  }
+}
