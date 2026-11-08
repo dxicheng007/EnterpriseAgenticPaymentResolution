@@ -50,3 +50,88 @@ test('exposes different parameters of the same transform even when the target va
   expect(html).toContain('View citation ev-one');
   expect(html).toContain('View citation ev-two');
 });
+
+test('renders mirrored blocked rows and their diagnostics once without changing the response', () => {
+  const diagnostic = {
+    code: 'UNKNOWN_ACCOUNT', severity: 'blocker' as const, message: 'Source account has no approved identity',
+    sourceIds: ['source-one'], fieldPaths: ['/account'],
+  };
+  const hold = { code: diagnostic.code, eventIds: ['evt:unmapped'], dependencies: ['dep:1'], diagnostics: [diagnostic] };
+  const result: PreviewResponse = {
+    artifact: null, diffs: [], parentWrites: 0,
+    outcome: { holds: [hold], plans: [] }, unsupportedRows: [structuredClone(hold)],
+    diagnostics: [structuredClone(diagnostic), { ...diagnostic, code: 'COMPILE', message: 'Compilation failed' }],
+  };
+  const original = structuredClone(result);
+  const html = renderToStaticMarkup(createElement(PreviewResult, { result, evidenceRefs: [] }));
+  expect(html.match(/Source events evt:unmapped/g)).toHaveLength(1);
+  expect(html.match(/Blocker · UNKNOWN_ACCOUNT/g)).toHaveLength(1);
+  expect(html).toContain('Records not mapped by the preview profiles');
+  expect(html).toContain('Source account has no approved identity');
+  expect(html).toContain('Sources source-one');
+  expect(html).toContain('Fields /account');
+  expect(html).toContain('Dependencies dep:1');
+  expect(html).toContain('Additional diagnostics');
+  expect(html).toContain('Compilation failed');
+  expect(result).toEqual(original);
+});
+
+test('preserves unmatched occurrences and groups holds by the complete submitted scope', () => {
+  const diagnostic = {
+    code: 'UNKNOWN_ACCOUNT', severity: 'blocker' as const, message: 'Mapping missing',
+    sourceIds: ['one', 'two'], fieldPaths: ['/first', '/second'],
+  };
+  const selected = {
+    code: diagnostic.code, scope: profileA.scope, eventIds: ['evt:shared', 'evt:second'],
+    dependencies: ['dep:first', 'dep:second'], diagnostics: [diagnostic],
+  };
+  const unresolved = ['SEMANTIC_VERSION', 'IDENTITY_SCOPE'].map(code => ({
+    code, eventIds: ['evt:' + code], dependencies: [], diagnostics: [{ ...diagnostic, code }],
+  }));
+  const result: PreviewResponse = {
+    artifact: null, diffs: [], parentWrites: 0,
+    outcome: { plans: [], holds: [selected, selected, ...unresolved] },
+    unsupportedRows: [
+      selected, selected, selected,
+      { ...selected, scope: { ...selected.scope, companyId: 'company-other' } },
+      { ...selected, scope: { ...selected.scope, sellerEntityId: 'seller-other' } },
+      { ...selected, scope: { ...selected.scope, accountId: 'account-other' } },
+      { ...selected, diagnostics: [{ ...diagnostic, message: 'Different detail' }] },
+      { ...selected, diagnostics: [{ ...diagnostic, severity: 'warning' }] },
+      { ...selected, diagnostics: [{ ...diagnostic, sourceIds: ['two', 'one'] }] },
+      { ...selected, diagnostics: [{ ...diagnostic, fieldPaths: ['/second', '/first'] }] },
+      { ...selected, dependencies: ['dep:second', 'dep:first'] },
+      { ...selected, eventIds: ['evt:second', 'evt:shared'] },
+    ],
+    diagnostics: [],
+  };
+  const props = { result, evidenceRefs: [] };
+  const html = renderToStaticMarkup(createElement(PreviewResult, { ...props, profileScopes: [profileA.scope] }));
+  expect(html).toContain('Unsupported rows (14)');
+  expect(html).toContain('2 matching entries shown once.');
+  expect(html).toContain('Selected customer issues (9)');
+  expect(html).toContain('Other or unresolved scope issues (5)');
+  expect(html).toContain('Blocker · SEMANTIC_VERSION');
+  expect(html).toContain('Blocker · IDENTITY_SCOPE');
+  expect(html).toContain('Warning · UNKNOWN_ACCOUNT');
+  expect(html).toContain('Different detail');
+  expect(html).not.toContain('Records not mapped by the preview profiles');
+  const withoutProfiles = renderToStaticMarkup(createElement(PreviewResult, props));
+  expect(withoutProfiles).not.toContain('Selected customer issues');
+  expect(withoutProfiles).toContain('Other or unresolved scope issues (14)');
+});
+
+test('preserves extra global diagnostic occurrences and distinct diagnostic details', () => {
+  const diagnostic = { code: 'UNKNOWN_ACCOUNT', severity: 'blocker' as const,
+    message: 'Mapping missing', sourceIds: ['source'], fieldPaths: ['/account'] };
+  const hold = { code: diagnostic.code, eventIds: ['evt:one'], dependencies: [], diagnostics: [diagnostic] };
+  const result: PreviewResponse = {
+    artifact: null, diffs: [], parentWrites: 0,
+    outcome: { plans: [], holds: [hold] }, unsupportedRows: [hold],
+    diagnostics: [diagnostic, diagnostic, { ...diagnostic, fieldPaths: ['/different'] }],
+  };
+  const html = renderToStaticMarkup(createElement(PreviewResult, { result, evidenceRefs: [] }));
+  expect(html.match(/Blocker · UNKNOWN_ACCOUNT/g)).toHaveLength(3);
+  expect(html).toContain('Additional diagnostics');
+  expect(html).toContain('Fields /different');
+});

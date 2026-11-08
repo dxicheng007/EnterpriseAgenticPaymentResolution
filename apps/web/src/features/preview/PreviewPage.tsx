@@ -130,7 +130,8 @@ function CandidatePreview({ candidate, verificationAvailable }: { candidate: Can
       {pending && <p role="status">Running preview…</p>}
       {error != null && <RequestFailure error={error} next="Retry the preview or refresh the candidate list." />}
     </section>
-    {result && <PreviewResult result={result} evidenceRefs={result.artifact ? evidenceRefs : []} />}
+    {result && <PreviewResult result={result} evidenceRefs={result.artifact ? evidenceRefs : []}
+      profileScopes={request.profiles.map(profile => profile.scope)} />}
     <VerificationPanel key={result?.artifact?.hash ?? 'no-artifact'}
       available={verificationAvailable} connectorId={request.spec.id} snapshotId={candidate.snapshotId}
       artifact={result?.artifact ?? null} />

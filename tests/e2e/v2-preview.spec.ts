@@ -58,6 +58,15 @@ test('previews both captured schemas and leaves real runtime state unchanged', a
     await balanceA.screenshot({ path: test.info().outputPath('preview-company-a-balance.png') });
     await expect(page.getByText('Parent writes: 0', { exact: true })).toBeVisible();
     await expect(page.getByText(resultA.artifact!.hash, { exact: true })).toBeVisible();
+    const unsupported = page.getByRole('heading', { name: /Unsupported rows \([1-9]/ }).locator('..');
+    const unmappedHeading = unsupported.getByRole('heading', { name: /Records not mapped by the preview profiles/ });
+    await expect(unmappedHeading).toHaveCount(1);
+    await expect(unsupported.getByText(/This preview applies this customer profile to a captured source snapshot/)).toBeVisible();
+    const unscopedA = resultA.unsupportedRows.find(row => !row.scope && row.code === 'UNKNOWN_ACCOUNT');
+    expect(unscopedA).toBeDefined();
+    await expect(unmappedHeading.locator('..').getByText(
+      'Source events ' + unscopedA!.eventIds.join(', '), { exact: true })).toBeVisible();
+    await unsupported.screenshot({ path: test.info().outputPath('preview-company-a-scope.png') });
     const invoice = page.locator('summary').filter({ hasText: 'insert_invoice' }).first();
     await invoice.click();
     const invoiceDetails = invoice.locator('..');
@@ -96,9 +105,11 @@ test('previews both captured schemas and leaves real runtime state unchanged', a
     const balanceB = page.getByRole('region', { name: 'Balance diff for ' + b.scope.accountId });
     await expect(balanceB.getByText('$0.00').last()).toBeVisible();
     await balanceB.screenshot({ path: test.info().outputPath('preview-company-b-balance.png') });
-    const unsupported = page.getByRole('heading', { name: /Unsupported rows \([1-9]/ }).locator('..');
     const remittance = unsupported.getByText('Source events ' + held, { exact: true });
     await expect(remittance).toBeVisible();
+    const remittanceRow = remittance.locator('..');
+    await expect(remittanceRow.getByText('Blocker · UNKNOWN_ACCOUNT', { exact: true })).toBeVisible();
+    await expect(remittanceRow.getByText('Source account has no approved identity', { exact: true })).toBeVisible();
     await remittance.locator('..').screenshot({ path: test.info().outputPath('preview-company-b-hold.png') });
 
     const missingCsrf = await page.evaluate(async body => {
