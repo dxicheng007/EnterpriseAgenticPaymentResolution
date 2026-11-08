@@ -11,3 +11,4 @@ dist/
 registry/
 fixtures/visible/generated/
 fixtures/truth/
+.superpowers/

@@ -5,7 +5,10 @@
   "exports": "./src/index.ts",
   "dependencies": {
     "@eapr/contracts": "*",
+    "@eapr/evidence": "*",
+    "@eapr/storage": "*",
     "csv-parse": "7.0.3",
-    "csv-stringify": "6.9.0"
+    "csv-stringify": "6.9.0",
+    "pdf-lib": "1.17.1"
   }
 }

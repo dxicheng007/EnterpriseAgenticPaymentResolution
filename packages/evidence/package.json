@@ -5,6 +5,7 @@
   "exports": "./src/index.ts",
   "dependencies": {
     "@eapr/contracts": "*",
+    "csv-parse": "7.0.3",
     "pdf-lib": "1.17.1",
     "pdfjs-dist": "6.2.108"
   }
