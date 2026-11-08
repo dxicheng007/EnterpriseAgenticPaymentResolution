@@ -10,6 +10,10 @@ import { buildDemoCandidate, type DemoCapture } from './demo-candidates.js';
 import { createLocalSessionService, LocalSessionError } from './local-session.js';
 import { createPreviewPlugin } from './routes/preview.js';
 import { createSourcePlugin, type AuthorizeSource } from './routes/sources.js';
+import {
+  composeVerification, verificationSetupDiagnostic, type CaptureBinding, type LocalVerificationOptions,
+  type VerificationSetupCode,
+} from './verification-composition.js';
 
 export const localSourceCatalog: ReadonlyMap<Id, SourceDefinition> = new Map(
   [companyA, companyB].map(source => [source.companyId, source]),
@@ -19,10 +23,13 @@ export async function createLocalComposition(dependencies: UploadDependencies, o
   webOrigin: string;
   captures: DemoCapture[];
   registry?: Pick<CandidateRegistry, 'registerCandidate'>;
+  verification?: LocalVerificationOptions;
+  verificationSetupDiagnostic?: VerificationSetupCode;
 }) {
   const { db, store } = dependencies;
   const service = createSourceService(dependencies, localSourceCatalog);
   const captureIds = new Map<Id, DemoCapture>();
+  const captureBindings: CaptureBinding[] = [];
   const companies = new Set<Id>();
   const catalog: DemoCandidatesResponse = {
     mode: 'development-fixture', targetMode: 'empty-fixture', verificationAvailable: false, candidates: [], diagnostics: [],
@@ -45,6 +52,10 @@ export async function createLocalComposition(dependencies: UploadDependencies, o
     }
     captureIds.set(snapshot.id, capture);
     companies.add(source.companyId);
+    captureBindings.push({
+      companyId: source.companyId, sourceRef: source.sourceRef, manifestId: manifest.id,
+      manifestHash: manifest.hash, snapshotHash: snapshot.contentHash,
+    });
     const authorize = sourceBoundary(source.companyId, source.sourceRef);
     const records = await service.getSnapshotRecords(snapshot.id);
     const evidence = await Promise.all(snapshot.evidenceIds.map(id => readEvidence(db, id, authorize)));
@@ -116,6 +127,20 @@ export async function createLocalComposition(dependencies: UploadDependencies, o
     });
   };
 
+  let verification;
+  let setupCode = options.verificationSetupDiagnostic;
+  if (options.verification && !setupCode) {
+    try {
+      if (companies.size !== localSourceCatalog.size) throw new Error('Local verification captures are incomplete');
+      verification = await composeVerification(db, options.verification, captureBindings, session.authorizeReviewer);
+      catalog.verificationAvailable = true;
+    } catch {
+      setupCode = 'VERIFICATION_FIXTURE_CONFLICT';
+    }
+  }
+  if (setupCode) catalog.diagnostics.push(verificationSetupDiagnostic(setupCode));
+  const registry = verification?.registry ?? options.registry;
+
   const candidatePlugin: FastifyPluginAsync = async app => {
     app.get('/api/demo/candidates', async (request, reply) => {
       reply.header('Cache-Control', 'no-store');
@@ -139,9 +164,10 @@ export async function createLocalComposition(dependencies: UploadDependencies, o
       createSourcePlugin({ catalog: localSourceCatalog, authorizeSource, store }),
       createPreviewPlugin({
         authorizeRead, readSnapshot, readTarget,
-        registerCandidate: options.registry?.registerCandidate.bind(options.registry),
+        registerCandidate: registry?.registerCandidate.bind(registry),
       }),
       candidatePlugin,
+      ...(verification ? [verification.plugin] : []),
     ],
   };
 }
