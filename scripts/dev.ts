@@ -23,7 +23,9 @@ function shutdownSignal(): Promise<void> {
   return Promise.race([once(process, 'SIGINT'), once(process, 'SIGTERM'), once(process, 'disconnect')]).then(() => {});
 }
 
-async function localFeaturePlugins(db: ControlServices['db'], clock: ControlServices['clock']) {
+async function localFeaturePlugins(
+  db: ControlServices['db'], clock: ControlServices['clock'], expectedMigrations: ReturnType<typeof migrationIdentities>,
+) {
   const { safeVerificationPins } = await import('../apps/control/src/verification-composition.js');
   const { createLocalComposition } = await import('../apps/control/src/composition.js');
   const { createEvidenceStore } = await import('@eapr/evidence');
@@ -43,7 +45,7 @@ async function localFeaturePlugins(db: ControlServices['db'], clock: ControlServ
       verification = {
         pins: safeVerificationPins.parse(JSON.parse(process.env.EAPR_VERIFICATION_PINS)),
         registryRoot: fileURLToPath(new URL('../.local/artifacts', import.meta.url)),
-        expectedMigrations: migrationIdentities(readMigrationCatalog().control),
+        expectedMigrations,
       };
     } catch {
       verificationSetupDiagnostic = 'VERIFICATION_FIXTURE_CONFLICT';
@@ -67,7 +69,7 @@ async function serve(role: 'worker' | 'control') {
     const app = role === 'worker'
       ? await launchWorker({ db: pool, clock, serviceToken, expectedMigrations }, workerPort)
       : await launchControl({
-          db: pool, clock, expectedMigrations, featurePlugins: await localFeaturePlugins(pool, clock),
+          db: pool, clock, expectedMigrations, featurePlugins: await localFeaturePlugins(pool, clock, expectedMigrations),
           workerClient: createWorkerClient('http://127.0.0.1:' + workerPort, serviceToken),
         }, localPort('EAPR_CONTROL_PORT', 3001));
     try {

@@ -5,7 +5,7 @@ import { cp, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, tru
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
-import Fastify from 'fastify';
+import Fastify, { type FastifyInstance } from 'fastify';
 import { expect, test } from 'vitest';
 import {
   DemoCandidatesResponseSchema, PreviewResponseSchema, VerificationJobSchema, VerificationReportSchema, hashBytes, hashCanonical,
@@ -33,6 +33,7 @@ test('real reviewer jobs use operator pins for the registered source captures', 
   const store = await createEvidenceStore(join(directory, 'evidence'));
   const registryRoot = join(directory, 'artifacts');
   const protectedPaths: URL[] = [];
+  let restartControl: (() => Promise<FastifyInstance>) | undefined;
   const pinsByCompany = new Map<string, Awaited<ReturnType<typeof prepareVerificationPins>>[number]>();
   try {
     const system = await createTestSystem({
@@ -121,6 +122,13 @@ test('real reviewer jobs use operator pins for the registered source captures', 
         const options = { webOrigin, captures, verification: {
           pins, registryRoot, expectedMigrations: migrationIdentities(readMigrationCatalog().control),
         } };
+        restartControl = async () => {
+          const restarted = await createLocalComposition(dependencies, options);
+          const app = Fastify();
+          for (const plugin of restarted.featurePlugins) app.register(plugin, services);
+          await app.ready();
+          return app;
+        };
         return (await createLocalComposition(dependencies, options)).featurePlugins;
       },
     });
@@ -248,6 +256,31 @@ test('real reviewer jobs use operator pins for the registered source captures', 
           await rename(moved, file);
         }
       }
+
+      // Rebuild the same composition against the durable registry. Close while
+      // the real job is pending and check its row before the test pool closes.
+      const restarted = await restartControl!();
+      let drainingJobId: string;
+      try {
+        expect((await restarted.inject({ url: '/api/demo/candidates', headers: { cookie } })).statusCode).toBe(401);
+        const nextSession = await restarted.inject({
+          method: 'POST', url: '/api/local-session', headers: { origin: webOrigin, 'x-eapr-local-ui': '1' }, payload: {},
+        });
+        expect(nextSession.statusCode).toBe(200);
+        const nextCookie = nextSession.cookies[0]!.name + '=' + nextSession.cookies[0]!.value;
+        const queued = await restarted.inject({
+          method: 'POST', url: verifyPath,
+          headers: { cookie: nextCookie, origin: webOrigin, 'x-eapr-csrf': nextSession.json().csrfToken },
+          payload: bodyBeforePreview,
+        });
+        expect(queued.statusCode).toBe(202);
+        drainingJobId = VerificationJobSchema.parse(queued.json()).jobId;
+      } finally {
+        await restarted.close();
+      }
+      const { rows } = await system.db.control.query('SELECT state FROM verification_jobs WHERE id = $1', [drainingJobId]);
+      expect(rows).toEqual([{ state: 'completed' }]);
+      expect((await system.db.control.query('SELECT * FROM verification_attempt_budgets')).rowCount).toBe(0);
     } finally {
       await system.close();
     }

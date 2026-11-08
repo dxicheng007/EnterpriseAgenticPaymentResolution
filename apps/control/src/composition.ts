@@ -10,7 +10,6 @@ import { buildDemoCandidate, type DemoCapture } from './demo-candidates.js';
 import { createLocalSessionService, LocalSessionError } from './local-session.js';
 import { createPreviewPlugin } from './routes/preview.js';
 import { createSourcePlugin, type AuthorizeSource } from './routes/sources.js';
-
 import {
   composeVerification, verificationSetupDiagnostic, type CaptureBinding, type LocalVerificationOptions,
   type VerificationSetupCode,
