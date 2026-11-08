@@ -8,6 +8,8 @@ All object schemas are strict except explicitly declared `JsonObject` raw payloa
 
 ```ts
 type Id = string; // 1..160 ASCII [A-Za-z0-9][A-Za-z0-9._:-]*
+type SemanticScopeKey = string; // '*' OR exactly two independently validated Id values joined by '/'
+type SemanticVersionMap = Record<SemanticScopeKey,Id>; // strict key schema, not Record<Id,Id>
 type Hash = string; // exactly 64 lowercase hex SHA-256 characters
 type IsoInstant = string; // input valid UTC YYYY-MM-DDTHH:mm:ssZ or .SSSZ; schema normalizes to .SSSZ
 type IsoDate = string; // valid YYYY-MM-DD, not permissive Date rollover
@@ -170,7 +172,7 @@ type ManifestStream = {streamId:Id; snapshotId:Id; resumeAfter:Cursor; eventIds:
 type ManifestFile = {fileId:Id; documentId:Id; documentVersion:Version; sha256:Hash;
  kind:UploadMetadata['kind']; batchId?:Id; sequence?:Version; streamId?:Id};
 type BootstrapManifest = {id:Id; companyId:Id; sourceRef:Id; epoch:Version; asOf:IsoInstant;
- schemaVersions:Record<Id,Id>; semanticVersions:Record<Id,Id>;
+ schemaVersions:Record<Id,Id>; semanticVersions:SemanticVersionMap;
  streams:ManifestStream[]; files:ManifestFile[]; hash:Hash};
 type SourceSnapshot = {id:Id; manifestId:Id; sourceRef:Id; capturedAt:IsoInstant;
  contentHash:Hash; evidenceIds:Id[]; eventIds:Id[]};
@@ -189,7 +191,7 @@ Dossier GET accepts optional `?manifestId=<Id>`; explicit selector returns exact
 
 `captureSnapshot(manifestId):Promise<CaptureSnapshotResult>` is a deliberate correction to the abbreviated interface. It captures one aggregate immutable dossier snapshot, ID `snapshot:<manifestId>`, over all pinned stream snapshots and document members. The simulator publishes stream snapshot IDs/content before the manifest under one epoch publication lock. `getSnapshot(snapshotId)` serves either a named immutable member snapshot or the captured aggregate; they share SourceSnapshot shape. Aggregate contentHash is the hash of `{manifestHash,streams:[{streamId,snapshotId,snapshotHash}],files:[{fileId,sha256}],eventIds,evidenceIds}`, streams/files sorted by streamId/fileId and ID sets lexical. All required PDFs/amendments/emails are file members; files are not limited to CSV batches. Missing or changed members return ok:false and incomplete dossier; no ready aggregate snapshot or review package is published. Existing captured partial blobs may remain.
 
-A manifest is published atomically with fixed vector watermarks. Stream snapshot eventIds are exactly that stream's baseline events through resumeAfter; document files include every required baseline member. Company B has file, receipt, and semantic streams. Events published later get a sequence strictly greater than that stream's watermark; concurrent injection serializes with manifest publication, so it is wholly before or after. `semanticVersions` keys are `sellerEntityId/sourceAccountId` (each component obeys Id and cannot contain slash), avoiding account collisions across sellers and any requirement for approved parent identity during capture. Unscoped governing revisions use a separate reserved key `*` and pause the source until scoped/reviewed. Financial event.semanticVersion must match the reviewed profile; unseen/changed revision holds before mapping, regardless of metadata delivery order.
+A manifest is published atomically with fixed vector watermarks. Stream snapshot eventIds are exactly that stream's baseline events through resumeAfter; document files include every required baseline member. Company B has file, receipt, and semantic streams. Events published later get a sequence strictly greater than that stream's watermark; concurrent injection serializes with manifest publication, so it is wholly before or after. `semanticVersions` keys are `sellerEntityId/sourceAccountId` (each component obeys Id and cannot contain slash), avoiding account collisions across sellers and any requirement for approved parent identity during capture. Unscoped governing revisions use a separate reserved key `*` and pause the source until scoped/reviewed. Both semanticVersions and semanticPreflight.versions use SemanticVersionMap: accept `seller-a/cust-a-1` and `*`; reject a bare account ID, empty component, extra slash, percent-encoded slash, or prototype component. Split once on the literal slash and validate both components with IdSchema; never URL-decode or weaken IdSchema. A key containing `*` anywhere except the complete reserved key is invalid. Zod uses a dedicated SemanticScopeKeySchema as its record key validator. Financial event.semanticVersion must match the reviewed profile; unseen/changed revision holds before mapping, regardless of metadata delivery order.
 
 Cursor strings parse to safe integers, never lexical comparison. Events in a nonempty page are contiguous, strictly increasing, within `(after,next]`, same source/stream; next is final event sequence. Empty page requires next=after. `complete:false` is not capturable and cannot advance cursor. Gaps yield a typed SOURCE_GAP and no checkpoint change. CSV batch sequence and file-stream event sequence are separate fields: each batch contributes records with contiguous event sequences, and batch sequence gaps prevent ingesting later batches. Duplicate batch/hash is a no-op; changed bytes conflict. capturePage stores the complete page plus checkpoint in one transaction under stream lock; conflicting duplicate identity/hash rolls back the page.
 
@@ -207,7 +209,7 @@ type ActivationBundle = {schemaVersion:'1'; hash:Hash; request:ActivationRequest
  reviewer:ReviewerContext; reviewPackage:ReviewPackage; artifact:CompiledArtifact;
  profiles:CustomerProfile[]; manifest:BootstrapManifest; verificationReport:VerificationReport;
  snapshot:SourceSnapshot; bootstrapEvents:RawSourceEvent[]; previewPlan:MutationPlan;
- semanticPreflight:{sourceRef:Id; checkedAt:IsoInstant; versions:Record<Id,Id>}};
+ semanticPreflight:{sourceRef:Id; checkedAt:IsoInstant; versions:SemanticVersionMap}};
 type InternalActivationRequest = {bundleHash:Hash; idempotencyKey:Id};
 ```
 
@@ -309,8 +311,10 @@ baselineManifestB uses three streams b-files/b-receipts/b-semantics with event m
 
 Other required exports: renamedSchemaA changes source invoice field amount to gross_amount in one new event without changing approved contract, expected SOURCE_SCHEMA blocker; invoiceBeforePaymentVariant returns late dependency fixture in payment/allocation-then-invoice delivery order and expected hold/release IDs; ambiguousRemittanceB is payment amount_minor30000 with unknown client_code cust-b-unknown and missing allocation, expected UNKNOWN_ACCOUNT without guessed scope or target writes. No acceptance assertion changes to force a mapping pass.
 
-Mandatory freeze checks for Sol: schema parsing for both specs/profiles/manifests/events/target fixtures, canonical object-key permutation equality, decimal2 field-schema precision rejection case 1.005 (no compiler implementation), unknown identity capturable and unresolved, unknown DSL operation rejected, receipt response examples original/retry with same receipt and conflicting key documented. These are schema/fixture tests in V0, not claims the V2 compiler/finance works. T0.1 must not implement financial engine to satisfy them.
+Mandatory freeze checks for Sol: schema parsing for both specs/profiles/manifests/events/target fixtures, canonical object-key permutation equality, decimal2 field-schema precision rejection case 1.005 (no compiler implementation), unknown identity capturable and unresolved, semantic-map key examples above accepted/rejected identically in manifest and preflight schemas, unknown DSL operation rejected, receipt response examples original/retry with same receipt and conflicting key documented. These are schema/fixture tests in V0, not claims the V2 compiler/finance works. T0.1 must not implement financial engine to satisfy them.
 
 ## Foundation scope and sequencing
 
 T0.1 materializes these schemas and public examples, health/storage/activity primitives, and real PostgreSQL proof only. It does not implement the evaluator protocol, activation bridge, compiler, financial calculator, source ingestion, or discovery. Those task owners consume the frozen shapes later. User priority is deterministic V0–V3, then fixture-based V5/V6 while provider configuration is deferred. V4 live generation, final V5 proof with live-produced artifacts, and V7 live rehearsals remain pending; no mock result can satisfy them.
+
+Authority-schema deferral: CustomerActivation and ConnectionState remain interface vocabulary, not fully frozen executable schemas in v1. T0.1 must not invent or export placeholder/permissive versions of them. B must publish a concrete, independently reviewed CustomerActivation authority schema before T3 consumers, and ConnectionState/checkpoint/progress schema before T5 consumers, through a versioned contract change. This does not block V0 health, storage, activity, or existing concrete fixture contracts.
