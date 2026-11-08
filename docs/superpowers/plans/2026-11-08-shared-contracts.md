@@ -2,6 +2,8 @@
 
 **Status:** Planned interfaces, not existing code. Read with `prdv2.md` and the implementation plan. All paths below are repository-relative.
 
+**Normative v1 clarification:** [Contract freeze v1](2026-11-08-contract-freeze.md) supplies concrete strict shapes, examples, and resolved preflight rulings. It takes precedence over abbreviated shapes below. In particular SourceEvent is raw/unresolved, TargetState has explicit asOf, receipt functions return ReceiptResponse, captureSnapshot returns CaptureSnapshotResult, manifests pin all documents, and verification uses a protected job/report protocol. Architecture is frozen for independent review; executable schema tests are not yet implemented.
+
 ## Operating decisions
 
 - Three lanes A/B/C are the user's Codex agent workstreams, not three separate human approval authorities. One integrator controls shared-contract changes and merges. Product agents inside the application are a different concept.
@@ -58,9 +60,9 @@ Implement schemas in `packages/contracts/src/{common,source,evidence,connector,r
 
 ### Source and evidence
 
-`SourceEvent` fields: `id`, `sourceRef`, `streamId`, `sequence` (positive safe integer for mocks), `recordId`, `recordVersion`, `scope`, `kind` (`invoice|payment|credit|allocation|reversal|semantic_change`), `effectiveAt`, `observedAt`, `schemaVersion`, `semanticVersion`, `contentHash`, `payload` (JSON object). Unknown runtime source account IDs are represented in the raw payload/envelope and must not be assigned to a guessed approved scope.
+`SourceEvent` fields: `id`, `sourceRef`, `resource`, `streamId`, `sequence` (positive safe integer for mocks), `recordId`, `recordVersion`, `rawIdentity`, `kind` (`invoice|payment|credit|allocation|reversal|semantic_change`), `effectiveAt`, `observedAt`, `schemaVersion`, `semanticVersion`, `contentHash`, `payload` (JSON object). Unknown runtime source account IDs are represented in the raw payload/envelope and must not be assigned to a guessed approved scope.
 
-`ChangePage = { streamId: Id; after: Cursor; next: Cursor; complete: boolean; events: SourceEvent[] }`. Only a complete captured page can advance its cursor. Reject conflicting duplicate IDs/content hashes. An empty page may retain `after`; a nonempty page must advance under the adapter's cursor semantics.
+`ChangePage = { sourceRef: Id; streamId: Id; after: Cursor; next: Cursor; complete: boolean; events: SourceEvent[] }`. Only a complete captured page can advance its cursor. Reject conflicting duplicate IDs/content hashes. An empty page may retain `after`; a nonempty page must advance under the adapter's cursor semantics.
 
 `BootstrapManifest` fields: `id`, `companyId`, `epoch`, `asOf`, `schemaVersions` (resource-to-version map), `semanticVersions` (account-to-version map), `streams` (array of `{streamId,snapshotId,resumeAfter}`), `files` (array of `{batchId,sequence,sha256}`), `hash`. All members are pinned; a missing/changed member blocks review.
 
@@ -96,7 +98,7 @@ Implement schemas in `packages/contracts/src/{common,source,evidence,connector,r
 
 `CustomerActivation` fields: `id`, `scope`, `artifactHash`, `profileHash`, `manifestHash`, `baselineCursors`, `allowedKinds`, `limits`, `reviewerId`, `epoch`, `status:'active'|'paused'|'revoked'`, `approvedAt`.
 
-`SyncReceipt` fields: `id`, `scope`, `activationId`, `epoch`, `artifactHash`, `planHash`, `eventIds`, `targetRecordIds`, `beforeBalanceCents`, `afterBalanceCents`, `status:'applied'|'replayed'`, `committedAt`. Store one authoritative receipt for a successful operation; repeated delivery returns that receipt with a replay response marker.
+`SyncReceipt` fields: `id`, `scope`, `activationId`, `epoch`, `artifactHash`, `planHash`, `eventIds`, `targetRecordIds`, `beforeBalanceCents`, `afterBalanceCents`, `status:'applied'`, `committedAt`. Store one authoritative receipt for a successful operation; repeated delivery returns that receipt with a replay response marker.
 
 `ConnectionState` fields: `scope`, `status:'inactive'|'active'|'paused'|'revoked'`, `artifactHash?`, `epoch`, per-stream captured cursors, pending/applied/quarantined counts, contiguous application positions and gaps, current/as-of balances, lastReceiptId, lastError, `runtimeModelCalls:0` backed by isolation tests. Unenrolled accounts are inactive with no artifact/receipt; data holds are separately visible, not confused with approval status.
 
@@ -118,11 +120,11 @@ computeBalance(state: TargetState, asOf: IsoInstant): MoneyCents
 verifyArtifact(input: {artifact: CompiledArtifact; profiles: CustomerProfile[];
   manifest: BootstrapManifest; fixtureSetId: Id}): Promise<VerificationReport>
 // packages/runtime/src/activate.ts
-activateCustomer(request: ActivationRequest, actor: ReviewerContext): Promise<SyncReceipt>
+activateCustomer(request: ActivationRequest, actor: ReviewerContext): Promise<ReceiptResponse>
 // packages/runtime/src/capture.ts
 capturePage(page: ChangePage): Promise<{captured: number; cursor: Cursor}>
 // packages/runtime/src/apply.ts
-applyBatch(plan: MutationPlan, expectedEpoch: number): Promise<SyncReceipt>
+applyBatch(plan: MutationPlan, expectedEpoch: number): Promise<ReceiptResponse>
 // packages/runtime/src/run-cycle.ts
 runCycle(sourceRef: Id): Promise<{applied: number; pending: number; quarantined: number}>
 // packages/runtime/src/control.ts
@@ -154,7 +156,7 @@ Lock activation row first, then target account/state, then affected target rows 
 
 ## Test interfaces and fixtures
 
-Define helpers in `tests/fixtures/index.ts`: `scopeA`, `scopeB`, `baselineA` (300000 invoice, 200000 allocation, 20000 credit -> 80000 outstanding), `latePaymentA` (30000 -> 50000), `afterLatePaymentA` (the resulting target state with explicit allocation), `validSpecA`, `profileA`, `baselineManifestA`, `validSpecB`, `profileB`, `baselineManifestB`, `renamedSchemaA`, `invoiceBeforePaymentVariant`, `ambiguousRemittanceB`. Fixture specs are labeled development-only. Live model tests must generate their own artifact from visible sources.
+Define helpers in `tests/fixtures/index.ts`: `scopeA`, `scopeB`, `baselineA` (300000 invoice, 200000 allocation, 20000 credit -> 80000 outstanding), `latePaymentA` (two-event payment/allocation array, 30000 -> 50000), `afterLatePaymentA` (the resulting target state with explicit allocation), `validSpecA`, `profileA`, `baselineManifestA`, `validSpecB`, `profileB`, `baselineManifestB`, `renamedSchemaA`, `invoiceBeforePaymentVariant`, `ambiguousRemittanceB`. Fixture specs are labeled development-only. Live model tests must generate their own artifact from visible sources.
 
 `tests/fixtures/harness.ts` exports `createTestSystem({modelMode:'stub'|'disabled'|'live', dbNamespace, failpoint?})`, returning `{control,worker,sourceAdmin,db,close}`. `control`/`worker` expose typed HTTP clients, `sourceAdmin` is operator-only, and `db` supplies scoped assertion queries. Each test uses fresh database names prefixed `eapr_test_`; destructive test helpers refuse any other names. They are not imported by runtime packages.
 
