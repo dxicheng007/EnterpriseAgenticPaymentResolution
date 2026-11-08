@@ -1,29 +1,36 @@
 import { useState } from 'react';
-import type { Hold } from '../../../../../packages/contracts/src/common.js';
+import type { Hold, Scope } from '../../../../../packages/contracts/src/common.js';
 import type { PreviewResponse } from '../../../../../packages/contracts/src/runtime.js';
 import { EvidencePanel } from '../sources/EvidencePanel.js';
 import { Diagnostics } from '../sources/review-details.js';
-import { formatUsdCents, recordField } from './preview-values.js';
+import { formatUsdCents, previewIssues, recordField } from './preview-values.js';
 
-function Holds({ title, holds }: { title: string; holds: Hold[] }) {
+function HoldGroup({ title, holds, explanation }: { title: string; holds: Hold[]; explanation?: string }) {
+  if (!holds.length) return null;
   return <section>
-    <h3>{title} ({holds.length})</h3>
-    {holds.length > 0 && <ul>{holds.map((hold, index) => <li key={index}>
+    <h4>{title} ({holds.length})</h4>
+    {explanation && <p>{explanation}</p>}
+    <ul>{holds.map((hold, index) => <li key={index}>
       <strong>{hold.code}</strong>
       {hold.scope && <p>{hold.scope.companyId} / {hold.scope.sellerEntityId} / {hold.scope.accountId}</p>}
       {hold.eventIds.length > 0 && <p>Source events {hold.eventIds.join(', ')}</p>}
       {hold.dependencies.length > 0 && <p>Dependencies {hold.dependencies.join(', ')}</p>}
       <Diagnostics items={hold.diagnostics} />
-    </li>)}</ul>}
+    </li>)}</ul>
   </section>;
 }
 
-export function PreviewResult({ result, evidenceRefs }: { result: PreviewResponse; evidenceRefs: string[] }) {
+export function PreviewResult({ result, evidenceRefs, profileScopes = [] }: {
+  result: PreviewResponse;
+  evidenceRefs: string[];
+  profileScopes?: readonly Scope[];
+}) {
   const [citation, setCitation] = useState('');
   const citations = [...new Set([
     ...evidenceRefs, ...result.outcome.plans.flatMap(plan => plan.lineage.flatMap(field => field.evidenceRefs)),
   ])];
   const { artifact } = result;
+  const issues = previewIssues(result, profileScopes);
   return <section className="review-card" aria-label="Preview result">
     <h2>Preview result</h2>
     <p>Parent writes: {result.parentWrites}</p>
@@ -32,7 +39,6 @@ export function PreviewResult({ result, evidenceRefs }: { result: PreviewRespons
       <dt>Spec SHA-256</dt><dd><code>{artifact.specHash}</code></dd>
       <dt>Profile hashes</dt><dd>{artifact.requiredProfileHashes.map(hash => <div key={hash}><code>{hash}</code></div>)}</dd>
     </dl> : <p>Compilation blocked. Review the diagnostics below.</p>}
-    <Diagnostics items={result.diagnostics} />
     {result.diffs.length === 0 && <p>No balance differences were returned.</p>}
     {result.diffs.map((diff, index) => <section key={index} className="preview-diff" aria-label={`Balance diff for ${diff.scope.accountId}`}>
       <h3>{diff.scope.companyId} / {diff.scope.sellerEntityId} / {diff.scope.accountId}</h3>
@@ -70,8 +76,22 @@ export function PreviewResult({ result, evidenceRefs }: { result: PreviewRespons
         </li>)}
       </ol>
     </section>)}
-    <Holds title="Holds" holds={result.outcome.holds} />
-    <Holds title="Unsupported rows" holds={result.unsupportedRows} />
+    <section>
+      <h3>Unsupported rows ({issues.count})</h3>
+      <p>This preview applies {profileScopes.length === 1 ? 'this customer profile' : 'the selected customer profiles'} to a captured source snapshot.
+        Records without a matching profile are held and are not included in the projected import.
+        An unmapped record is not evidence of a verified customer.</p>
+      <p>Returned as {result.outcome.holds.length} holds and {result.unsupportedRows.length} unsupported rows.
+        {' '}{issues.matched} matching {issues.matched === 1 ? 'entry' : 'entries'} shown once.</p>
+      <HoldGroup title="Selected customer issues" holds={issues.selected} />
+      <HoldGroup title="Records not mapped by the preview profiles" holds={issues.unmapped}
+        explanation="No mapping was found in the profiles used for this preview. These records remain held." />
+      <HoldGroup title="Other or unresolved scope issues" holds={issues.unresolved} />
+    </section>
+    {issues.additional.length > 0 && <section>
+      <h3>Additional diagnostics</h3>
+      <Diagnostics items={issues.additional} />
+    </section>}
     {citations.length > 0 && <label className="review-selection">Preview evidence citation
       <select value={citation} onChange={event => setCitation(event.target.value)}>
         <option value="">Select a citation</option>
