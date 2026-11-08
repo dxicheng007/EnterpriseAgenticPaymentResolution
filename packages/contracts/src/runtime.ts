@@ -1,10 +1,22 @@
 import { z } from 'zod';
 import {
-  DiagnosticSchema, EconomicIdentitySchema, HashSchema, HoldSchema, IdSchema, IsoDateSchema, IsoInstantSchema,
-  JsonPointerSchema, NonnegativeIntegerSchema, SafeIntegerSchema, ScopeSchema,
-  TransactionCentsSchema, VersionSchema, guardKeys, strict,
+  CursorSchema, DiagnosticSchema, EconomicIdentitySchema, FinancialKindSchema, HashSchema, HoldSchema, IdSchema,
+  IsoDateSchema, IsoInstantSchema, JsonPointerSchema, NonnegativeIntegerSchema, SafeIntegerSchema, ScopeSchema,
+  TransactionCentsSchema, VersionSchema, guardKeys, setOf, strict, unique,
 } from './common.js';
 import { CompiledArtifactSchema, ConnectorSpecSchema, ContractTermSchema, CustomerProfileSchema, MappingOpSchema } from './connector.js';
+
+export const BaselineCursorSchema = strict({ streamId: IdSchema, resumeAfter: CursorSchema });
+export type BaselineCursor = z.infer<typeof BaselineCursorSchema>;
+
+export const CustomerActivationSchema = strict({
+  id: IdSchema, scope: ScopeSchema, artifactHash: HashSchema, profileHash: HashSchema, manifestHash: HashSchema,
+  baselineCursors: setOf(BaselineCursorSchema, cursor => cursor.streamId),
+  allowedKinds: setOf(FinancialKindSchema, kind => kind),
+  limits: strict({ maxTransactionCents: z.literal(5000000), maxRecordsPerCycle: z.literal(1000) }),
+  reviewerId: IdSchema, epoch: VersionSchema, status: z.enum(['active', 'paused', 'revoked']), approvedAt: IsoInstantSchema,
+});
+export type CustomerActivation = z.infer<typeof CustomerActivationSchema>;
 
 const recordBase = {
   id: IdSchema, identity: EconomicIdentitySchema, sourceRecordVersion: VersionSchema,
@@ -42,6 +54,43 @@ export const TargetStateSchema = strict({
   ...state.accounts, ...state.billingConfigurations,
 ].every(({ scope }) => scope.accountId === state.scope.accountId && scope.sellerEntityId === state.scope.sellerEntityId &&
   scope.companyId === state.scope.companyId), 'Target record scope differs from state scope');
+
+export const ParentReadQuerySchema = strict({
+  asOf: IsoInstantSchema.optional(), snapshotHash: HashSchema.optional(),
+});
+export type ParentReadQuery = z.infer<typeof ParentReadQuerySchema>;
+
+export const LegacyReferenceSchema = strict({
+  targetRecordId: IdSchema, identity: EconomicIdentitySchema, sourceRecordVersion: VersionSchema, sourceEventId: IdSchema,
+});
+export type LegacyReference = z.infer<typeof LegacyReferenceSchema>;
+
+export const ParentViewSchema = strict({
+  scope: ScopeSchema, version: NonnegativeIntegerSchema, asOf: IsoInstantSchema,
+  snapshotHash: HashSchema, balanceCents: SafeIntegerSchema, records: TargetStateSchema,
+  legacyReferences: setOf(LegacyReferenceSchema, reference => reference.targetRecordId),
+})
+  .refine(({ scope, records }) =>
+    scope.companyId === records.scope.companyId && scope.sellerEntityId === records.scope.sellerEntityId &&
+    scope.accountId === records.scope.accountId, {
+    path: ['scope'], message: 'View scope differs from snapshot scope',
+  })
+  .refine(({ version, records }) => version === records.version, {
+    path: ['version'], message: 'View version differs from snapshot version',
+  })
+  .refine(({ records, legacyReferences }) => {
+    const financialRecords = [...records.invoices, ...records.payments, ...records.credits, ...records.allocations, ...records.reversals];
+    if (legacyReferences.length !== financialRecords.length || !unique(financialRecords, record => record.id)) return false;
+    const recordsById = new Map(financialRecords.map(record => [record.id, record]));
+    return legacyReferences.every(reference => {
+      const record = recordsById.get(reference.targetRecordId);
+      return record !== undefined && reference.sourceRecordVersion === record.sourceRecordVersion &&
+        reference.sourceEventId === record.sourceEventId && reference.identity.sourceRef === record.identity.sourceRef &&
+        reference.identity.sellerEntityId === record.identity.sellerEntityId && reference.identity.kind === record.identity.kind &&
+        reference.identity.recordId === record.identity.recordId;
+    });
+  }, { path: ['legacyReferences'], message: 'Legacy references must match the snapshot financial records exactly' });
+export type ParentView = z.infer<typeof ParentViewSchema>;
 
 export const MutationOperationSchema = guardKeys(z.discriminatedUnion('op', [
   z.strictObject({ op: z.literal('insert_invoice'), record: InvoiceSchema }),

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import {
   EventKindSchema, FieldPathSchema, FinancialKindSchema, HashSchema, HashSetSchema, IdSchema, IdSetSchema,
   IsoDateSchema, JsonValueSchema, MoneyCentsSchema, SafeIntegerSchema, SafeKeySchema, ScopeSchema,
-  VersionSchema, guardKeys, setOf, strict,
+  VersionSchema, guardKeys, setOf, strict, unique,
 } from './common.js';
 import { FindingSchema } from './model.js';
 
@@ -85,12 +85,31 @@ export const ContractTermSchema = strict({
   fixedMonthlyFeeCents: MoneyCentsSchema, currency: z.literal('USD'), cadence: z.literal('monthly'),
   anchorDay: z.number().int().min(1).max(31), evidenceRefs: IdSetSchema,
 }).refine(term => term.validToExclusive === null || term.validFrom < term.validToExclusive, 'Invalid effective interval');
+export const ProfileBootstrapSchema = strict({
+  customer: strict({
+    id: IdSchema, displayName: z.string().min(1), evidenceRefs: IdSetSchema.refine(refs => refs.length > 0),
+  }),
+  billingConfigurationIds: setOf(strict({ termId: IdSchema, id: IdSchema }), binding => binding.termId)
+    .refine(bindings => unique(bindings, binding => binding.id), 'Duplicate billing configuration ID'),
+});
+export type ProfileBootstrap = z.infer<typeof ProfileBootstrapSchema>;
+
 export const CustomerProfileSchema = strict({
   id: IdSchema, version: VersionSchema, hash: HashSchema, sourceRef: IdSchema, scope: ScopeSchema,
   parentCustomerId: IdSchema, sourceAccountIds: IdSetSchema,
   approvedLookups: setOf(ApprovedLookupSchema, lookup => lookup.id),
   contractTerms: setOf(ContractTermSchema, term => term.id),
   semanticVersion: IdSchema, findings: setOf(FindingSchema, finding => finding.id),
+  bootstrap: ProfileBootstrapSchema.optional(),
+}).refine(({ bootstrap, parentCustomerId }) => !bootstrap || bootstrap.customer.id === parentCustomerId, {
+  path: ['bootstrap', 'customer', 'id'], message: 'Bootstrap customer differs from parent customer',
+}).refine(({ bootstrap, contractTerms }) => {
+  if (!bootstrap) return true;
+  const termIds = new Set(contractTerms.map(term => term.id));
+  return bootstrap.billingConfigurationIds.length === termIds.size &&
+    bootstrap.billingConfigurationIds.every(binding => termIds.has(binding.termId));
+}, {
+  path: ['bootstrap', 'billingConfigurationIds'], message: 'Bootstrap bindings must cover exactly the profile terms',
 });
 export const NormalizedPlanSchema = strict({
   ...connectorFields, validators, limits: strict(limits),

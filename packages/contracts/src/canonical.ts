@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { type EconomicIdentity, SafeKeySchema, unique } from './common.js';
-import type { CompiledArtifact, ConnectorSpec, CustomerProfile, NormalizedPlan } from './connector.js';
+import { ProfileBootstrapSchema, type CompiledArtifact, type ConnectorSpec, type CustomerProfile, type NormalizedPlan } from './connector.js';
 import type { BootstrapManifest } from './evidence.js';
-import type { ActivationBundle } from './review.js';
+import type { ActivationBundle, ReviewPackage } from './review.js';
 import type { MutationPlan, TargetState } from './runtime.js';
 import type { RawSourceEvent } from './source.js';
 
@@ -52,9 +52,16 @@ export function hashEvent({ contentHash: _contentHash, ...event }: EventHashInpu
   return hashCanonical(event);
 }
 
-function canonicalProfile({ hash: _hash, ...profile }: HashInput<CustomerProfile>) {
+function canonicalProfile({ hash: _hash, bootstrap, ...profile }: HashInput<CustomerProfile>) {
+  const metadata = bootstrap === undefined ? undefined : ProfileBootstrapSchema.parse(bootstrap);
   return {
     ...profile,
+    ...(metadata === undefined ? {} : {
+      bootstrap: {
+        customer: { ...metadata.customer, evidenceRefs: strings(metadata.customer.evidenceRefs) },
+        billingConfigurationIds: sortedSet(metadata.billingConfigurationIds, binding => binding.termId),
+      },
+    }),
     sourceAccountIds: strings(profile.sourceAccountIds),
     approvedLookups: sortedSet(profile.approvedLookups, lookup => lookup.id).map(lookup => ({
       ...lookup,
@@ -100,6 +107,10 @@ export function hashManifest({ hash: _hash, ...manifest }: HashInput<BootstrapMa
 
 export function hashPlan({ hash: _hash, ...plan }: HashInput<MutationPlan>): string {
   return hashCanonical(plan);
+}
+
+export function hashReviewPackage({ hash: _hash, ...review }: HashInput<ReviewPackage>): string {
+  return hashCanonical(review);
 }
 
 export function hashBundle({ hash: _hash, ...bundle }: HashInput<ActivationBundle>): string {
