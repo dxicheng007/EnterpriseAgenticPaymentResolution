@@ -6,7 +6,7 @@ Build reviewable acquisition connectors from source evidence. A reviewer approve
 
 V0 contains shared contracts and development fixtures, PostgreSQL storage and durable activity primitives, control and worker health endpoints, a web health page, and native local setup and verification scripts. Source ingestion, compiler and finance execution, protected evaluation, live discovery, activation, and sync are planned slices.
 
-The stack is Node 24, strict TypeScript with npm workspaces, Fastify, React/Vite, PostgreSQL 18 with `pg`, Zod, Vitest, and Playwright. Native local PostgreSQL is implemented. PDF.js extraction, pdf-lib synthetic documents, and design-time-only LLM integration are planned and absent from the installed project dependencies. The runtime worker must have no model calls, SDK, or key. See [workspace commands](package.json) and [compiler configuration](tsconfig.json).
+The stack is Node 24, strict TypeScript with npm workspaces, Fastify, React/Vite, PostgreSQL 18 with `pg`, Zod, Vitest, and Playwright. Native local PostgreSQL is implemented. PDF.js and pdf-lib are installed. PDF extraction, synthetic document generation, and design-time-only LLM integration are planned. The runtime worker must have no model calls, SDK, or key. See [workspace commands](package.json) and [compiler configuration](tsconfig.json).
 
 ## Read before changing behavior
 
