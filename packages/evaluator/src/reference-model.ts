@@ -62,10 +62,11 @@ export function evaluateReferenceState(facts: TargetState): ReferenceView {
     const invoice = invoiceById.get(relatedRecordId(allocation, 'invoice', allocation.invoiceRecordId));
     const funding = fundingById.get(relatedRecordId(allocation, allocation.fundingKind, allocation.fundingRecordId));
     if (!invoice || !funding) throw new Error('Missing scoped invoice or funding for reference allocation');
+    // A reversal voids the balance effect and preserves the original funding and allocation facts.
+    countAllocation(allocatedByFunding, funding, allocation);
     if (allocation.effectiveAt > asOf || invoice.effectiveAt > asOf || funding.effectiveAt > asOf ||
         voidedFunding.has(funding.id)) continue;
 
-    countAllocation(allocatedByFunding, funding, allocation);
     countAllocation(allocatedByInvoice, invoice, allocation);
     effectiveAllocationIds.push(allocation.id);
   }

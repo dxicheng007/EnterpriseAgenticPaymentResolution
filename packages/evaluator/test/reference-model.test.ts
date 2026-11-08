@@ -95,6 +95,29 @@ describe('independent public development oracle', () => {
     });
   });
 
+  it('reference_reversal_cannot_conceal_excessive_funding_allocation', () => {
+    const excess = { ...paymentAllocation, amountCents: 200_001 };
+    const invalid = { ...baselineA, allocations: [excess, creditAllocation] };
+    expect(() => evaluateReferenceState(invalid)).toThrow('Reference allocation exceeds invoice or funding');
+    expect(() => evaluateReferenceState({ ...invalid, asOf: reversedAt, reversals: [paymentReversal] }))
+      .toThrow('Reference allocation exceeds invoice or funding');
+  });
+
+  it('reference_reversal_restores_invoice_capacity_for_other_funding', () => {
+    const asOf = '2026-10-05T00:00:00.000Z';
+    const replacementPayment = { ...latePayment, amountCents: 200_000, effectiveAt: asOf };
+    const replacementAllocation = { ...lateAllocation, amountCents: 200_000, effectiveAt: asOf };
+    expect(evaluateReferenceState({
+      ...reversedState, asOf,
+      payments: [payment, replacementPayment],
+      allocations: [paymentAllocation, creditAllocation, replacementAllocation],
+    })).toEqual({
+      records: [invoice, payment, replacementPayment, credit, paymentAllocation, creditAllocation, replacementAllocation, paymentReversal],
+      effectiveAllocationIds: [creditAllocation.id, replacementAllocation.id],
+      balanceCents: 80_000,
+    });
+  });
+
   it('reference_scope_and_limits', () => {
     const otherSource = { ...payment, identity: { ...payment.identity, sourceRef: 'legacy-b' } };
     const otherSeller = { ...payment, identity: { ...payment.identity, sellerEntityId: 'seller-b' } };
