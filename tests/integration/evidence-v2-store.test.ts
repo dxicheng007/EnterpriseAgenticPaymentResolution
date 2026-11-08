@@ -5,14 +5,17 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { expect, test } from 'vitest';
 import { compile } from '@eapr/compiler/compile';
-import { canonicalJson, hashBytes, hashCanonical, hashManifest, VerificationReportSchema, type EvidenceResponse } from '@eapr/contracts';
+import { canonicalJson, FindingSchema, hashArtifact, hashBytes, hashCanonical, hashManifest, hashPlan, hashProfile, VerificationReportSchema,
+  type CompiledArtifact, type CustomerProfile, type EvidenceResponse, type PlanOutcome } from '@eapr/contracts';
 import { createEvidenceStore, extractDocument } from '@eapr/evidence';
 import { decodeBatch, encodeBatch } from '../../packages/sources/src/company-b.js';
 import { buildDemoCandidate } from '../../apps/control/src/demo-candidates.js';
-import { decodeEvidenceProducer, decodeProtectedEvidenceBundle, type EvidenceFixtureInput } from '../../packages/evaluator/src/evidence-fixtures.js';
+import { decodeEvidenceProducer, decodeProtectedEvidenceBundle, type EvidenceFixtureInput, type EvidenceInputV1 } from '../../packages/evaluator/src/evidence-fixtures.js';
+import { buildCasePlan, runCasePlan } from '../../packages/evaluator/src/cases.js';
+import { checkContractTerms, checkEvidenceSupport, type CapturedEvidenceRun } from '../../packages/evaluator/src/evidence-support.js';
 import { pinProtectedEvidenceFixture, pinProtectedFixture, readProtectedFixture } from '../../packages/evaluator/src/fixture-store.js';
 import { bindTruth, decodeTruth } from '../../packages/evaluator/src/fixtures.js';
-import { createProtectedVerificationLauncher } from '../../packages/evaluator/src/verify.js';
+import { createProtectedVerificationLauncher, validateReport } from '../../packages/evaluator/src/verify.js';
 import { generateFixtures } from '../../scripts/generate-fixtures.js';
 import { captureEvidenceFixture } from '../fixtures/evidence-v2-capture.js';
 import { createTestSystem, testNamespace } from '../fixtures/harness.js';
@@ -180,6 +183,179 @@ async function rejectInvalidInputs(a: EvidenceFixtureInput, b: EvidenceFixtureIn
   await expect(lstat(root)).rejects.toMatchObject({ code: 'ENOENT' });
 }
 
+function checkCheckerNegatives(
+  input: EvidenceFixtureInput, evidence: EvidenceInputV1, artifact: CompiledArtifact, profile: CustomerProfile,
+  run: CapturedEvidenceRun, company: 'a' | 'b',
+) {
+  const check = (changedArtifact = artifact, changedProfile = profile, witness: CapturedEvidenceRun | null = run,
+    changedEvidence: EvidenceInputV1 | undefined = evidence) =>
+    checkEvidenceSupport({
+      artifact: changedArtifact, profiles: [changedProfile], manifest: input.manifest, snapshot: input.snapshot,
+      events: input.events, evidence: changedEvidence, capturedRuns: new Map(witness ? [[witness.profileHash, witness]] : []),
+    });
+  function changeProfile(mutate: (profile: CustomerProfile) => void) {
+    const changed = structuredClone(profile);
+    mutate(changed);
+    changed.hash = hashProfile(changed);
+    const rebound = { ...artifact, requiredProfileHashes: [changed.hash] };
+    rebound.hash = hashArtifact(rebound);
+    return { changed, rebound };
+  }
+  function changeArtifact(mutate: (artifact: CompiledArtifact) => void) {
+    const changed = structuredClone(artifact);
+    mutate(changed);
+    changed.hash = hashArtifact(changed);
+    return changed;
+  }
+
+  expect(check()).toMatchObject({ status: 'passed', cases: 4 });
+  expect(check(artifact, profile, { ...run, outcome: null })).toMatchObject({ status: 'failed', cases: 4 });
+  const differentPrior = structuredClone(run);
+  differentPrior.target.version = 1;
+  const differentPriorPlan = differentPrior.outcome!.plans[0];
+  differentPriorPlan.expectedTargetVersion = 1;
+  differentPriorPlan.hash = hashPlan(differentPriorPlan);
+  expect(check(artifact, profile, differentPrior)).toMatchObject({ status: 'failed', cases: 4 });
+  expect(checkEvidenceSupport({
+    artifact, profiles: [profile], manifest: input.manifest, snapshot: input.snapshot, events: input.events,
+    evidence, capturedRuns: new Map(),
+  })).toMatchObject({ status: 'unavailable', cases: 0 });
+  expect(checkEvidenceSupport({
+    artifact, profiles: [profile], manifest: input.manifest, snapshot: input.snapshot, events: input.events,
+    evidence: undefined, capturedRuns: new Map([[profile.hash, run]]),
+  })).toMatchObject({ status: 'unavailable', cases: 0 });
+
+  const mutations: [string, (profile: CustomerProfile) => void][] = [
+    ['buyer mismatch', value => { value.parentCustomerId = 'different-buyer'; }],
+    ['canonical account mismatch', value => { value.scope.accountId = 'different-account'; }],
+    ['approved account lookup mismatch', value => { value.approvedLookups[0].entries[0].target = 'different-account'; }],
+    ['omitted active term', value => { value.contractTerms = []; }],
+    ['unsupported fee', value => { value.contractTerms[0].fixedMonthlyFeeCents += 100; }],
+    ['wrong active interval', value => { value.contractTerms[0].validFrom = '2025-01-01'; }],
+    ['wrong invoice anchor', value => { value.contractTerms[0].anchorDay = 2; }],
+    ['unrelated valid term citation', value => {
+      const other = evidence.producer.contracts.find(fact => !profile.sourceAccountIds.includes(fact.sourceAccountId))!;
+      value.contractTerms[0].evidenceRefs = [evidence.resolvedSupport.find(item => item.factId === other.id)!.evidenceId];
+    }],
+  ];
+  for (const [label, mutate] of mutations) {
+    const { changed, rebound } = changeProfile(mutate);
+    expect(check(rebound, changed), label).toMatchObject({ status: 'failed', cases: 3 });
+  }
+
+  const wrongCurrency = changeArtifact(changed => {
+    changed.normalizedPlan.mappings[0].fields.currency = { op: 'constant', value: 'EUR', evidenceRef: profile.contractTerms[0].evidenceRefs[0] };
+  });
+  expect(check(wrongCurrency)).toMatchObject({ status: 'failed', cases: 3 });
+  const wrongReference = changeArtifact(changed => {
+    const currency = changed.normalizedPlan.mappings[0].fields.currency;
+    if (currency.op !== 'constant') throw new Error('Expected constant currency');
+    const other = evidence.producer.contracts.find(fact => !profile.sourceAccountIds.includes(fact.sourceAccountId))!;
+    currency.evidenceRef = evidence.resolvedSupport.find(item => item.factId === other.id && item.field === 'currency')!.evidenceId;
+  });
+  expect(check(wrongReference, profile, null)).toMatchObject({ status: 'failed', cases: 3 });
+
+  const confirmed = FindingSchema.parse({
+    id: 'confirmed-example', scope: profile.scope, taskId: 'private-test', fieldPath: '/amountCents',
+    value: 300000, origin: 'reviewer', provenanceClass: 'observed', evidenceStatus: 'supported',
+    reviewDisposition: 'confirmed', evidenceRefs: profile.contractTerms[0].evidenceRefs, derivationInputs: [], revision: 1,
+  });
+  const { changed: withFinding, rebound } = changeProfile(value => { value.findings.push(confirmed); });
+  expect(check(rebound, withFinding)).toMatchObject({ status: 'unavailable', cases: 0 });
+  const money = structuredClone(rebound);
+  const invoice = money.normalizedPlan.mappings.find(mapping => mapping.kind === 'invoice')!;
+  invoice.fields.amountCents = { op: 'constant', value: confirmed.value, evidenceRef: confirmed.evidenceRefs[0] };
+  money.hash = hashArtifact(money);
+  expect(check(money, withFinding)).toMatchObject({ status: 'failed', cases: 1 });
+  expect(check(artifact, { ...profile, bootstrap: {} } as CustomerProfile)).toMatchObject({ status: 'unavailable', cases: 0 });
+
+  const unknownOperation = changeArtifact(changed => {
+    const mapping = changed.normalizedPlan.mappings.find(item => item.kind === 'invoice')!;
+    mapping.fields.dueDate = { op: 'normalize_text', path: '/due_date', mode: 'trim' };
+  });
+  expect(check(unknownOperation)).toMatchObject({ status: 'unavailable', cases: 0 });
+
+  const lineageMutations: [string, (plan: PlanOutcome['plans'][number]) => void][] = [
+    ['wrong source event', plan => { plan.lineage[0].sourceEventIds = ['other-event']; }],
+    ['wrong source field', plan => { plan.lineage[0].sourcePaths = ['/observedAt']; }],
+    ['wrong derivation ID', plan => {
+      plan.lineage.find(item => item.targetField === '/invoiceRecordId')!.derivationInputs = ['other-record'];
+    }],
+    ['wrong citation', plan => { plan.lineage.find(item => item.targetField === '/currency')!.evidenceRefs = ['other-citation']; }],
+    ['wrong mapping operation', plan => { plan.lineage.find(item => item.targetField === '/currency')!.mapping = { op: 'field', path: '/other' }; }],
+    ['wrong operation index', plan => { plan.lineage[0].operationIndex = plan.operations.length; }],
+    ['duplicate lineage row', plan => { plan.lineage.push(plan.lineage[0]); }],
+    ['missing lineage row', plan => { plan.lineage.pop(); }],
+  ];
+  for (const [label, mutate] of lineageMutations) {
+    const changed = structuredClone(run);
+    const plan = changed.outcome!.plans[0];
+    mutate(plan);
+    plan.hash = hashPlan(plan);
+    expect(check(artifact, profile, changed), label).toMatchObject({ status: 'failed', cases: 4 });
+  }
+  const configuration = structuredClone(run);
+  const plan = configuration.outcome!.plans[0];
+  plan.operations.push({
+    op: 'ensure_customer', record: {
+      id: profile.parentCustomerId, displayName: 'Unrepresented configuration operation',
+      evidenceRefs: profile.contractTerms[0].evidenceRefs,
+    },
+  });
+  plan.hash = hashPlan(plan);
+  expect(check(artifact, profile, configuration)).toMatchObject({ status: 'unavailable', cases: 0 });
+
+  if (company === 'b') {
+    const known = new Set(evidence.producer.identities.map(identity => identity.sourceAccountId));
+    const unknown = decodeTruth(input.producerTruthJson).accounts.find(account => !known.has(account.sourceAccountId))!;
+    const { changed, rebound: unknownArtifact } = changeProfile(value => { value.sourceAccountIds = [unknown.sourceAccountId]; });
+    expect(check(unknownArtifact, changed)).toMatchObject({ status: 'failed', cases: 1 });
+  }
+}
+
+function checkAmendmentAndSameName(
+  input: EvidenceFixtureInput, evidence: EvidenceInputV1, profile: CustomerProfile, artifact: CompiledArtifact,
+) {
+  const initial = evidence.producer.contracts.find(term => term.validToExclusive !== null)!;
+  const terms = evidence.producer.contracts.filter(term => term.sourceAccountId === initial.sourceAccountId);
+  const identity = evidence.producer.identities.find(fact => fact.sourceAccountId === initial.sourceAccountId)!;
+  const sameName = evidence.producer.identities.find(fact => fact.id !== identity.id && fact.legalName === identity.legalName)!;
+  const binding = evidence.demoBindings.find(item => item.identityFactId === identity.id)!;
+  const references = (factId: string) => [...new Set(evidence.resolvedSupport.filter(item => item.factId === factId).map(item => item.evidenceId))];
+  const reviewed = {
+    ...profile, sourceAccountIds: [identity.sourceAccountId], parentCustomerId: binding.parentCustomerId,
+    scope: { ...profile.scope, accountId: binding.accountId },
+    semanticVersion: input.manifest.semanticVersions[identity.sellerEntityId + '/' + identity.sourceAccountId],
+    approvedLookups: [{
+      id: 'account-map', valueType: 'parent-account' as const,
+      entries: [{ source: identity.sourceAccountId, target: binding.accountId, evidenceRefs: references(identity.id) }],
+    }],
+    contractTerms: terms.map(({ sourceAccountId: _account, sellerEntityId: _seller, support: _support, ...term }) =>
+      ({ ...term, evidenceRefs: references(term.id) })),
+  };
+  reviewed.hash = hashProfile(reviewed);
+  expect(terms).toHaveLength(2);
+  expect(checkContractTerms(reviewed, terms, evidence, input.manifest.asOf)).toBe(true);
+  const changed = structuredClone(reviewed);
+  changed.contractTerms.find(term => term.validToExclusive !== null)!.validToExclusive = null;
+  expect(checkContractTerms(changed, terms, evidence, input.manifest.asOf)).toBe(false);
+  expect(sameName.buyerId).not.toBe(identity.buyerId);
+  reviewed.parentCustomerId = sameName.buyerId;
+  reviewed.hash = hashProfile(reviewed);
+  const amendedArtifact = structuredClone(artifact);
+  amendedArtifact.requiredProfileHashes = [reviewed.hash];
+  const active = terms.find(term => term.validToExclusive === null)!;
+  const currencyRef = evidence.resolvedSupport.find(item => item.factId === active.id && item.field === 'currency')!.evidenceId;
+  for (const mapping of amendedArtifact.normalizedPlan.mappings) {
+    mapping.fields.currency = { op: 'constant', value: 'USD', evidenceRef: currencyRef };
+  }
+  amendedArtifact.hash = hashArtifact(amendedArtifact);
+  expect(checkEvidenceSupport({
+    artifact: amendedArtifact, profiles: [reviewed], manifest: input.manifest, snapshot: input.snapshot,
+    events: input.events, evidence, capturedRuns: new Map(),
+  })).toMatchObject({ status: 'failed', cases: 3 });
+}
+
 test('real generated A/B capture provenance survives immutable v2 roundtrips beside v1', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'eapr-evidence-v2-store-'));
   const roots = { visibleRoot: join(directory, 'visible'), truthRoot: join(directory, 'private') };
@@ -268,13 +444,55 @@ test('real generated A/B capture provenance survives immutable v2 roundtrips bes
       expect(bindTruth(reader.truth, profiles)[0].reference.balanceCents).toBe(company === 'a' ? 80000 : 0);
       const candidate = { spec, profiles, artifact: result.value, manifest, snapshot };
       const launcher = createProtectedVerificationLauncher(async () => pin);
-      const report = VerificationReportSchema.parse(await launcher.launch(
-        'c1-evidence-' + company, candidate, await launcher.resolve(candidate),
-      ));
-      expect(report.checks.filter(check => check.status === 'passed')).toHaveLength(12);
-      expect(report.checks.filter(check => check.status === 'unavailable'))
-        .toEqual([expect.objectContaining({ id: 'evidence_support', cases: 0 })]);
-      expect(report).toMatchObject({ fixtureSetVersion: '2', eligible: false, unexplainedDifferenceCents: 0 });
+      const jobId = 'c2-evidence-' + company;
+      const resolved = await launcher.resolve(candidate);
+      const report = VerificationReportSchema.parse(await launcher.launch(jobId, candidate, resolved));
+      expect(report.checks.filter(check => check.status === 'passed')).toHaveLength(13);
+      expect(report.checks.find(check => check.id === 'evidence_support'))
+        .toMatchObject({ status: 'passed', cases: 4 });
+      expect(report).toMatchObject({ fixtureSetVersion: '2', eligible: true, unexplainedDifferenceCents: 0 });
+      expect(report.checks.reduce((total, check) => total + check.cases, 0)).toBe(company === 'a' ? 53 : 57);
+      expect(validateReport(jobId, candidate, resolved, report).summary).toMatchObject({ eligible: true, coverageComplete: true });
+
+      const baseline = buildCasePlan(candidate, reader.truth, events, snapshot).filter(check => check.id === 'baseline_reconcile');
+      let witness: CapturedEvidenceRun | undefined;
+      await runCasePlan(candidate.artifact, baseline, run => { witness = run; });
+      if (!witness) throw new Error('Expected exact captured subject witness');
+      checkCheckerNegatives(input, direct.evidence, candidate.artifact, profiles[0], witness, company);
+      if (company === 'a') {
+        checkAmendmentAndSameName(input, direct.evidence, profiles[0], candidate.artifact);
+        // The store establishes producer provenance and exact containment. The candidate checker
+        // independently rejects the changed typed assertion even when its transport is valid.
+        const { hash: _producerHash, ...producer } = decodeEvidenceProducer(input.producerJson);
+        const claimed = producer.contracts.find(fact => fact.sourceAccountId === profiles[0].sourceAccountIds[0])!;
+        claimed.fixedMonthlyFeeCents += 1;
+        const producerJson = canonicalJson({ ...producer, hash: hashCanonical(producer) });
+        const alternateRoot = pathToFileURL(join(directory, 'independent-typed-assertion') + '/');
+        const changedPin = await pinProtectedEvidenceFixture({ ...input, producerJson }, alternateRoot);
+        const changed = await decodeProtectedEvidenceBundle(
+          await readFile(pathFor(alternateRoot, changedPin.fixtureSetId, '2'), 'utf8'), manifest,
+        );
+        expect(checkEvidenceSupport({
+          ...candidate, events, evidence: changed.evidence, capturedRuns: new Map([[profiles[0].hash, witness]]),
+        })).toMatchObject({ status: 'failed', cases: 4 });
+      } else {
+        // Generated B has only payment allocations. The baseline can pass despite a bad
+        // credit branch, so the evidence template check must fail independently of it.
+        const wrongSpec = structuredClone(spec);
+        wrongSpec.mappings.find(mapping => mapping.kind === 'allocation')!.fields.fundingKind = {
+          op: 'enum_lookup', path: '/receipt_type', values: { payment: 'payment', credit: 'payment' },
+        };
+        const wrong = compile(wrongSpec, profiles);
+        if (!wrong.ok) throw new Error('Expected the deliberate B mapping to compile');
+        const wrongCandidate = { ...candidate, spec: wrongSpec, artifact: wrong.value };
+        const wrongPlan = buildCasePlan(wrongCandidate, reader.truth, events, snapshot).filter(check => check.id === 'baseline_reconcile');
+        const observed = new Map<string, CapturedEvidenceRun>();
+        const result = await runCasePlan(wrong.value, wrongPlan, run => { observed.set(run.profileHash, run); });
+        expect(result.checks).toMatchObject([{ id: 'baseline_reconcile', status: 'passed' }]);
+        expect(checkEvidenceSupport({
+          ...wrongCandidate, events, evidence: direct.evidence, capturedRuns: observed,
+        })).toMatchObject({ status: 'failed', cases: 3 });
+      }
     }
     const rejectionRoot = pathToFileURL(join(directory, 'rejected-pins') + '/');
     await rejectInvalidInputs(captures[0].input, captures[1].input, rejectionRoot);

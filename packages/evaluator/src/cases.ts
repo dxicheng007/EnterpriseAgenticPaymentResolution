@@ -5,6 +5,7 @@ import {
 } from '@eapr/contracts';
 import { captureInputHash, planCaptureValidation, runCaptureValidation, type CaptureValidation } from './capture-boundary.js';
 import { addProbeRecords, chooseRecipe, emptyProbeTarget, rehash } from './case-recipes.js';
+import type { CapturedEvidenceRun } from './evidence-support.js';
 import { bindTruth, type ProtectedFixtureSet } from './fixtures.js';
 import { addReferenceCents, evaluateReferenceState, type ReferenceView } from './reference-model.js';
 import { SubjectInputSchema } from './protocol.js';
@@ -366,7 +367,9 @@ function caseKey(test: PlannedCase): string {
   return test.profile.hash + ':' + test.kind + ':' + test.label;
 }
 
-export async function runCasePlan(artifact: CompiledArtifact, plan: CheckPlan[]) {
+export async function runCasePlan(
+  artifact: CompiledArtifact, plan: CheckPlan[], observeCaptured?: (run: CapturedEvidenceRun) => void,
+) {
   if (plan.some(check => canonicalJson(check.cases.map(caseKey)) !== canonicalJson(check.requiredCases) ||
     new Set(check.requiredCases).size !== check.requiredCases.length ||
     check.cases.some(test => test.facts.artifactHash !== artifact.hash || test.facts.profileHash !== test.profile.hash))) {
@@ -396,6 +399,12 @@ export async function runCasePlan(artifact: CompiledArtifact, plan: CheckPlan[])
       }
       plannerExecutions++;
       const output = await runVerificationSubject(artifact, test.profile, test.events, test.target);
+      if (check.id === 'baseline_reconcile' && observeCaptured) {
+        observeCaptured({
+          artifactHash: artifact.hash, profileHash: test.profile.hash, events: test.events,
+          target: test.target, expected: test.expected, outcome: output.ok ? output.value.outcome : null,
+        });
+      }
       for (const event of test.events) {
         if (event.kind !== 'semantic_change' && artifact.normalizedPlan.allowedKinds.includes(event.kind)) eventKinds.add(event.kind);
       }
