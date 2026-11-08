@@ -8,7 +8,10 @@ import {
 } from '@eapr/contracts';
 import { companyA } from '../packages/sources/src/company-a.js';
 import { sourceFileId } from '../packages/sources/src/uploads.js';
-import { fixtureA, textPdf } from '../packages/sources/src/canonical-fixtures.js';
+import { fixtureA, fixtureB, textPdf } from '../packages/sources/src/canonical-fixtures.js';
+
+import { companyB, encodeBatch } from '../packages/sources/src/company-b.js';
+import { streamContentHash } from '../packages/sources/src/dossier.js';
 
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 function contains(parent: string, child: string) {
@@ -111,9 +114,90 @@ export async function generateFixtures(input: {seed:Id; asOf:IsoInstant; visible
     seed:input.seed, asOf:fixture.asOf, expectedEvidence,
     expectedExplainedAccount:fixture.accounts[0]!.accountId, expectedOutstandingCents:80000,
   }),{flag:'wx',mode:0o600});
+  const b = await writeCompanyB(visible,truth,input.seed,input.asOf);
   return {
-    manifestIds:[pinned.id], manifestHashes:[pinned.hash], fileCount:files.length,eventCount:fixture.events.length,
-    visiblePaths:[...uploads.map(upload=>upload.path),...Object.keys(jsonFiles),...apiOriginals.map(item=>item.path)],
+    manifestIds:[pinned.id,b.id], manifestHashes:[pinned.hash,b.hash], fileCount:files.length+b.fileCount,eventCount:fixture.events.length+b.eventCount,
+    visiblePaths:[...uploads.map(upload=>upload.path),...Object.keys(jsonFiles),...apiOriginals.map(item=>item.path),...b.paths],
+  };
+}
+
+
+async function writeCompanyB(visible:string,truth:string,seed:Id,asOf:IsoInstant) {
+  const fixture = fixtureB(seed,asOf);
+  const files: ManifestFile[] = [];
+  const uploads: {metadata:UploadMetadata;path:string}[] = [];
+  const expectedEvidence: {fileId:Id;text:string}[] = [];
+  async function emit(
+    name:string,bytes:Uint8Array,kind:UploadMetadata['kind'],batch?:UploadMetadata['batch'],text?:string,
+  ) {
+    const documentId = 'doc-b-' + fixture.tag + '-' + name.split('.')[0];
+    const metadata = UploadMetadataSchema.parse({
+      companyId:companyB.companyId,sourceRef:companyB.sourceRef,
+      documentId,documentVersion:1,kind,originalName:name,...(batch ? {batch} : {}),
+    });
+    const fileId = sourceFileId(metadata);
+    const sha256 = hashBytes(bytes);
+    const manifestBatch = batch ? {batchId:batch.batchId,streamId:batch.streamId,sequence:batch.sequence} : {};
+    files.push({fileId,documentId,documentVersion:1,kind,sha256,...manifestBatch});
+    uploads.push({metadata,path:name});
+    if (text !== undefined) expectedEvidence.push({fileId,text});
+    await writeFile(join(visible,name),bytes,{flag:'wx'});
+  }
+  for (const [index,batch] of fixture.files.entries()) {
+    const sequence = index + 1;
+    await emit('b-batch-' + sequence + '.csv',encodeBatch(batch),'event_csv',
+      {batchId:'batch-b-' + fixture.tag + '-' + sequence,sequence,streamId:'b-files'});
+  }
+  for (const [index,account] of fixture.accounts.entries()) {
+    const title = 'Fixed monthly agreement ' + account.contractId;
+    const lines = [title,'Seller seller-b; buyer ' + account.entityId + '; account ' + account.accountId,
+      'Legal name ' + account.displayName,
+      'Monthly fee USD ' + (fixture.fees[index]!/100).toFixed(2) + ' effective ' + fixture.month(-3) + '.',
+      'Monthly invoice anchor day 1.'];
+    await emit('b-contract-' + (index+1) + '.pdf',await textPdf(lines,fixture.asOf,title),
+      'contract_pdf',undefined,lines.join(' '));
+  }
+  const body = 'Wire receipt ' + fixture.ambiguous.recordId + ', USD 300.00; client code ' +
+    fixture.ambiguous.rawIdentity.sourceAccountId + '. Buyer and invoice reference absent.';
+  await emit('b-remittance.json',Buffer.from(canonicalJson({messageId:'msg-b-remittance-' + fixture.tag,body})),
+    'email_json',undefined,body);
+
+  const id = 'manifest-b-' + fixture.tag + '-' + hashCanonical(fixture.asOf).slice(0,12);
+  const events = [...fixture.files.flat(),...fixture.receipts];
+  const manifest = {
+    id,companyId:companyB.companyId,sourceRef:companyB.sourceRef,epoch:1,asOf:fixture.asOf,
+    schemaVersions:Object.fromEntries(companyB.contracts.map(contract=>[contract.resource,contract.schemaVersion])),
+    semanticVersions:Object.fromEntries(fixture.accounts.map(account=>['seller-b/' + account.accountId,'sem-b-1'])),
+    streams:companyB.streams.map(({streamId})=>{
+      const members = events.filter(event=>event.streamId === streamId);
+      const resumeAfter = String(members.length);
+      return {streamId,snapshotId:'member:' + id + ':' + streamId,resumeAfter,eventIds:members.map(event=>event.id),
+        snapshotHash:streamContentHash(companyB.sourceRef,streamId,resumeAfter,members)};
+    }),
+    files,
+  };
+  const pinned = BootstrapManifestSchema.parse({...manifest,hash:hashManifest(manifest)});
+  const apiOriginals: {eventId:Id;path:string}[] = [];
+  await mkdir(join(visible,'api-b'),{mode:0o700});
+  for (const event of fixture.receipts) {
+    const path = 'api-b/' + hashCanonical(event.id) + '.json';
+    await writeFile(join(visible,path),canonicalJson(event.payload),{flag:'wx'});
+    apiOriginals.push({eventId:event.id,path});
+  }
+  const jsonFiles = {
+    'api-b.json':fixture.receipts,'api-originals-b.json':apiOriginals,'accounts-b.json':fixture.accounts,
+    'manifest-b.json':pinned,'uploads-b.json':uploads,
+  };
+  for (const [name,value] of Object.entries(jsonFiles)) {
+    await writeFile(join(visible,name),canonicalJson(value),{flag:'wx'});
+  }
+  await writeFile(join(truth,'expected-b.json'),canonicalJson({
+    seed,asOf:fixture.asOf,expectedEvidence,
+    expectedUnresolvedEventId:fixture.ambiguous.id,expectedUnresolvedDiagnostic:'UNKNOWN_ACCOUNT',
+  }),{flag:'wx',mode:0o600});
+  return {
+    id:pinned.id,hash:pinned.hash,fileCount:files.length,eventCount:events.length,
+    paths:[...uploads.map(upload=>upload.path),...Object.keys(jsonFiles),...apiOriginals.map(item=>item.path)],
   };
 }
 

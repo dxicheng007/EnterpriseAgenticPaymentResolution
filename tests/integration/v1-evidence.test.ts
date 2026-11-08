@@ -142,13 +142,10 @@ describe('V1 evidence', () => {
         return BootstrapManifestSchema.parse({...input,hash:hashManifest(input)});
       }
       const pdfBytes = await textPdf(['Monthly fee USD 3000.00'],asOf,'Contract example');
-      const csvBytes = Buffer.from('payload_json,notes\r\n"3000.00","line1\r\nline2"\r\n');
       const documents = [
         {metadata,bytes:original,kind:'email',excerpt:'Fixed monthly fee USD 3000.00.'},
         {metadata:{...metadata,documentId:'contract',originalName:'contract.pdf',kind:'contract_pdf'},
           bytes:pdfBytes,kind:'pdf',excerpt:'Monthly fee USD 3000.00'},
-        {metadata:{...metadata,documentId:'ledger',originalName:'ledger.csv',kind:'event_csv',
-          batch:{batchId:'legacy-csv-evidence',sequence:1,streamId:'a-evidence'}},bytes:csvBytes,kind:'csv',excerpt:'3000.00'},
       ];
       const files: import('@eapr/contracts').ManifestFile[] = [];
       for (const document of documents) {

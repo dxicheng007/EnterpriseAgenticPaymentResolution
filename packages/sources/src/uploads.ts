@@ -6,6 +6,8 @@ import { extractDocument, SourceContentError, type EvidenceStore, type Extractio
 import { publishActivity } from '@eapr/storage/activity';
 import { withTransaction } from '@eapr/storage/transaction';
 import type { Clock } from '@eapr/storage/control-db';
+import { companyB, decodeBatch } from './company-b.js';
+import { insertSourceRecord } from './records.js';
 import { SourceError } from './errors.js';
 
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
@@ -70,6 +72,9 @@ export async function storeSourceUpload(
     await lockSource(client,sourceRef);
     const current = await findExisting(client);
     if (current) return {file:current, duplicate:true};
+    if (metadata.kind === 'event_csv') {
+      await appendFileBatch(client,metadata,extraction);
+    }
     const result = await client.query<StoredSourceFile>(
       'INSERT INTO source_files (file_id,company_id,source_ref,document_id,document_version,content_hash,byte_length,' +
       'metadata,extraction,extraction_hash,batch_id,batch_sequence,batch_stream_id) ' +
@@ -91,4 +96,24 @@ export async function uploadSource(
   const {file,duplicate} = await storeSourceUpload(dependencies,metadata,bytes);
   return {fileId:file.file_id,documentId:metadata.documentId,documentVersion:metadata.documentVersion,
     contentHash:file.content_hash,duplicate,evidenceIds:[],diagnostics:[]};
+}
+
+async function appendFileBatch(client:PoolClient,metadata:UploadMetadata,extraction:Extraction) {
+  if (metadata.kind !== 'event_csv' || !metadata.batch) return;
+  if (metadata.sourceRef !== companyB.sourceRef || metadata.companyId !== companyB.companyId) {
+    throw new SourceError(422,'SOURCE_CONTENT_INVALID','CSV batches require a registered file stream');
+  }
+  const {sequence,streamId} = metadata.batch;
+  const latest = (await client.query<{sequence:string}>(
+    'SELECT COALESCE(max(batch_sequence),0) AS sequence FROM source_files WHERE source_ref = $1 AND batch_stream_id = $2',
+    [metadata.sourceRef,streamId],
+  )).rows[0];
+  if (Number(latest?.sequence) + 1 !== sequence) {
+    throw new SourceError(409,'SOURCE_GAP','Predecessor source batch is missing');
+  }
+  for (const event of decodeBatch(streamId,extraction.document)) {
+    if (!await insertSourceRecord(client,{event})) {
+      throw new SourceError(409,'SOURCE_HASH_CONFLICT','Batch repeats an existing event identity');
+    }
+  }
 }

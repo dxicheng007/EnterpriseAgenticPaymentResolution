@@ -1,5 +1,6 @@
 import { PDFDocument, StandardFonts } from 'pdf-lib';
-import { hashCanonical, IdSchema, IsoInstantSchema, type Id, type IsoInstant } from '@eapr/contracts';
+import { hashCanonical, IdSchema, IsoInstantSchema, type Id, type IsoInstant, type RawSourceEvent } from '@eapr/contracts';
+import { eventB } from './company-b.js';
 import { eventA, type RecordA } from './company-a.js';
 
 export function fixtureContext(seed: Id, instant: IsoInstant) {
@@ -81,4 +82,38 @@ export function fixtureA(seed: Id, instant: IsoInstant) {
       semanticVersion:'sem-a-2',fields:{revision:'sem-a-2'},
     },1,context.asOf)],
   };
+}
+
+export function fixtureB(seed:Id,instant:IsoInstant) {
+  const context = fixtureContext(seed,instant);
+  const accounts = fixtureAccounts(seed,'b');
+  const fees = [300000,180000 + parseInt(context.tag.slice(0,2),16)*100,
+    220000 + parseInt(context.tag.slice(2,4),16)*100];
+  const files: RawSourceEvent[][] = [];
+  const receipts: RawSourceEvent[] = [];
+  let fileSequence = 0;
+  for (const offset of [-3,-2,-1]) {
+    const batch:RawSourceEvent[] = [];
+    for (const [index,account] of accounts.entries()) {
+      const effectiveDate = context.month(offset);
+      const suffix = account.accountId + '-' + effectiveDate;
+      const invoice = 'inv-b:' + suffix;
+      const receipt = 'pay-b:' + suffix;
+      const common = {sourceAccountId:account.accountId,effectiveDate};
+      batch.push(eventB({...common,kind:'invoice',recordId:invoice,
+        fields:{amount_minor:fees[index]!,due_on:context.month(offset,true)}},++fileSequence,context.asOf));
+      receipts.push(eventB({...common,kind:'payment',recordId:receipt,
+        fields:{amount_minor:fees[index]!}},receipts.length+1,context.asOf));
+      batch.push(eventB({...common,kind:'allocation',recordId:'alloc-b:' + suffix,
+        fields:{amount_minor:fees[index]!,receipt_type:'payment',receipt_key:receipt,bill_key:invoice}},
+        ++fileSequence,context.asOf));
+    }
+    files.push(batch);
+  }
+  const unknownAccountId = 'cust-b-unknown-' + context.tag;
+  const ambiguous = eventB({kind:'payment',recordId:'pay-b:unresolved-' + context.tag,
+    sourceAccountId:unknownAccountId,effectiveDate:context.month(-1),fields:{amount_minor:30000}},
+    receipts.length+1,context.asOf);
+  receipts.push(ambiguous);
+  return {accounts,...context,fees,files,receipts,ambiguous};
 }
