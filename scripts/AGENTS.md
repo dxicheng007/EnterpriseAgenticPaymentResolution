@@ -9,7 +9,7 @@ Follow the [repository instructions](../AGENTS.md) and [execution and verificati
 | [Seed](seed.ts) | `npm run db:seed` records idempotent V0 seed state and activity. |
 | [Demo loader](load-demo.ts) | Generate a missing synthetic dataset using the [operator generator](generate-fixtures.ts), validate visible source members, and publish and capture them with the accepted source services. Existing complete input is checked and reused. A partial or corrupt dataset blocks startup. |
 | [Development launcher](dev.ts) | `npm run dev` starts the database, migrates, seeds, and loads the demo before launching loopback services and the browser development server. Only control receives evidence storage configuration and pinned capture IDs. |
-| [Slice verifier](verify-slice.ts) | `npm run verify:slice -- V0` runs mandatory V0 cases and typecheck and records results. The registry names later slices, whose verification is unavailable in the foundation. |
+| [Slice verifier](verify-slice.ts) | `npm run verify:slice -- V0` runs mandatory V0 cases and typecheck and records results. `npm run verify:slice -- V1` runs the five mandatory source and evidence files and typecheck, then records allowlisted assertions and two screenshots with authenticated traces disabled. Full verification for V2 and later slices is unavailable. |
 
 The loader uses seed `local-demo-v1` and as-of `2026-10-01T00:00:00.000Z`. The supervisor keeps visible input, protected generator output and evidence storage in separate ignored directories under `.local/demo`. It does not pass protected output configuration to control, worker, or web. Evidence originals are served through scoped control routes.
 

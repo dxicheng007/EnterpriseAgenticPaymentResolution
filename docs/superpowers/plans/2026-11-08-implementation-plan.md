@@ -10,7 +10,7 @@
 
 **Spec:** [PRD v2](../../../prdv2.md). Read [shared contracts](2026-11-08-shared-contracts.md), [verification playbook](2026-11-08-verification-playbook.md), and [agent handoffs](2026-11-08-agent-handoffs.md) before execution.
 
-**Status:** Planning only. Every checkbox is uncompleted. The repository currently contains only PRD documents; proposed files, scripts, test commands, and endpoints do not exist yet. No tests have been claimed as passing.
+**Status:** The reviewed deterministic foundation, sources, evidence and preview, and the local no-login reviewer UI are implemented. Candidate `f22a70f` carries independently reviewed evidence for three Chromium test files. The V1 verifier is a separate candidate with its own machine packet. Compiled preview and protected evaluator modules have focused evidence. Full V2 mandatory coverage, the V2 runner and reviewer composition remain partial or pending. All joint acceptance remains pending.
 
 ## Global Constraints
 
@@ -161,7 +161,8 @@ expect(afterBaseline.events.map(event => event.id)).toContain(injectedPayment.id
 ```
 - [ ] Run `npm run test:integration -- tests/integration/v1-manifests.test.ts` and the change-feed unit test; observe failures for missing boundaries/conflicts.
 - [ ] Implement append-only source event exports, coordinated manifests, complete-page cursors, and operator scenarios. Use stable namespaced transaction identities, not CSV row positions. Never use one timestamp as a combined file/API checkpoint.
-- [ ] Run `npm run verify:slice -- V1`. Expected: both dossiers inspectable; multi-stream baseline is complete or visibly blocked; exact future events retrievable once by stable identity. Walk through Gate G1 with us.
+- [x] Run `npm run verify:slice -- V1`. The development run passed all 13 mandatory cases and typecheck. Packet `.evidence/dirty-b4b13bacf22957db83c2d9a0fb362d05af859885170b61bc9a296485e7f2fa58/V1/2026-11-08T22-17-50-226Z-2157/` binds the dirty source identity based on `f22a70f`.
+- [ ] Walk through Gate G1 together. Inspect both dossiers, complete and blocked baseline states, and exact future events by stable identity.
 - [ ] Commit `feat: add coordinated file and API acquisition snapshots`.
 
 ## V2 — Preview an executable connector without writing the parent
@@ -426,4 +427,4 @@ expect(unsupportedCorrection.status).toBe('held');
 
 Run the self-review against PRD sections 1–20 and the verification matrix before starting implementation. The plans do not waive source/approval constraints or replace actual checks. At each joint gate, provide a short outcome-first report and the precise commands/screens for us to inspect; independent tasks may continue while review is pending, but dependent work must not silently treat a rejected interface or behavior as approved.
 
-This plan covers implementation decisions and verification. It does not start services, create product code, or run the proposed tests. The next execution increment is V0, followed by parallel V1/V2/C review-shell work against the published contracts.
+Review the exact V1 verifier candidate and its clean-source machine packet independently, then inspect the source evidence together at G1. Full V2 verification and protected evaluator composition in the reviewer workflow remain pending.
