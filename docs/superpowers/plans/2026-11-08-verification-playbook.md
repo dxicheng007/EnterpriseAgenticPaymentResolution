@@ -1,6 +1,6 @@
 # Joint verification playbook
 
-**Status:** Proposed checks, none executed. Companion to the [implementation plan](2026-11-08-implementation-plan.md) and [PRD v2](../../../prdv2.md).
+**Status:** V0 and V1 have executable machine gates. V1 retains allowlisted command and assertion records and two screenshots with authenticated tracing disabled. Full V2 verification and joint acceptance remain pending. Companion to the [implementation plan](2026-11-08-implementation-plan.md) and [PRD v2](../../../prdv2.md).
 
 ## What verification means
 

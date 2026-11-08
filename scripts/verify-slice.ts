@@ -1,10 +1,13 @@
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { z } from 'zod';
 import { hashBytes, hashCanonical } from '../packages/contracts/src/canonical.js';
 import { migrationIdentities, migrationStreams, readMigrationCatalog } from './migrate.js';
-import { localPort } from './native-db.js';
+import {
+  chromiumVersion, collectScreenshots, commandResult, normalizeReport, v1ExitCode,
+} from './verify-slice-evidence.js';
+import { localPort, testLeasePrefix } from './native-db.js';
 
 const registry = {
   V0: [
@@ -89,18 +92,18 @@ const browserReport = z.object({
   })),
 });
 
-function capture(program: string, args: string[]) {
-  const result = spawnSync(program, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 });
+function capture(program: string, args: string[], env?: NodeJS.ProcessEnv) {
+  const result = spawnSync(program, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000, env });
   if (result.status !== 0) throw new Error('Unable to record ' + program + ' version or source identity');
   return result.stdout.trim();
 }
 
-function sourceIdentity() {
-  const commit = capture('git', ['rev-parse', 'HEAD']);
-  const clean = !capture('git', ['status', '--porcelain']);
+function sourceIdentity(env?: NodeJS.ProcessEnv) {
+  const commit = capture('git', ['rev-parse', 'HEAD'], env);
+  const clean = !capture('git', ['status', '--porcelain'], env);
   if (clean) return { commit, clean, evidenceKey: commit };
-  const trackedDiff = capture('git', ['diff', '--binary', 'HEAD']);
-  const untracked = capture('git', ['ls-files', '--others', '--exclude-standard', '-z'])
+  const trackedDiff = capture('git', ['diff', '--binary', 'HEAD'], env);
+  const untracked = capture('git', ['ls-files', '--others', '--exclude-standard', '-z'], env)
     .split('\0').filter(Boolean).map(path => ({ path, hash: hashBytes(readFileSync(path)) }));
   return { commit, clean, evidenceKey: 'dirty-' + hashCanonical({ commit, trackedDiff, untracked }) };
 }
@@ -240,6 +243,179 @@ function verifyV0() {
   }
 }
 
+const requiredV1Cases = {
+  'packages/evidence/test/locate.test.ts': [
+    'exact source locators uses page-local UTF-16 offsets',
+    'exact source locators resolves escaped JSON keys and canonicalizes non-string values',
+    'exact source locators indexes decoded CSV records and checks email message identity',
+    'immutable original bytes rejects traversal and symlinked content',
+    'original extraction rejects duplicate CSV headers and accepts multiline records',
+    'original extraction extracts actual PDF text and rejects image-only or malformed input',
+    'searches only authorized excerpts and requires full coverage for original scope',
+  ],
+  'packages/sources/test/change-feed.test.ts': [
+    'source change contract accepts only a contiguous complete page and an unchanged empty cursor',
+    'source change contract preserves exact B transport columns and unknown raw account identity',
+  ],
+  'tests/integration/v1-evidence.test.ts': [
+    'V1 evidence generates repeatable original bytes, preserves distinct same-name identities and explicit links',
+    'V1 evidence serializes repeated versions and authorizes uploads before publication',
+  ],
+  'tests/integration/v1-manifests.test.ts': [
+    'pins a B epoch and serializes publication with live append across all three streams',
+  ],
+  'tests/e2e/v1-sources.spec.ts': [
+    'stores immutable uploads and opens exact originals only after a complete source capture',
+  ],
+} satisfies Record<typeof registry.V1[number], string[]>;
+
+const v1Commands = [
+  { script: 'test:unit', file: 'packages/evidence/test/locate.test.ts' },
+  { script: 'test:unit', file: 'packages/sources/test/change-feed.test.ts' },
+  { script: 'test:integration', file: 'tests/integration/v1-evidence.test.ts' },
+  { script: 'test:integration', file: 'tests/integration/v1-manifests.test.ts' },
+  { script: 'test:e2e', file: 'tests/e2e/v1-sources.spec.ts' },
+  { script: 'typecheck', file: undefined },
+] as const;
+
+const chromiumProbe = `
+  import { chromium } from '@playwright/test';
+  const browser = await chromium.launch();
+  try { console.log(browser.version()); }
+  finally { await browser.close(); }
+`;
+
+function readV1Report(report: string, browser: boolean, file: typeof registry.V1[number]) {
+  try {
+    const stat = lstatSync(report);
+    if (!stat.isFile() || stat.size > 8 * 1024 * 1024) throw new Error();
+    return normalizeReport(
+      browser ? 'playwright' : 'vitest', JSON.parse(readFileSync(report, 'utf8')),
+      process.cwd(), file, requiredV1Cases[file],
+    );
+  } catch {
+    return { cases: [], diagnostics: ['report-unavailable-or-invalid'] };
+  }
+}
+
+function verifyV1() {
+  const env = { ...process.env };
+  delete env.OPENAI_API_KEY;
+  delete env.OPENAI_ORG_ID;
+  delete env.OPENAI_PROJECT_ID;
+  delete env.NO_COLOR;
+  const source = sourceIdentity(env);
+  const runId = new Date().toISOString().replace(/[:.]/g, '-') + '-' + process.pid;
+  const evidence = resolve('.evidence', source.evidenceKey, 'V1', runId);
+  mkdirSync(evidence, { recursive: true, mode: 0o700 });
+  const commands: ReturnType<typeof commandResult>[] = [];
+  const diagnostics: string[] = [];
+  let screenshots: { path: string; sha256: string }[] = [];
+  let chromium: string | undefined;
+  let runtime;
+  let contract;
+  let configuration;
+  let migrations;
+  let temp: string | undefined;
+
+  try {
+    const missing = registry.V1.filter(file => !existsSync(file) || !lstatSync(file).isFile());
+    if (missing.length) diagnostics.push('required-test-files-missing');
+    for (const file of missing) console.error('V1 required test file unavailable: ' + file);
+
+    try {
+      runtime = {
+        node: process.version, npm: capture('npm', ['--version'], env),
+        postgres: capture('postgres', ['--version'], env),
+        packageLockHash: hashBytes(readFileSync('package-lock.json')),
+      };
+      contract = { version: 1, sha256: hashBytes(readFileSync('docs/superpowers/plans/2026-11-08-contract-freeze.md')) };
+      configuration = {
+        host: '127.0.0.1', postgresPort: localPort('EAPR_PG_PORT', 55432), webPort: localPort('EAPR_WEB_PORT', 5173),
+        controlPort: localPort('EAPR_CONTROL_PORT', 3001), workerPort: localPort('EAPR_WORKER_PORT', 3002),
+        demoNamespace: process.env.EAPR_DEMO_NAMESPACE ?? 'eapr_v0',
+        testPrefix: testLeasePrefix(),
+      };
+      const catalog = readMigrationCatalog();
+      migrations = migrationStreams.flatMap(stream => migrationIdentities(catalog[stream]).map(({ version, sha256 }) => ({
+        stream, expectedVersion: version, sha256,
+      })));
+    } catch {
+      diagnostics.push('run-metadata-unavailable');
+    }
+
+    if (!diagnostics.length) {
+      mkdirSync('.local', { recursive: true, mode: 0o700 });
+      temp = mkdtempSync(resolve('.local', 'verify-v1-'));
+      const browserOutput = join(temp, 'browser');
+      for (const [index, { script, file }] of v1Commands.entries()) {
+        const report = join(temp, 'report-' + index + '.json');
+        const args = ['run', script];
+        const browser = script === 'test:e2e';
+        if (file) {
+          args.push('--', file, '--reporter=json');
+          args.push(browser ? '--trace=off' : '--outputFile=' + report);
+        }
+        const command = ['npm', ...args.map(arg => arg === '--outputFile=' + report
+          ? '--outputFile=<private-report>' : arg)].join(' ');
+        const child = spawnSync('npm', args, {
+          env: { ...env, EAPR_TRACE_DIR: browserOutput, PLAYWRIGHT_JSON_OUTPUT_FILE: report },
+          encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 4 * 1024 * 1024, timeout: 120_000,
+        });
+        const result = commandResult(command, child, file ? readV1Report(report, browser, file) : undefined);
+        commands.push(result);
+        console.log('V1 ' + result.result + ' ' + command +
+          (result.diagnostics.length ? ' (' + result.diagnostics.join(', ') + ')' : ''));
+      }
+
+      chromium = chromiumVersion(spawnSync(process.execPath, ['--input-type=module', '-e', chromiumProbe], {
+        env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024, timeout: 10_000,
+      }));
+      if (!chromium) diagnostics.push('chromium-version-unavailable');
+
+      const artifacts = collectScreenshots(browserOutput);
+      diagnostics.push(...artifacts.diagnostics);
+      if (artifacts.screenshots.length) {
+        mkdirSync(join(evidence, 'screenshots'), { mode: 0o700 });
+        screenshots = artifacts.screenshots.map(({ path, sha256, bytes }) => {
+          writeFileSync(join(evidence, path), bytes, { mode: 0o600 });
+          return { path, sha256 };
+        });
+      }
+    }
+  } catch {
+    diagnostics.push('verification-setup-or-evidence-error');
+  } finally {
+    if (temp) {
+      try {
+        rmSync(temp, { recursive: true, force: true });
+      } catch {
+        diagnostics.push('private-output-cleanup-failed');
+      }
+    }
+  }
+
+  const exitCode = v1ExitCode(commands, diagnostics, chromium);
+  const packet = {
+    schemaVersion: 1, runId, slice: 'V1', source, jointAcceptance: 'pending',
+    result: exitCode === 0 ? 'passed' : 'failed',
+    mode: { sourceFixtures: 'development-only', model: 'disabled', database: 'native' },
+    runtime: { ...runtime, chromium: chromium ? [chromium] : [] },
+    contract, configuration, migrations,
+    requiredTests: registry.V1, requiredCases: requiredV1Cases, commands, screenshots, diagnostics,
+    authenticatedTrace: 'disabled',
+    limitations: ['Development sources only', 'Full V2 verification unavailable', 'Independent review and joint G1 acceptance pending'],
+  };
+  const write = (file: string, value: unknown) =>
+    writeFileSync(join(evidence, file), JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
+  write('commands.json', commands);
+  write('assertions.json', commands.flatMap(command => command.cases));
+  write('manifest.json', packet);
+  console.log('V1 verification ' + packet.result + '. Evidence: ' + relative(process.cwd(), evidence));
+  if (diagnostics.length) console.error('V1 diagnostics: ' + diagnostics.join(', '));
+  process.exitCode = exitCode;
+}
+
 const requested = process.argv[2];
 if (requested === 'live') {
   console.error(process.env.OPENAI_API_KEY
@@ -249,11 +425,13 @@ if (requested === 'live') {
 } else if (requested === 'inject') {
   console.error('FEATURE_NOT_IMPLEMENTED: Source injection begins with the source adapters.');
   process.exitCode = 1;
+} else if (requested === 'V1') {
+  verifyV1();
 } else if (requested !== 'V0') {
   const required = Object.hasOwn(registry, requested) ? registry[requested as keyof typeof registry] : undefined;
   const missing = required?.filter(file => !existsSync(file));
   if (missing?.length) console.error('Mandatory test files unavailable: ' + missing.join(', '));
-  console.error(required ? requested + ' verification is unavailable in the foundation slice.' : 'Usage: npm run verify:slice -- V0');
+  console.error(required ? requested + ' verification is unavailable in the foundation slice.' : 'Usage: npm run verify:slice -- <V0|V1>');
   process.exitCode = 1;
 } else {
   verifyV0();
