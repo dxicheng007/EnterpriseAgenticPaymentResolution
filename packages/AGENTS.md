@@ -17,4 +17,4 @@ Follow frozen [representation and identity](../docs/superpowers/plans/2026-11-08
 
 The [local demo response contracts](contracts/src/local-demo.ts) are browser-safe when imported directly. Use the contracts root for server-side canonical hashing.
 
-`CustomerActivation`, `ConnectionState`, and `ParentView` are deferred. Do not export placeholder or permissive versions. Resolve the exact contract with the responsible owner before consumers require it. See the [freeze deferral](../docs/superpowers/plans/2026-11-08-contract-freeze.md#foundation-scope-and-sequencing) and the [review and runtime vocabulary](../docs/superpowers/plans/2026-11-08-shared-contracts.md#review-and-runtime).
+The [v2 freeze addendum](../docs/superpowers/plans/2026-11-08-contract-freeze-v2-activation-shapes.md) defines the executable `CustomerActivation` and `ParentView` contracts. `ConnectionState` and the bootstrap assertion result/binding contract remain deferred. Resolve the exact contracts with the responsible owner before consumers require them.
