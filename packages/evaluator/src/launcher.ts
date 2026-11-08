@@ -5,7 +5,7 @@ import { runEvaluator } from './runner.js';
 
 const buildFiles = [
   './evaluator-runner.ts', './fixture-store.ts', './fixtures.ts', './jobs.ts', './launcher.ts', './protocol.ts',
-  './reference-model.ts', './registry.ts', './runner.ts', './subject-runner.ts', './verify.ts', '../../../package-lock.json',
+  './reference-model.ts', './registry.ts', './runner.ts', './subject-comparison.ts', './subject-runner.ts', './verify.ts', '../../../package-lock.json',
 ];
 
 export async function evaluatorBuildHash(): Promise<string> {

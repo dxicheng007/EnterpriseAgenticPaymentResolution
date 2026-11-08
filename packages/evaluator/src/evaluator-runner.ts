@@ -6,7 +6,8 @@ import { bindTruth } from './fixtures.js';
 import { readProtectedFixture } from './fixture-store.js';
 import { EvaluatorInputSchema, type EvaluatorInput } from './protocol.js';
 import { addReferenceCents } from './reference-model.js';
-import { compareSubjectBaseline, mandatoryChecks } from './verify.js';
+import { compareSubjectBaseline } from './subject-comparison.js';
+import { mandatoryChecks } from './verify.js';
 import { evaluatorBuildHash } from './launcher.js';
 
 async function evaluate(input: EvaluatorInput): Promise<VerificationReport> {
