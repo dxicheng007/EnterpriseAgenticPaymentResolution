@@ -33,7 +33,7 @@ This is stronger than repeatedly interpreting every incoming record: the valuabl
 - Autonomous product agents whose tasks, collaboration, tools, and findings are visible in the demo.
 - Strong deterministic financial tools and an easy review experience.
 - **Explicit approval for each customer, authorizing subsequent automatic sync within that customer's approved rules.** The user selected this v2 behavior over approving every sync batch.
-- TypeScript/Node.js, local execution, three developers with their own coding-agent teams, and a 2–3 day window.
+- TypeScript/Node.js with PostgreSQL, local execution, three developers with their own coding-agent teams, and a 2–3 day window.
 - Agents build the connection after exploration; ordinary operation must work without AI.
 
 ### Proposed implementation defaults
@@ -157,14 +157,14 @@ flowchart TB
 ### Local process boundaries
 
 - **Web:** React/Vite UI for discovery, review, activation, and connection monitoring.
-- **Control API:** Node/Fastify, model credentials, agent scheduler, source mocks, discovery/evidence database, compiler orchestration, and immutable artifact files.
-- **Runtime worker/API:** separate Node process with no model SDK dependency and no model credentials. Owns `runtime.sqlite`: customer activation state, inbox, checkpoints, receipts, and the simulated parent tables.
+- **Control API:** Node/Fastify, model credentials, agent scheduler, source mocks, the `control` PostgreSQL database for discovery/evidence metadata, compiler orchestration, and immutable artifact files.
+- **Runtime worker/API:** separate Node process with no model SDK dependency and no model credentials. Owns the `runtime` PostgreSQL database: customer activation state, inbox, checkpoints, receipts, and the simulated parent tables.
 - Control API invokes the worker's restricted control routes only for explicit reviewer actions. Product-agent tool registries do not expose activation, revocation, or parent writes.
 - Runtime accepts only registered artifact hashes and allowlisted source resources. Source URLs are operator-configured references, not agent-supplied arbitrary URLs. The registry directory is read-only to the worker.
 - Source mocks can live in the control API for the demo. “Disable AI” disables the model client/credentials, not the mock source server.
 - A single local startup command is a desired deliverable. No Kubernetes, cloud deployment, message broker, or separate vector database.
 
-Separate databases mean no claim of a cross-database atomic transaction. The runtime's activation/import/receipt transaction is authoritative. If the control API loses its response, it queries the worker by idempotency key before retrying and mirrors the returned status.
+One local PostgreSQL instance hosts two logical databases, `control` and `runtime`, with separate service roles and connection strings. Neither service role can connect to the other database. Separate databases mean no claim of a cross-database atomic transaction. The runtime's activation/import/receipt transaction is authoritative. If the control API loses its response, it queries the worker by idempotency key before retrying and mirrors the returned status.
 
 Runtime performs deterministic financial writes through its own service layer, not through model tools. Local service credentials and a trusted laptop are demo assumptions, not production isolation against a hostile local user.
 
@@ -320,7 +320,7 @@ Maintain two distinct positions:
 - **Capture cursor:** highest contiguous source page/batch durably stored in the inbox.
 - **Application state:** per-event outcome and the highest contiguous applied/explicitly resolved position, with counts of pending/quarantined gaps.
 
-Persist a fetched page and its capture cursor in the same transaction. Apply each customer transaction group, its target changes, receipt, idempotency records, and event outcome in one transaction in `runtime.sqlite`. Never advance capture before saving the events, and never report full application while quarantine gaps exist.
+Persist a fetched page and its capture cursor in the same transaction. Apply each customer transaction group, its target changes, receipt, idempotency records, and event outcome in one PostgreSQL transaction in the `runtime` database, using one checked-out connection. Never advance capture before saving the events, and never report full application while quarantine gaps exist.
 
 Rows may arrive twice; processing is at least once, while unique source transaction identities and transactional application prevent repeated financial effects in the simulator. The identity key excludes connector version, so upgrading does not turn historical events into new transactions.
 
@@ -438,11 +438,27 @@ Secrets are runtime references provisioned by the operator; agents cannot embed 
 
 ## 16. Stack and constraints
 
-Keep the previously proposed TypeScript stack: React/Vite, Fastify, Zod, SQLite, local evidence files, PDF.js for text PDFs, pdf-lib for synthetic documents, Vitest, and Playwright. The only significant runtime addition is a separate deterministic worker process and its persistent inbox/checkpoints.
+Use React/Vite, Fastify, Zod, **PostgreSQL**, local evidence files, PDF.js for text PDFs, pdf-lib for synthetic documents, Vitest, and Playwright. The separate deterministic worker persists its inbox, checkpoints, receipts, and parent records in PostgreSQL.
 
-Dependency versions, model ID, SQLite driver, and CSS components are builder choices pinned at setup. No new orchestration framework is required. Use shared types and runtime schemas across the control API, worker, and UI.
+Dependency versions, model ID, PostgreSQL driver/query layer, and CSS components are builder choices pinned at setup. No new orchestration framework is required. Use shared types and runtime schemas across the control API, worker, and UI.
 
-Use short transactions within each SQLite database, with one application service owning writes to each. The simulator can commit target updates and receipts atomically because they share `runtime.sqlite`; [SQLite documents its transaction guarantees](https://www.sqlite.org/transactional.html). Do not infer cross-database atomicity from WAL; [SQLite explicitly distinguishes that limitation](https://www.sqlite.org/wal.html).
+### PostgreSQL setup and data ownership
+
+- Run one local PostgreSQL service through Docker Compose, with a pinned supported stable image, health check, localhost-only port binding, and a persistent named volume. A local native PostgreSQL installation can supply equivalent connection strings.
+- Initialize `control` and `runtime` as separate databases. Use separate non-superuser application roles and a separate migration role; explicitly revoke default public connection access and grant only the intended service access. Agents receive neither database credentials nor arbitrary SQL tools.
+- Store connection strings in backend environment variables such as `CONTROL_DATABASE_URL` and `RUNTIME_DATABASE_URL`; keep them out of artifacts, prompts, browser bundles, and committed files.
+- Maintain versioned migrations and deterministic seed/reset scripts. Startup waits for database health and successful migrations before accepting runs. Reset targets only the explicitly named disposable demo databases; normal shutdown preserves data.
+- Keep structured financial records relational, with foreign keys, check constraints, and unique constraints for source identities, activation idempotency keys, and receipts. JSONB can hold structured evidence metadata and connector/event payloads; original PDFs/CSVs remain immutable local files.
+- Store money as integer minor units in `BIGINT` columns. Define explicit driver/JSON conversion: never silently coerce values beyond JavaScript's safe integer range. Validate the narrower supported application bounds before arithmetic or writes.
+- Each developer uses an isolated local database pair and credentials. Integration tests run against real disposable PostgreSQL databases with the same migrations and constraints as the demo.
+
+### Transactions and concurrent writes
+
+Use short transactions, with one application service owning writes to each database. The worker commits target changes, receipts, inbox outcomes, and application progress together in `runtime`; this relies on [PostgreSQL's transaction guarantees](https://www.postgresql.org/docs/current/tutorial-transactions.html). Fetch source pages and perform model calls outside database transactions. A transaction must stay on one checked-out database connection.
+
+Serialize application, pause/revocation, and version-switch operations for the same customer by locking its activation row with `SELECT ... FOR UPDATE`. Verify active status and activation epoch under that lock and hold it until commit. Revocation takes the same lock: work that committed before revocation remains valid, and no stale work can commit after revocation commits. Lock shared capture-checkpoint rows when advancing a source cursor, and acquire multiple locks in a consistent order. Unique constraints provide the final protection against duplicate source events and financial effects. Handle deadlocks or serialization failures with bounded whole-transaction retries; never retry a partially applied sequence outside its transaction. See [PostgreSQL row locking](https://www.postgresql.org/docs/current/explicit-locking.html).
+
+The control API's mirror of activation state is not authoritative and is not committed atomically with worker state. A lost activation response is resolved by querying the worker's receipt before retrying. No distributed transaction or cross-database commit is required for this prototype.
 
 Source validators must explicitly define required fields, types, enum policy, and additional-field behavior. [JSON Schema defaults do not make declared properties required or automatically forbid extra fields](https://json-schema.org/understanding-json-schema/reference/object). The demo uses strict reviewed source shapes; schema changes pause affected mappings until reviewed.
 
@@ -478,7 +494,7 @@ A labeled captured-run replay is a presentation fallback only. Acceptance requir
 | Owner | Responsibility | Suggested coding-agent assignments | Owned areas |
 |---|---|---|---|
 | **Developer A** | Discovery and connector construction | A1 source mocks/fixtures/ingestion; A2 investigator/coordinator workflow; A3 connector engineer prompts and live evaluation | `packages/sources`, `packages/discovery`, fixture generators |
-| **Developer B** | Deterministic connector platform | B1 shared schemas/compiler; B2 runtime inbox/checkpoints/transactions; B3 independent financial verifier and negative tests | `packages/contracts`, `packages/compiler`, `packages/runtime`, `packages/finance`, `packages/parent`, protected evaluator |
+| **Developer B** | Deterministic connector platform | B1 shared schemas/compiler; B2 PostgreSQL setup/migrations, runtime inbox/checkpoints/transactions; B3 independent financial verifier and negative tests | `packages/contracts`, `packages/compiler`, `packages/runtime`, `packages/finance`, `packages/parent`, protected evaluator |
 | **Developer C** | Review, activation, observability, demo | C1 discovery/artifact review; C2 runtime health/receipts; C3 browser flows and no-AI demo tests | `apps/web`, typed API client, `tests/e2e`, demo scripts |
 
 Each human owns integration and review of their agent team's work. Independent coding agents can work concurrently in separate worktrees/modules. Avoid concurrent edits to shared schemas or lockfiles. B owns shared contracts and runtime composition; A exposes source/discovery plugins; C consumes typed clients.
@@ -494,7 +510,7 @@ A can develop against fake compiler/verifier tools, B against fixture connector 
 | A2 | A | Evidence ingestion/retrieval and autonomous investigation | S0; A1 sample records |
 | A3 | A | Agent-built connector specification and focused repair loop | S0; compiler mock initially |
 | B1 | B | Compiler, mapping interpreter, financial checks, protected test harness | S0; hand-authored dev fixtures |
-| B2 | B | Worker, inbox, capture/apply state, idempotency, parent simulator | S0; compiled fixture initially |
+| B2 | B | Local PostgreSQL service, database roles/migrations, worker, inbox, capture/apply state, idempotency, parent simulator | S0; compiled fixture initially |
 | B3 | B | Customer activation, epochs, quarantine, artifact version checks | B1+B2 |
 | C1 | C | Artifact/customer review and explicit activation | S0; typed fixtures |
 | C2 | C | Agent timeline and deterministic connection monitor | S0; event/receipt fixtures |
@@ -524,7 +540,7 @@ flowchart LR
 ### Schedule and fallback scope
 
 - **First 60–90 minutes:** agree typed contracts, one worked connector fixture, source semantics, approval boundaries, and module ownership.
-- **Day 1:** A builds minimal discovery/connector output; B implements the minimal compiler/worker/activation path; C implements review and event views against mocks. Exit: one generated connector handles one post-activation record with AI disabled.
+- **Day 1:** A builds minimal discovery/connector output; B sets up PostgreSQL and implements the minimal compiler/worker/activation path; C implements review and event views against mocks. Exit: one generated connector handles one post-activation record with AI disabled.
 - **Day 2:** add the second source format, supported transaction relationships, bounded automatic sync, schema drift containment, replay/restart tests, and a complete rehearsal. Freeze features in the second half of the day.
 - **Optional Day 3:** demonstrate agent-assisted repair/reapproval, improve evidence navigation, run additional holdout variants, and rehearse on the laptop.
 
@@ -544,6 +560,8 @@ If behind, reduce source documents, customer count, supported amendment variants
 | Financial integrity | Exact expected balances; no unsupported monetary transaction or guessed allocation |
 | Replay/concurrent delivery | One economic effect per source transaction identity, across retries and connector versions |
 | Crash boundaries | Crash before commit has no target effect; after commit retry returns receipt; captured pending events survive |
+| PostgreSQL setup and persistence | Migrations/seed work on a fresh database pair; restart preserves state; application roles cannot access the other database |
+| Concurrent PostgreSQL transactions | Duplicate delivery, cursor advancement, application, and revocation races preserve uniqueness and ordering under row locks |
 | Snapshot-to-stream gap | Events arriving during approval are fetched after baseline watermark; none silently lost |
 | Company B multi-stream bootstrap | All baseline files/API snapshots match the manifest epoch; each stream resumes from its own cursor without omission or double import |
 | Semantic-feed ordering | Financial event requiring an unseen/changed contract revision is held even if it arrives before the metadata event |
