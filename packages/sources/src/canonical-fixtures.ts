@@ -101,7 +101,7 @@ export function fixtureA(seed: Id, instant: IsoInstant) {
     }
   }
   return {
-    accounts, ...context, records, initialRates:initialCents.map(decimalAmount),
+    accounts, ...context, records, initialCents, amendedCents, initialRates:initialCents.map(decimalAmount),
     amendedRate:decimalAmount(amendedCents), amendmentEffective:context.month(-1),
     events:[...records.map((record,index) => eventA({
       ...record, fields:fieldsA(record),

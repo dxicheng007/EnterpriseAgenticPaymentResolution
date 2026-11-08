@@ -4,7 +4,7 @@ import { pathToFileURL, fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import {
   BootstrapManifestSchema, UploadMetadataSchema, canonicalJson, hashBytes, hashCanonical, hashManifest,
-  TransactionCentsSchema, type BootstrapManifest, type Id, type IsoInstant, type ManifestFile,
+  IsoDateSchema, MoneyCentsSchema, TransactionCentsSchema, type BootstrapManifest, type Id, type IsoInstant, type ManifestFile,
   type RawSourceEvent, type UploadMetadata,
 } from '@eapr/contracts';
 import { companyA } from '../packages/sources/src/company-a.js';
@@ -97,7 +97,63 @@ async function writeTruth(input:{
     manifestId:manifest.id,manifestHash:manifest.hash,inputEvents,accounts,
     evidence:ordered(input.evidence,evidence=>evidence.fileId),
   };
-  await writeFile(input.path,canonicalJson({...preimage,hash:hashCanonical(preimage)}),{flag:'wx',mode:0o600});
+  const truth = {...preimage,hash:hashCanonical(preimage)};
+  await writeFile(input.path,canonicalJson(truth),{flag:'wx',mode:0o600});
+  return truth;
+}
+
+const currency = 'USD';
+const cadence = 'monthly';
+const anchorDay = 1;
+
+type SupportField = 'sourceAccountId'|'sellerEntityId'|'buyerId'|'legalName'|'contractId'|
+  'validFrom'|'validToExclusive'|'fixedMonthlyFeeCents'|'currency'|'cadence'|'anchorDay';
+type Support = {field:SupportField;fileId:Id;expectedLiteral:string};
+type Source = {companyId:Id;sourceRef:Id;sellerEntityId:Id};
+type Account = ReturnType<typeof fixtureA>['accounts'][number];
+
+function support(fileId:Id, expectedLiteral:string, ...fields:SupportField[]):Support[] {
+  return fields.map(field=>({field,fileId,expectedLiteral}));
+}
+
+function identityFact(source:Source, account:Account, fileId:Id, partyLine:string, legalNameLine:string) {
+  const {sellerEntityId} = source;
+  const {accountId:sourceAccountId,entityId:buyerId,displayName:legalName} = account;
+  return {
+    id:'identity:' + hashCanonical({...source,sourceAccountId}),
+    sourceAccountId,sellerEntityId,buyerId,legalName,
+    support:[...support(fileId,partyLine,'sourceAccountId','sellerEntityId','buyerId'),
+      ...support(fileId,legalNameLine,'legalName')],
+  };
+}
+
+function contractFact(source:Source, account:Account, start:string, end:string|null, fee:number, support:Support[]) {
+  const {sellerEntityId} = source;
+  const {accountId:sourceAccountId,contractId} = account;
+  const validFrom = IsoDateSchema.parse(start);
+  const validToExclusive = end === null ? null : IsoDateSchema.parse(end);
+  return {
+    id:'term:' + hashCanonical({...source,sourceAccountId,contractId,validFrom}),
+    sourceAccountId,sellerEntityId,contractId,validFrom,validToExclusive,
+    fixedMonthlyFeeCents:MoneyCentsSchema.parse(fee),currency,cadence,anchorDay,support,
+  };
+}
+
+async function writeEvidenceFacts(path:string, truth:Awaited<ReturnType<typeof writeTruth>>,
+  identities:ReturnType<typeof identityFact>[], contracts:ReturnType<typeof contractFact>[]) {
+  const {fixtureSetId,hash:producerTruthHash,generator,companyId,sourceRef,sellerEntityId,manifestId,manifestHash} = truth;
+  function orderedFacts<T extends {id:Id;support:Support[]}>(facts:T[]) {
+    return ordered(facts,fact=>fact.id).map(fact=>({...fact,support:ordered(fact.support,
+      ({field,fileId,expectedLiteral})=>canonicalJson([field,fileId,expectedLiteral]))}));
+  }
+  const preimage = {
+    schemaVersion:1,kind:'evidence-facts',fixtureSetId,producerFixtureSetVersion:'1',
+    producerTruthHash,generator,companyId,sourceRef,sellerEntityId,manifestId,manifestHash,
+    identities:orderedFacts(identities),contracts:orderedFacts(contracts),
+  };
+  const json = canonicalJson({...preimage,hash:hashCanonical(preimage)});
+  if (Buffer.byteLength(json,'utf8') > 10*1024*1024) throw new Error('Protected evidence fixture exceeds size limit');
+  await writeFile(path,json,{flag:'wx',mode:0o600});
 }
 
 export async function generateFixtures(input: {seed:Id; asOf:IsoInstant; visibleRoot:string; truthRoot:string}) {
@@ -110,7 +166,7 @@ export async function generateFixtures(input: {seed:Id; asOf:IsoInstant; visible
     if (served === 'fixtures/truth') disjoint(visible,servedRoot);
     else disjoint(truth,servedRoot);
   }
-  await Promise.all(['expected-a.json','expected-b.json'].map(name=>requireNewTruthFile(join(truth,name))));
+  await Promise.all(['expected-a.json','expected-b.json','evidence-a.json','evidence-b.json'].map(name=>requireNewTruthFile(join(truth,name))));
   const buildHash = await generatorBuildHash();
   const fixture = fixtureA(input.seed,input.asOf);
   await mkdir(visible,{recursive:true,mode:0o700});
@@ -129,20 +185,50 @@ export async function generateFixtures(input: {seed:Id; asOf:IsoInstant; visible
     files.push({fileId,documentId,documentVersion:1,kind,sha256});
     uploads.push({metadata,path:name});
     expectedEvidence.push({fileId,originalSha256:sha256,text});
+    return fileId;
   }
-  for (const [index,account] of fixture.accounts.entries()) {
-    const title = 'Fixed monthly agreement ' + account.contractId;
-    const lines = [title, 'Seller seller-a; buyer ' + account.entityId + '; account ' + account.accountId,
-      'Legal name ' + account.displayName, 'Monthly fee USD ' + fixture.initialRates[index],
-      'Effective ' + fixture.month(-3) + '; monthly invoice anchor day 1.'];
-    await emit('contract-' + (index+1) + '.pdf',await textPdf(lines,fixture.asOf,title),'contract_pdf',lines.join(' '));
-  }
+  const {companyId,sourceRef,sellerEntityId} = companyA;
+  const source = {companyId,sourceRef,sellerEntityId};
+  const identities: ReturnType<typeof identityFact>[] = [];
+  const contracts: ReturnType<typeof contractFact>[] = [];
+  const initialEffective = fixture.month(-3);
   const amended = fixture.accounts[1]!;
-  const amendment = ['Executed amendment to ' + amended.contractId,
-    'Seller seller-a and buyer ' + amended.entityId + ' agree.',
-    'Effective ' + fixture.amendmentEffective + ', replace monthly fee with USD ' + fixture.amendedRate + '.',
-    'Signed by both parties.'];
-  await emit('amendment.pdf', await textPdf(amendment,fixture.asOf,amendment[0]!),'amendment_pdf',amendment.join(' '));
+  const amendmentTitle = 'Executed amendment to ' + amended.contractId;
+  const amendmentFee = 'Effective ' + fixture.amendmentEffective + ', replace ' + cadence + ' fee with ' +
+    currency + ' ' + fixture.amendedRate + '.';
+  const amendment = [amendmentTitle,'Seller ' + sellerEntityId + ' and buyer ' + amended.entityId + ' agree.',
+    amendmentFee,'Signed by both parties.'];
+  const initialAgreements = fixture.accounts.map((account,index)=>{
+    const title = 'Fixed monthly agreement ' + account.contractId;
+    const parties = 'Seller ' + sellerEntityId + '; buyer ' + account.entityId + '; account ' + account.accountId;
+    const legalName = 'Legal name ' + account.displayName;
+    const fee = 'Monthly fee ' + currency + ' ' + fixture.initialRates[index];
+    const effective = 'Effective ' + initialEffective + '; ' + cadence + ' invoice anchor day ' + anchorDay + '.';
+    return {account,title,parties,legalName,fee,effective,fixedMonthlyFeeCents:fixture.initialCents[index]!};
+  });
+  let amendedAgreement: {initial:ReturnType<typeof contractFact>; inherited:Support[]}|undefined;
+  for (const [index,agreement] of initialAgreements.entries()) {
+    const {account,title,parties,legalName,fee,effective,fixedMonthlyFeeCents} = agreement;
+    const lines = [title,parties,legalName,fee,effective];
+    const fileId = await emit('contract-' + (index+1) + '.pdf',
+      await textPdf(lines,fixture.asOf,title),'contract_pdf',lines.join(' '));
+    identities.push(identityFact(source,account,fileId,parties,legalName));
+    const inherited = [...support(fileId,parties,'sourceAccountId','sellerEntityId'),
+      ...support(fileId,effective,'cadence','anchorDay')];
+    const isAmended = account === amended;
+    const initial = contractFact(source,account,initialEffective,isAmended ? fixture.amendmentEffective : null,
+      fixedMonthlyFeeCents,[...inherited,...support(fileId,title,'contractId'),...support(fileId,fee,'fixedMonthlyFeeCents','currency'),
+        ...support(fileId,effective,'validFrom')]);
+    contracts.push(initial);
+    if (isAmended) amendedAgreement = {initial,inherited};
+  }
+  if (!amendedAgreement) throw new Error('Protected amendment agreement missing');
+  const amendmentFileId = await emit('amendment.pdf',await textPdf(amendment,fixture.asOf,amendmentTitle),
+    'amendment_pdf',amendment.join(' '));
+  amendedAgreement.initial.support.push(...support(amendmentFileId,amendmentFee,'validToExclusive'));
+  contracts.push(contractFact(source,amended,fixture.amendmentEffective,null,fixture.amendedCents,
+    [...amendedAgreement.inherited,...support(amendmentFileId,amendmentTitle,'contractId'),
+      ...support(amendmentFileId,amendmentFee,'validFrom','fixedMonthlyFeeCents','currency')]));
   const body = 'Seller seller-a reports separate customer accounts: ' +
     fixture.accounts.map(account => account.accountId + ' belongs to ' + account.entityId).join('; ') + '. Currency USD.';
   await emit('account-directory.json',Buffer.from(canonicalJson({messageId:'msg-a-' + fixture.tag,body})),'email_json',body);
@@ -177,11 +263,12 @@ export async function generateFixtures(input: {seed:Id; asOf:IsoInstant; visible
   for (const [name,value] of Object.entries(jsonFiles)) {
     await writeFile(join(visible,name),canonicalJson(value),{flag:'wx'});
   }
-  await writeTruth({
+  const financialTruth = await writeTruth({
     path:join(truth,'expected-a.json'),company:'a',seed:input.seed,tag:fixture.tag,buildHash,
     sellerEntityId:companyA.sellerEntityId,manifest:pinned,events:fixture.events,records:fixture.records,
     evidence:expectedEvidence,anchoredAccount:fixture.accounts[0]!.accountId,
   });
+  await writeEvidenceFacts(join(truth,'evidence-a.json'),financialTruth,identities,contracts);
   const b = await writeCompanyB(visible,truth,input.seed,input.asOf,buildHash);
   return {
     manifestIds:[pinned.id,b.id], manifestHashes:[pinned.hash,b.hash], fileCount:files.length+b.fileCount,eventCount:fixture.events.length+b.eventCount,
@@ -210,20 +297,33 @@ async function writeCompanyB(visible:string,truth:string,seed:Id,asOf:IsoInstant
     uploads.push({metadata,path:name});
     if (text !== undefined) expectedEvidence.push({fileId,originalSha256:sha256,text});
     await writeFile(join(visible,name),bytes,{flag:'wx'});
+    return fileId;
   }
   for (const [index,batch] of fixture.files.entries()) {
     const sequence = index + 1;
     await emit('b-batch-' + sequence + '.csv',encodeBatch(batch),'event_csv',
       {batchId:'batch-b-' + fixture.tag + '-' + sequence,sequence,streamId:'b-files'});
   }
+  const {companyId,sourceRef,sellerEntityId} = companyB;
+  const source = {companyId,sourceRef,sellerEntityId};
+  const identities: ReturnType<typeof identityFact>[] = [];
+  const contracts: ReturnType<typeof contractFact>[] = [];
+  const validFrom = fixture.month(-3);
   for (const [index,account] of fixture.accounts.entries()) {
     const title = 'Fixed monthly agreement ' + account.contractId;
-    const lines = [title,'Seller seller-b; buyer ' + account.entityId + '; account ' + account.accountId,
-      'Legal name ' + account.displayName,
-      'Monthly fee USD ' + (fixture.fees[index]!/100).toFixed(2) + ' effective ' + fixture.month(-3) + '.',
-      'Monthly invoice anchor day 1.'];
-    await emit('b-contract-' + (index+1) + '.pdf',await textPdf(lines,fixture.asOf,title),
+    const parties = 'Seller ' + sellerEntityId + '; buyer ' + account.entityId + '; account ' + account.accountId;
+    const legalName = 'Legal name ' + account.displayName;
+    const fixedMonthlyFeeCents = fixture.fees[index]!;
+    const fee = 'Monthly fee ' + currency + ' ' + (fixedMonthlyFeeCents/100).toFixed(2) + ' effective ' + validFrom + '.';
+    const schedule = 'Monthly invoice anchor day ' + anchorDay + '.';
+    const lines = [title,parties,legalName,fee,schedule];
+    const fileId = await emit('b-contract-' + (index+1) + '.pdf',await textPdf(lines,fixture.asOf,title),
       'contract_pdf',undefined,lines.join(' '));
+    identities.push(identityFact(source,account,fileId,parties,legalName));
+    contracts.push(contractFact(source,account,validFrom,null,fixedMonthlyFeeCents,[
+      ...support(fileId,title,'contractId'),...support(fileId,parties,'sourceAccountId','sellerEntityId'),
+      ...support(fileId,fee,'fixedMonthlyFeeCents','currency','validFrom'),...support(fileId,schedule,'cadence','anchorDay'),
+    ]));
   }
   const body = 'Wire receipt ' + fixture.ambiguous.recordId + ', USD 300.00; client code ' +
     fixture.ambiguous.rawIdentity.sourceAccountId + '. Buyer and invoice reference absent.';
@@ -259,10 +359,11 @@ async function writeCompanyB(visible:string,truth:string,seed:Id,asOf:IsoInstant
   for (const [name,value] of Object.entries(jsonFiles)) {
     await writeFile(join(visible,name),canonicalJson(value),{flag:'wx'});
   }
-  await writeTruth({
+  const financialTruth = await writeTruth({
     path:join(truth,'expected-b.json'),company:'b',seed,tag:fixture.tag,buildHash,
     sellerEntityId:companyB.sellerEntityId,manifest:pinned,events,records:fixture.records,evidence:expectedEvidence,
   });
+  await writeEvidenceFacts(join(truth,'evidence-b.json'),financialTruth,identities,contracts);
   return {
     id:pinned.id,hash:pinned.hash,fileCount:files.length,eventCount:events.length,
     paths:[...uploads.map(upload=>upload.path),...Object.keys(jsonFiles),...apiOriginals.map(item=>item.path)],

@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, expect, it } from 'vitest';
@@ -177,4 +177,81 @@ it('generator_truth_no_subject_imports',async ()=>{
   for (const path of ['scripts/generate-fixtures.ts','packages/sources/src/canonical-fixtures.ts']) {
     expect(await readFile(path,'utf8')).not.toMatch(/from\s+['"][^'"]*(?:evaluator|compiler|finance|runtime)(?:[/.'"])/);
   }
+});
+
+it('writes deterministic private identity and contract facts bound to freshly generated v1 truth',async ()=>{
+  const repeated = await generate('evidence-repeat');
+  for (const company of ['a','b'] as const) {
+    const name = 'evidence-' + company + '.json';
+    expect(await readdir(original.privateRoot)).toContain(name);
+    const path = join(original.privateRoot,name);
+    const json = await readFile(path,'utf8');
+    const {hash,identities,contracts,...metadata} = JSON.parse(json);
+    const {truth,events,accounts} = await readCompany(original,company);
+    const {fixtureSetId,generator,companyId,sourceRef,sellerEntityId,manifestId,manifestHash} = truth;
+    expect(metadata).toEqual({schemaVersion:1,kind:'evidence-facts',fixtureSetId,producerFixtureSetVersion:'1',
+      producerTruthHash:truth.hash,generator,companyId,sourceRef,sellerEntityId,manifestId,manifestHash});
+    expect(hash).toBe(hashCanonical({...metadata,identities,contracts}));
+    expect(json).toBe(canonicalJson({...metadata,identities,contracts,hash}));
+    expect(json).toBe(await readFile(join(repeated.privateRoot,name),'utf8'));
+    expect((await lstat(path)).mode & 0o777).toBe(0o600);
+    expect(original.summary.visiblePaths).not.toContain(name);
+    expect(identities.map((fact:{sourceAccountId:string})=>fact.sourceAccountId).sort())
+      .toEqual(accounts.map(account=>account.accountId).sort());
+    const second = identities.find((fact:{sourceAccountId:string})=>fact.sourceAccountId === accounts[1]!.accountId);
+    const third = identities.find((fact:{sourceAccountId:string})=>fact.sourceAccountId === accounts[2]!.accountId);
+    expect(second.legalName).toBe(third.legalName);
+    expect(second.buyerId).not.toBe(third.buyerId);
+    const unknown = events.find(event=>event.recordId.startsWith('pay-b:unresolved-'));
+    if (unknown) expect(contracts.map((fact:{sourceAccountId:string})=>fact.sourceAccountId))
+      .not.toContain(unknown.rawIdentity.sourceAccountId);
+
+    for (const facts of [identities,contracts]) {
+      const ids = facts.map((fact:{id:string})=>fact.id);
+      expect(ids).toEqual([...new Set(ids)].sort());
+      for (const fact of facts) {
+        const scope = {companyId,sourceRef,sellerEntityId,sourceAccountId:fact.sourceAccountId};
+        expect(fact.sellerEntityId).toBe(sellerEntityId);
+        expect(fact.id).toBe(fact.contractId
+          ? 'term:' + hashCanonical({...scope,contractId:fact.contractId,validFrom:fact.validFrom})
+          : 'identity:' + hashCanonical(scope));
+        const keys = fact.support.map(({field,fileId,expectedLiteral}:{field:string;fileId:string;expectedLiteral:string})=>
+          canonicalJson([field,fileId,expectedLiteral]));
+        expect(keys).toEqual([...new Set(keys)].sort());
+        for (const {fileId,expectedLiteral} of fact.support) {
+          expect(truth.evidence.find(file=>file.fileId === fileId)?.text).toContain(expectedLiteral);
+        }
+        expect(fact.support.map(({field}:{field:string})=>field)).toEqual(fact.contractId
+          ? ['anchorDay','cadence','contractId','currency','fixedMonthlyFeeCents','sellerEntityId','sourceAccountId',
+            'validFrom',...(fact.validToExclusive === null ? [] : ['validToExclusive'])]
+          : ['buyerId','legalName','sellerEntityId','sourceAccountId']);
+      }
+    }
+    expect(contracts).toHaveLength(company === 'a' ? 4 : 3);
+    const first = contracts.find((fact:{sourceAccountId:string})=>fact.sourceAccountId === accounts[0]!.accountId);
+    expect(first).toMatchObject({validFrom:'2026-08-01',validToExclusive:null,fixedMonthlyFeeCents:300000,
+      currency:'USD',cadence:'monthly',anchorDay:1});
+    if (company === 'a') {
+      const terms = contracts.filter((fact:{sourceAccountId:string})=>fact.sourceAccountId === accounts[1]!.accountId)
+        .sort((a:{validFrom:string},b:{validFrom:string})=>a.validFrom < b.validFrom ? -1 : 1);
+      const initialFee = 170000 + parseInt(hashCanonical(seed).slice(0,2),16)*100;
+      expect(terms).toMatchObject([
+        {validFrom:'2026-08-01',validToExclusive:'2026-10-01',fixedMonthlyFeeCents:initialFee},
+        {validFrom:'2026-10-01',validToExclusive:null,fixedMonthlyFeeCents:initialFee + 20000},
+      ]);
+      expect(terms[0].support.find(({field}:{field:string})=>field === 'validToExclusive'))
+        .toEqual({...terms[1].support.find(({field}:{field:string})=>field === 'validFrom'),field:'validToExclusive'});
+    }
+  }
+});
+
+it('preserves a pre-existing evidence companion before writing fixture outputs',async ()=>{
+  const truthRoot = join(root,'existing-companion');
+  const visibleRoot = join(root,'unused-visible');
+  await mkdir(truthRoot);
+  const path = join(truthRoot,'evidence-b.json');
+  await writeFile(path,'previous private data');
+  await expect(generateFixtures({seed,asOf,visibleRoot,truthRoot})).rejects.toThrow('Protected fixture output already exists');
+  await expect(lstat(visibleRoot)).rejects.toMatchObject({code:'ENOENT'});
+  expect(await readFile(path,'utf8')).toBe('previous private data');
 });
