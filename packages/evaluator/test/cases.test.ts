@@ -104,7 +104,7 @@ test('changed_case_code_changes_build_hash', async () => {
     '../../sources/src/company-a.ts', '../../sources/src/company-b.ts', '../../sources/src/errors.ts', '../../sources/src/records.ts',
   ];
   const now = await evaluatorBuildHash();
-  const paths = ['./capture-boundary.ts', './case-recipes.ts', './cases.ts', oldPaths[0], './evidence-fixtures.ts',
+  const paths = ['./capture-boundary.ts', './case-recipes.ts', './cases.ts', oldPaths[0], './evidence-fixtures.ts', './evidence-support.ts',
     ...oldPaths.slice(1, -1), ...newDependencies, oldPaths.at(-1)!];
   expect(now).toBe(hashCanonical(await parts(paths)));
   expect(now).not.toBe(oldHash);
