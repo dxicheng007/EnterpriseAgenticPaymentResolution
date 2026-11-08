@@ -98,8 +98,15 @@ test('changed_case_code_changes_build_hash', async () => {
     name, hash: hashBytes(await readFile(new URL(name, root))),
   })));
   const oldHash = hashCanonical(await parts(oldPaths));
+  const newDependencies = [
+    '../../evidence/src/extract.ts', '../../evidence/src/index.ts', '../../evidence/src/locate.ts',
+    '../../evidence/src/search.ts', '../../evidence/src/store.ts',
+    '../../sources/src/company-a.ts', '../../sources/src/company-b.ts', '../../sources/src/errors.ts', '../../sources/src/records.ts',
+  ];
   const now = await evaluatorBuildHash();
-  expect(now).toBe(hashCanonical(await parts(['./capture-boundary.ts', './case-recipes.ts', './cases.ts', ...oldPaths])));
+  const paths = ['./capture-boundary.ts', './case-recipes.ts', './cases.ts', oldPaths[0], './evidence-fixtures.ts',
+    ...oldPaths.slice(1, -1), ...newDependencies, oldPaths.at(-1)!];
+  expect(now).toBe(hashCanonical(await parts(paths)));
   expect(now).not.toBe(oldHash);
 });
 

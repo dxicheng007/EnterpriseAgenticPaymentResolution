@@ -5,6 +5,7 @@ import {
   HashSchema, IdSchema, RawSourceEventSchema, SourceSnapshotSchema, canonicalJson, hashCanonical, strict,
   type BootstrapManifest, type RawSourceEvent, type SourceSnapshot,
 } from '@eapr/contracts';
+import type { EvidenceFixtureInput } from './evidence-fixtures.js';
 import { decodeTruth, verifyTruthMembers } from './fixtures.js';
 
 const protectedRoot = new URL('../../../.local/protected-evaluator/', import.meta.url);
@@ -56,13 +57,22 @@ export async function pinProtectedFixture(
   root: URL = protectedRoot,
 ) {
   const truth = decodeTruth(input.truthJson);
+  if (truth.fixtureSetVersion === '2') throw new Error('Protected fixture invalid');
   const snapshot = SourceSnapshotSchema.parse(input.snapshot);
   const events = RawSourceEventSchema.array().parse(input.events).sort((a, b) => a.id < b.id ? -1 : 1);
   verifyTruthMembers(truth, input.manifest, snapshot, events);
   verifyCaptureBinding(input.manifest, snapshot);
   const pin = { fixtureSetId: truth.fixtureSetId, fixtureSetVersion: truth.fixtureSetVersion, hash: truth.hash };
-  const target = fixturePath(root, pin.fixtureSetId, pin.fixtureSetVersion);
   const bytes = canonicalJson({ pin, truthJson: canonicalJson(truth), snapshot, events });
+  await publishProtectedPin(root, pin, bytes);
+  return { fixtureSetId: truth.fixtureSetId, fixtureSetVersion: truth.fixtureSetVersion,
+    purpose: truth.purpose, snapshotHash: snapshot.contentHash };
+}
+
+async function publishProtectedPin(
+  root: URL, pin: { fixtureSetId: string; fixtureSetVersion: string }, bytes: string,
+) {
+  const target = fixturePath(root, pin.fixtureSetId, pin.fixtureSetVersion);
   if (Buffer.byteLength(bytes) > maxBytes) throw new Error('Protected fixture invalid');
   await mkdir(root, { mode: 0o700, recursive: true });
   const temp = new URL('.' + randomUUID(), root);
@@ -75,18 +85,32 @@ export async function pinProtectedFixture(
   } finally {
     await unlink(temp);
   }
-  return { fixtureSetId: truth.fixtureSetId, fixtureSetVersion: truth.fixtureSetVersion,
-    purpose: truth.purpose, snapshotHash: snapshot.contentHash };
+}
+
+export async function pinProtectedEvidenceFixture(input: EvidenceFixtureInput, root: URL = protectedRoot) {
+  const { prepareProtectedEvidenceBundle } = await import('./evidence-fixtures.js');
+  const { pin, bytes, purpose, snapshotHash } = await prepareProtectedEvidenceBundle(input);
+  await publishProtectedPin(root, pin, bytes);
+  return { fixtureSetId: pin.fixtureSetId, fixtureSetVersion: pin.fixtureSetVersion, purpose, snapshotHash };
 }
 
 export async function readProtectedFixture(id: string, version: string, manifest: BootstrapManifest) {
   try {
-    const bundle = bundleSchema.parse(JSON.parse(await readBounded(fixturePath(protectedRoot, id, version))));
+    const text = await readBounded(fixturePath(protectedRoot, id, version));
+    const input: unknown = JSON.parse(text);
+    if (input && typeof input === 'object' && Object.hasOwn(input, 'schemaVersion')) {
+      const { decodeProtectedEvidenceBundle } = await import('./evidence-fixtures.js');
+      const result = await decodeProtectedEvidenceBundle(text, manifest);
+      if (result.truth.fixtureSetId !== id || result.truth.fixtureSetVersion !== version) throw new Error();
+      return result;
+    }
+    if (version === '2') throw new Error();
+    const bundle = bundleSchema.parse(input);
     const truth = decodeTruth(bundle.truthJson, bundle.pin);
     if (truth.fixtureSetId !== id || truth.fixtureSetVersion !== version) throw new Error();
     verifyTruthMembers(truth, manifest, bundle.snapshot, bundle.events);
     verifyCaptureBinding(manifest, bundle.snapshot);
-    return { truth, snapshot: bundle.snapshot, events: bundle.events };
+    return { truth, snapshot: bundle.snapshot, events: bundle.events, evidence: undefined };
   } catch {
     throw new Error('Protected fixture invalid');
   }
