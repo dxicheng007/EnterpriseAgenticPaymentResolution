@@ -2,7 +2,7 @@
 
 This checkpoint publishes completed local work, preserves separately committed candidates, and records remaining work. It is not acceptance of the complete demo. Machine checks, independent Astra review, and joint user acceptance remain distinct.
 
-**Latest:** the combined V2 gate passed on `e34a0f6` (21 commands, 94 assertions, ten safe screenshots). Guided preview is live; terminology is being revised after further user feedback. Discovery activity reads are accepted. Durable agent lifecycle and separate bootstrap prerequisites remain in progress. See [the full V2 checkpoint](#full-v2-checkpoint-and-current-feedback).
+**Latest:** reviewed integration `8962292` clarifies other-account records, investigation records, and the amount still owed after proposed import. Typecheck and 238 unit tests pass. Separate bootstrap result schemas are accepted. The full combined V2 gate also passes on `8962292`: 21 commands, 94 assertions and ten safe screenshots. Discovery lifecycle, source validation and bootstrap planning remain in progress. Joint user acceptance is pending. See [the terminology checkpoint](#terminology-and-bootstrap-contract-checkpoint).
 
 ## Published checkpoint (historical)
 
@@ -115,3 +115,16 @@ The user still found “unsupported rows” and “projected balance” unclear.
 The separate bootstrap [proposal](handoffs/v3-bootstrap-verification-proposal.md), [handoffs](handoffs/v3-bootstrap-handoffs.md), [initial review](reviews/v3-bootstrap-architecture-independent-review.md) and [fix review](reviews/v3-bootstrap-architecture-fix-review.md) freeze prerequisite direction, not activation readiness. The [S0 contract brief](handoffs/b-bootstrap-contracts.md) is assigned; its implementation requires its own review. Current exact-subject financial evidence remains insufficient for bootstrap until the separate checker/registry and financial bridge exist.
 
 The durable discovery [lifecycle handoff](handoffs/v4-lifecycle-handoffs.md) passed [architecture fix review](reviews/v4-lifecycle-fix-review.md). L1 repository/supervisor implementation is assigned; production remains unconfigured, and scripted clients are test-only. The [read-only source validator](handoffs/b-discovery-capture-read.md) is a separate L2 prerequisite. Root reserved control 004 for discovery and control 005 for the later bootstrap registry; no out-of-order migration insertion is permitted. Source validator, HTTP composition, real tools, monitor and provider execution retain their own gates.
+
+
+## Terminology and bootstrap contract checkpoint
+
+The user-facing terminology candidate `855f1b0` passed [independent review](reviews/preview-terminology-independent-review.md) and was integrated at `8962292`. The [builder report](handoffs/preview-terminology-report.md) records the exact display and browser checks. The live demo now distinguishes **Other accounts needing connectors** from **Records needing investigation**, while preserving the underlying held records and diagnostics. A has 19 other-account events; B has 18 other-account events and one unresolved payment. The conservative grouping never treats mixed, ambiguous or selected-customer failures as safely unrelated.
+
+**Amount still owed after proposed import** is the server-calculated unpaid invoice amount at the preview cutoff, after allocated payments and credits. A's $800 represents $9,000 invoiced less $8,000 allocated payments and $200 allocated credits. Unallocated funds do not lower it. **Empty demo target before import** explains the parent fixture's initial $0 without implying that the acquired customer owed nothing. Preview still performs zero parent writes. Root inspected both live company previews after integration; this is a display smoke, not joint acceptance.
+
+Bootstrap contract candidate `a49a8cf` passed [independent review](reviews/b-bootstrap-contracts-independent-review.md) and was integrated at `210bc98`. Its [builder report](handoffs/b-bootstrap-contracts-report.md) and [freeze](../../superpowers/plans/2026-11-08-contract-freeze-v3-bootstrap-verification.md) define separate strict result schemas, coverage and hashing. Parsing a result establishes its shape, not that the checks ran or that activation is authorized. Existing financial report and bundle hashes remain unchanged.
+
+On combined `8962292`, root typecheck and all 238 unit tests passed. The pure bootstrap planner is under fresh review, durable discovery lifecycle and read-only capture validation are being implemented separately. Production live discovery, activation, persisted parent import and automatic sync are still pending.
+
+The fresh full V2 gate on clean `89622924c1c6ae1b34f56fd0908b8c8f30c0a328` passed **21 commands and 94 named assertions**, retaining ten hash-verified PNGs and no diagnostics. Packet: `.evidence/89622924c1c6ae1b34f56fd0908b8c8f30c0a328/V2/2026-11-09T00-36-07-517Z-79044/`. Its safe 15-file inventory was copied to user-facing outputs. This verifies the combined preview and evaluator paths; bootstrap execution and durable discovery still require their own later checks.
