@@ -16,10 +16,14 @@ export function createActivationDelivery({ worker, publisher, repository, public
     const { idempotencyKey, reviewPackageId } = intent.request;
     const pending = { state: 'pending' as const, reviewPackageId, idempotencyKey };
     const observe = async (result: ReceiptResponse) => {
-      await repository.recordWorkerReceiptObservation({
-        intentId, expectedRequestHash, expectedBundleHash, receipt: result.receipt,
-      });
-      return result;
+      try {
+        await repository.recordWorkerReceiptObservation({
+          intentId, expectedRequestHash, expectedBundleHash, receipt: result.receipt,
+        });
+        return result;
+      } catch {
+        return pending;
+      }
     };
 
     const recovered = await worker.receipt(idempotencyKey, {

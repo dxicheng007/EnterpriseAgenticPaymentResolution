@@ -821,7 +821,12 @@ test('activates one approved customer from real A and B proofs and recovers the 
         const owner = createControlDb({ connectionString: pair.control.migrationUrl });
         try {
           await owner.query('ALTER TABLE activation_receipt_observations ADD CONSTRAINT deny_test_mirror CHECK (false) NOT VALID');
-          expect((await post(bRoute, bApproval)).status).toBe(503);
+          const pendingMirror = await post(bRoute, bApproval);
+          expect(pendingMirror.status).toBe(202);
+          expect(await pendingMirror.json()).toEqual({
+            state: 'pending', reviewPackageId: bApproval.reviewPackageId, idempotencyKey: bApproval.idempotencyKey,
+          });
+          expect(await repository.readIntentByKey(bApproval.idempotencyKey)).toEqual(bIntent);
           expect(await repository.readWorkerReceiptObservation(bIntent.intentId)).toBeNull();
           expect((await state(b.accountId)).initialReceipt).toEqual(lostReceipt?.receipt);
           await owner.query('ALTER TABLE activation_receipt_observations DROP CONSTRAINT deny_test_mirror');

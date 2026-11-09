@@ -1,6 +1,9 @@
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { expect, it } from 'vitest';
+import { canonicalJson, hashCanonical } from '@eapr/contracts';
+import { createActivationDelivery } from '../../apps/control/src/activation-delivery.js';
+import { parentStorageFixture } from '../fixtures/parent-storage.js';
 import { validateActivationBundle } from '../../apps/worker/src/activation-validation.js';
 import { createSourceSemanticsClient } from '../../apps/worker/src/source-semantics-client.js';
 
@@ -60,4 +63,57 @@ it('bounds source responses, preserves upstream denial status, and forbids redir
     server.close();
     await once(server, 'close');
   }
+});
+
+it('keeps a newly applied receipt pending until an authoritative replay can be mirrored', async () => {
+  const { bundle, request, reviewer, receipt } = parentStorageFixture();
+  const { idempotencyKey, reviewPackageId } = request;
+  const intent = {
+    intentId: 'committed-intent', bundle, request, reviewer,
+    requestHash: hashCanonical(request), bundleHash: bundle.hash, bundleBytes: Buffer.from(canonicalJson(bundle)),
+    sourceRef: bundle.manifest.sourceRef, accountId: receipt.scope.accountId, committedAt: receipt.committedAt,
+  };
+  const dispatch = { bundleHash: bundle.hash, idempotencyKey };
+  const calls: string[] = [];
+  let applied = false;
+  let mirrorAvailable = false;
+  const deliver = createActivationDelivery({
+    worker: {
+      async receipt(key, query) {
+        calls.push('lookup');
+        expect(key).toBe(idempotencyKey);
+        expect(query).toEqual({ scope: receipt.scope, expectedRequestHash: intent.requestHash, expectedBundleHash: bundle.hash });
+        return applied ? { status: 'receipt', result: { receipt, replayed: true } } : { status: 'absent' };
+      },
+      async activate(input) {
+        calls.push('apply');
+        expect(input).toEqual(dispatch);
+        applied = true;
+        return { status: 'receipt', result: { receipt, replayed: false } };
+      },
+    },
+    publisher: {
+      async publishIntent(intentId) {
+        calls.push('publish');
+        expect(intentId).toBe(intent.intentId);
+        return dispatch;
+      },
+    },
+    repository: {
+      async recordWorkerReceiptObservation(input) {
+        calls.push('mirror');
+        expect(input).toEqual({
+          intentId: intent.intentId, expectedRequestHash: intent.requestHash, expectedBundleHash: bundle.hash, receipt,
+        });
+        if (!mirrorAvailable) throw new Error('Observation storage unavailable');
+        return { receipt, observedAt: receipt.committedAt };
+      },
+    },
+    publicationFailed: () => { throw new Error('Unexpected publication failure'); },
+  });
+  await expect(deliver(intent)).resolves.toEqual({ state: 'pending', reviewPackageId, idempotencyKey });
+  expect(calls).toEqual(['lookup', 'publish', 'apply', 'mirror']);
+  mirrorAvailable = true;
+  await expect(deliver(intent)).resolves.toEqual({ receipt, replayed: true });
+  expect(calls).toEqual(['lookup', 'publish', 'apply', 'mirror', 'lookup', 'mirror']);
 });
