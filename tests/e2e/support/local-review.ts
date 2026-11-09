@@ -34,7 +34,7 @@ export async function openLocalReview(
   const originalsRoot = join(root, 'originals');
   const evidenceV2 = verification === 'evidence-v2';
   const fixtures = verification ? browserVerificationFixtures({
-    root, originalTruthRoot: truthRoot, mode: evidenceV2 ? 'evidence-v2' : 'expected-v1',
+    root, originalTruthRoot: truthRoot, mode: 'evidence-v2',
   }) : undefined;
   const inputRoots = [truthRoot, visibleRoot, originalsRoot];
   let originalFingerprints: string[] | undefined;
@@ -184,10 +184,12 @@ export async function openLocalReview(
             throw new Error('Browser could not prepare private boundary probes');
           }
         }
+        const registryRoot = join(root, 'artifacts');
         return (await createLocalComposition(dependencies, {
           ...options,
           verification: {
-            pins, registryRoot: join(root, 'artifacts'),
+            pins, registryRoot,
+            roots: { evidencePinRoot: fileURLToPath(fixedProtectedRoot), servedRoots: [visibleRoot, originalsRoot, registryRoot] },
             expectedMigrations: migrationIdentities(readMigrationCatalog().control),
           },
         })).featurePlugins;
