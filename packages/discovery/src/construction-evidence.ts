@@ -2,13 +2,21 @@ import {
   hashCanonical, type DiscoveryBinding, type DiscoveryReadToolFailure, type QuerySnapshotInput, type SourceReadGrant,
 } from '../../contracts/src/index.js';
 import type { PublishFindingInput } from '../../contracts/src/discovery-construction-tools.js';
-import { parseReadResult, prepareRead, type DiscoveryReadTools } from './read-tools.js';
+import {
+  parseReadResult, prepareDocumentAssociations, prepareRead, type DiscoveryReadTools, type DocumentAssociations,
+} from './read-tools.js';
 import type { CaptureFacts } from './tasks.js';
 
 export type PreparedFindingEvidence = {
   facts: CaptureFacts;
   applicable: boolean;
 };
+
+function isDocumentAssociations(
+  value: DocumentAssociations | DiscoveryReadToolFailure,
+): value is DocumentAssociations {
+  return value instanceof Map;
+}
 
 export async function prepareFindingEvidence(
   { binding, sourceRead, input }: { binding: DiscoveryBinding; sourceRead: SourceReadGrant; input: PublishFindingInput },
@@ -68,6 +76,16 @@ export async function prepareFindingEvidence(
     if (cursors.has(result.nextAfterEventId)) return conflict;
     cursors.add(result.nextAfterEventId);
     afterEventId = result.nextAfterEventId;
+  }
+  if (missing.size > 0) {
+    const associations = await prepareDocumentAssociations(tools, { binding, sourceRead, facts: facts! }, missing);
+    if (!isDocumentAssociations(associations)) return associations;
+    for (const evidenceId of [...missing]) {
+      const associated = associations.get(evidenceId);
+      if (associated?.sellerEntityId === sellerEntityId && associated.sourceAccountId === sourceAccountId) {
+        missing.delete(evidenceId);
+      }
+    }
   }
   return { facts: facts!, applicable: citations.size > 0 && missing.size === 0 };
 }

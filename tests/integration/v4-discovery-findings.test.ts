@@ -395,6 +395,19 @@ test.each(['api', 'unknown document', 'sibling account', 'missing applicability'
   },
 );
 
+test('a publishFinding argument carrying documentAssociations is rejected', async () => {
+  const model = scriptedModel();
+  const owner = await acquire(model.model, instrumentReads().readTools);
+  try {
+    const run = await createRun('reject-proof-fields', model);
+    const [step] = await run.execute(owner, [publish('proof', { documentAssociations: true })]);
+    expect(await storedStep(step!)).toMatchObject({ state: 'failed', result: { ok: false, code: 'DISCOVERY_INVALID' } });
+    expect((await run.state()).findings).toEqual([]);
+  } finally {
+    await owner.close();
+  }
+});
+
 test('permits revision ten and refuses a batch that would consume revision eleven', async () => {
   const model = scriptedModel();
   const owner = await acquire(model.model, instrumentReads().readTools);
