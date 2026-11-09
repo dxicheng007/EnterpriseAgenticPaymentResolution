@@ -53,16 +53,11 @@ test('reissues full financial coverage for the exact registered bootstrap-bearin
           manifest, snapshot, events, citation,
         });
         if (!('candidate' in built) || !citation) throw new Error('Expected captured agreement and candidate');
-        const { spec, profiles: [original] } = built.candidate.request;
-        const displayName = /Legal name (.+?) +Monthly fee USD /.exec(citation.text.value)?.[1];
-        if (!displayName) throw new Error('Expected visible legal name');
-        const reviewed = sealProfile({
-          ...original, version: original.version + 1,
-          bootstrap: {
-            customer: { id: original.parentCustomerId, displayName, evidenceRefs: [citation.evidence.id] },
-            billingConfigurationIds: original.contractTerms.map(term => ({ termId: term.id, id: 'configuration:' + term.id })),
-          },
-        });
+        const { spec, profiles: [reviewed] } = built.candidate.request;
+        if (!reviewed) throw new Error('Expected captured candidate profile');
+        const { bootstrap, ...financialOnly } = reviewed;
+        expect(bootstrap).toBeDefined();
+        const original = sealProfile({ ...financialOnly, version: 1 });
 
         async function verify(profile: CustomerProfile, connector: ConnectorSpec = spec) {
           const compiled = compile(connector, [profile]);

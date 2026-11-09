@@ -9,7 +9,7 @@ import type { SourceDefinition } from '@eapr/sources';
 export type DemoCapture = { companyId: Id; manifestId: Id; contractFileId: Id | null };
 type Candidate = DemoCandidatesResponse['candidates'][number];
 type CandidateResult = { candidate: Candidate } | { diagnostic: Diagnostic };
-type Agreement = { contractId: Id; sellerEntityId: Id; buyerId: Id; sourceAccountId: Id; feeCents: number; effective: string; label: string };
+type Agreement = { contractId: Id; sellerEntityId: Id; buyerId: Id; sourceAccountId: Id; feeCents: number; effective: string; legalName: string };
 
 const id = '([A-Za-z0-9][A-Za-z0-9._:-]{0,159})';
 const date = '(\\d{4}-\\d{2}-\\d{2})';
@@ -25,10 +25,10 @@ const agreementPatterns = {
 function parseAgreement(company: 'a' | 'b', text: string): Agreement | undefined {
   const match = agreementPatterns[company].exec(text);
   if (!match || match[0] !== text) return;
-  const [, contractId, sellerEntityId, buyerId, sourceAccountId, label, fee, effective] = match;
+  const [, contractId, sellerEntityId, buyerId, sourceAccountId, legalName, fee, effective] = match;
   const parsed = parseMinorUnits(fee);
   if (!parsed.ok || parsed.cents <= 0 || !IsoDateSchema.safeParse(effective).success) return;
-  return { contractId, sellerEntityId, buyerId, sourceAccountId, feeCents: parsed.cents, effective, label };
+  return { contractId, sellerEntityId, buyerId, sourceAccountId, feeCents: parsed.cents, effective, legalName };
 }
 
 const mappingFields = {
@@ -97,7 +97,7 @@ export function buildDemoCandidate({ source, capture, manifest, snapshot, events
     agreement.effective > manifest.asOf.slice(0, 10)) {
     return blocked('The designated agreement has unsupported or conflicting terms');
   }
-  const { sellerEntityId, buyerId, sourceAccountId, contractId, feeCents, effective } = agreement;
+  const { sellerEntityId, buyerId, sourceAccountId, contractId, feeCents, effective, legalName } = agreement;
   const semanticKey = sellerEntityId + '/' + sourceAccountId;
   const semanticVersion = Object.hasOwn(manifest.semanticVersions, semanticKey) && manifest.semanticVersions[semanticKey];
   const accountEvents = events.filter(event => event.rawIdentity.sourceAccountId === sourceAccountId);
@@ -111,18 +111,23 @@ export function buildDemoCandidate({ source, capture, manifest, snapshot, events
 
   const evidenceRef = citation.evidence.id;
   const scope = { companyId: source.companyId, sellerEntityId, accountId: accountId.data };
+  const termId = 'demo-term-' + company;
   const profile = {
-    id: 'demo-profile-' + company, version: 1, sourceRef: source.sourceRef, scope, parentCustomerId: buyerId,
+    id: 'demo-profile-' + company, version: 2, sourceRef: source.sourceRef, scope, parentCustomerId: buyerId,
     sourceAccountIds: [sourceAccountId], semanticVersion,
     approvedLookups: [{ id: 'account-map', valueType: 'parent-account' as const, entries: [
       { source: sourceAccountId, target: scope.accountId, evidenceRefs: [evidenceRef] },
     ] }],
     contractTerms: [{
-      id: 'demo-term-' + company, contractId, validFrom: effective, validToExclusive: null,
+      id: termId, contractId, validFrom: effective, validToExclusive: null,
       fixedMonthlyFeeCents: feeCents, currency: 'USD' as const, cadence: 'monthly' as const, anchorDay: 1,
       evidenceRefs: [evidenceRef],
     }],
     findings: [],
+    bootstrap: {
+      customer: { id: buyerId, displayName: legalName, evidenceRefs: [evidenceRef] },
+      billingConfigurationIds: [{ termId, id: 'configuration:' + termId }],
+    },
   };
   const entities = mappings(company, source, evidenceRef);
   const spec = ConnectorSpecSchema.parse({
@@ -132,7 +137,7 @@ export function buildDemoCandidate({ source, capture, manifest, snapshot, events
     maxTransactionCents: 5000000, maxRecordsPerCycle: 1000, evidenceRefs: [evidenceRef],
   });
   const candidate = {
-    id: 'demo-candidate-' + company, label: 'Company ' + company.toUpperCase() + ' · ' + agreement.label,
+    id: 'demo-candidate-' + company, label: 'Company ' + company.toUpperCase() + ' · ' + legalName,
     companyId: source.companyId, sourceRef: source.sourceRef, scope, snapshotId: snapshot.id,
     request: PreviewRequestSchema.parse({
       spec, profiles: [CustomerProfileSchema.parse({ ...profile, hash: hashProfile(profile) })],
