@@ -75,17 +75,42 @@ export function previewIssues(result: PreviewResponse, profileScopes: readonly S
   };
 }
 
-export function unmappedHoldGroups(hold: Hold, coverage: SourceCoverageSummary | undefined) {
-  if (hold.scope || hold.code !== 'UNKNOWN_ACCOUNT' || !coverage) return [];
-  const ids = new Set(hold.eventIds);
-  const documented = coverage.accounts.flatMap(({ account, eventIds }) => {
-    const matched = eventIds.filter(id => ids.has(id));
-    if (!matched.length) return [];
-    return [{ label: account.displayName + ' · ' + account.sellerEntityId + ' / ' + account.sourceAccountId,
-      eventCount: matched.length }];
-  });
-  const unresolvedCount = coverage.undocumented.reduce((total, row) =>
-    total + row.eventIds.filter(id => ids.has(id)).length, 0);
-  if (!unresolvedCount) return documented;
-  return [...documented, { label: 'Source identity unresolved', eventCount: unresolvedCount }];
+type AccountReference = { label: string; eventCount: number };
+
+export function partitionPreviewHolds(issues: ReturnType<typeof previewIssues>, coverage?: SourceCoverageSummary) {
+  const accountsByEvent = new Map<string, SourceCoverageSummary['accounts'][number]>();
+  const seen = new Set<string>();
+  for (const row of coverage?.accounts ?? []) {
+    for (const id of row.eventIds) {
+      if (seen.has(id) || row.profiles.length || !row.account.identityEvidenceRefs.length) accountsByEvent.delete(id);
+      else accountsByEvent.set(id, row);
+      seen.add(id);
+    }
+  }
+  for (const row of coverage?.undocumented ?? []) {
+    for (const id of row.eventIds) accountsByEvent.delete(id);
+  }
+
+  const otherAccounts: Hold[] = [];
+  const investigation = [...issues.unresolved];
+  const accountReferences = new Map<Hold, AccountReference[]>();
+  for (const hold of issues.unmapped) {
+    const ids = new Set(hold.eventIds);
+    const accounts = [...ids].map(id => accountsByEvent.get(id));
+    if (hold.scope || hold.code !== 'UNKNOWN_ACCOUNT' || !ids.size ||
+      !accounts.every(row => row !== undefined) ||
+      hold.diagnostics.some(item => item.code !== 'UNKNOWN_ACCOUNT' || item.sourceIds.some(id => !ids.has(id)))) {
+      investigation.push(hold);
+      continue;
+    }
+
+    const counts = new Map<SourceCoverageSummary['accounts'][number], number>();
+    for (const row of accounts) counts.set(row, (counts.get(row) ?? 0) + 1);
+    otherAccounts.push(hold);
+    accountReferences.set(hold, [...counts].map(([{ account }, eventCount]) => ({
+      label: account.displayName + ' · ' + account.sellerEntityId + ' / ' + account.sourceAccountId, eventCount,
+    })));
+  }
+
+  return { selected: issues.selected, otherAccounts, investigation, accountReferences };
 }

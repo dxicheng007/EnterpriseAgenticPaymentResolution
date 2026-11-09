@@ -154,7 +154,7 @@ test(title, async ({ page }, testInfo) => {
       const previewBalanceCents = index === 0 ? 80_000 : 0;
       expect(preview.diffs).toEqual([expect.objectContaining({ scope: candidate.scope, afterBalanceCents: previewBalanceCents })]);
       const balance = previewRegion.getByRole('region', { name: 'Balance diff for ' + candidate.scope.accountId });
-      const projected = balance.locator('dt:text-is("Projected balance") + dd');
+      const projected = balance.locator('dt:text-is("Amount still owed after proposed import") + dd > span');
       await expect(projected).toBeVisible();
       await expect(projected).toHaveText(index === 0 ? '$800.00' : '$0.00');
       expect(preview.parentWrites).toBe(0);

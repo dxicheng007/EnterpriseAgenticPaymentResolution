@@ -19,7 +19,7 @@ export function PreviewPage() {
     <header>
       <p className="review-eyebrow">Development fixtures</p>
       <h1>Connector preview</h1>
-      <p>Inspect executable mappings and projected balances against an empty target fixture.</p>
+      <p>Review proposed imports and the amount still owed against an empty demo target.</p>
     </header>
     <CandidateList key={attempt} refresh={() => setAttempt(value => value + 1)} />
   </main>;
@@ -73,11 +73,16 @@ function CandidateList({ refresh }: { refresh: () => void }) {
       </label>
       <button type="button" onClick={refresh}>Refresh candidates</button>
     </div>
-    {candidate && <CandidatePreview key={JSON.stringify([candidate.id, candidate.snapshotId])} candidate={candidate} verificationAvailable={catalog.verificationAvailable} />}
+    {candidate && <CandidatePreview key={JSON.stringify([candidate.id, candidate.snapshotId])} candidate={candidate}
+      targetMode={catalog.targetMode} verificationAvailable={catalog.verificationAvailable} />}
   </>;
 }
 
-function CandidatePreview({ candidate, verificationAvailable }: { candidate: Candidate; verificationAvailable: boolean }) {
+function CandidatePreview({ candidate, targetMode, verificationAvailable }: {
+  candidate: Candidate;
+  targetMode: DemoCandidatesResponse['targetMode'];
+  verificationAvailable: boolean;
+}) {
   const [result, setResult] = useState<PreviewResponse>();
   const [error, setError] = useState<unknown>();
   const [pending, setPending] = useState(false);
@@ -162,7 +167,7 @@ function CandidatePreview({ candidate, verificationAvailable }: { candidate: Can
       {error != null && <RequestFailure error={error} next="Retry the preview or refresh the candidate list." />}
     </section>
     <PreviewResult result={result} evidenceRefs={result?.artifact ? evidenceRefs : []}
-      profileScopes={request.profiles.map(profile => profile.scope)} coverage={summary}
+      asOf={request.asOf} targetMode={targetMode} profileScopes={request.profiles.map(profile => profile.scope)} coverage={summary}
       sourceCoverage={<SourceCoverage response={coverage} summary={summary} failure={coverageError} retry={() => {
         setCoverageError(undefined);
         setCoverageAttempt(value => value + 1);
