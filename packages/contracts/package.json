@@ -2,5 +2,9 @@
   "name": "@eapr/contracts",
   "private": true,
   "type": "module",
-  "exports": "./src/index.ts"
+  "exports": {
+    ".": "./src/index.ts",
+    "./bootstrap-verification": "./src/bootstrap-verification.ts",
+    "./bootstrap-verification-hash": "./src/bootstrap-verification-hash.ts"
+  }
 }
