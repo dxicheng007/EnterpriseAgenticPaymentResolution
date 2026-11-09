@@ -2,7 +2,7 @@
 
 This checkpoint publishes completed local work, preserves separately committed candidates, and records remaining work. It is not acceptance of the complete demo. Machine checks, independent Astra review, and joint user acceptance remain distinct.
 
-**Latest:** accepted record-category terminology remains in the demo. Reviewed protected bootstrap runner `da5b2ac` is integrated at `735e680`; combined typecheck, unit tests, focused PostgreSQL checks and the full V2 gate pass (21 commands, 94 assertions, ten safe screenshots). The runner verifies the actual observed import plan against independent expectations. Durable bootstrap completion storage is now independently reviewed and integrated at `c664e2c`; combined typecheck, 279 unit tests, four focused PostgreSQL tests and the V0 gate pass. Discovery lifecycle/delegation is authenticated but model execution remains unconfigured. Evidence-read tools, the activity monitor and first-activation authority now have independently reviewed handoffs; these documents do not implement those capabilities. Broader joint acceptance remains pending.
+**Latest:** the localhost demo includes the reviewed Discovery monitor. Combined `700d135` passed typecheck, 309 unit tests, two Chromium monitor tests and the full V2 gate (21 commands, 94 assertions, ten safe screenshots). Safe authority contracts and durable bootstrap proof storage are integrated. Discovery read schemas are integrated at `c60fe26` after focused checks. Source tools, attested financial execution and parent storage are the three current implementation lanes. Model execution remains unconfigured; customer activation and continuing sync remain unavailable. Accepted record-category terminology remains unchanged.
 
 ## Published checkpoint (historical)
 
@@ -219,3 +219,20 @@ M1 `a32721ce9d50472d69b8644cab42940912176f7d` passed [independent review](review
 ## Additive authority contracts
 
 A0 `437739c96f2e27a417650c188967e26f20fc97cc` passed [independent review](reviews/b-activation-authority-contracts-independent-review.md) and is integrated at `633651778cfd4f5176831c8286f01132fd142a9f`. See [implementation evidence](handoffs/b-activation-authority-contracts-implementation-report.md). Root combined typecheck, 293 unit tests and four protected-run PostgreSQL tests passed. Strict safe attestations, complete policy tuples, scoped state/index and additive v2 bundle/hash contracts preserve existing v1 golden values. The bootstrap manifest now pins the three added runtime contract modules. These contracts neither install a trust policy nor grant financial authority.
+
+
+## Discovery monitor and read contract checkpoint
+
+M2 `3f6a9fceb4cfc4b5987f0b1ac78c2571e37cfe1a` passed [independent review](reviews/b-discovery-monitor-independent-review.md) and is integrated at `700d1353b9d18d6425b79e710636d68690424b79`. Its [report](handoffs/b-discovery-monitor-implementation-report.md) distinguishes the scripted real-service browser fixture from default unconfigured operation. Root combined typecheck, 309 unit tests and both Chromium cases passed, followed by the complete V2 gate. Packet `.evidence/700d1353b9d18d6425b79e710636d68690424b79/V2/2026-11-09T02-39-46-819Z-29702/` has 21 successful commands, 94 assertions, ten hash-checked PNGs, fifteen mode-0600 files and no diagnostics. Safe copies are in user-facing outputs.
+
+The live supervisor restarted on `700d135`, preserving all 253 existing source/pin files. Direct browser inspection confirms Discovery navigation, saved-run input and honest model/start-unavailable state. Active-run behavior is established by the real durable scripted test, not a seeded product run or a live LLM. Idle stream headers may wait for activity/heartbeat; controls use authoritative loaded state and actual POST authorization while connection status remains explicit. This is not full V4 or joint acceptance.
+
+D0 `0f0fca3a9d0a429aa792b0da5ce854e6f8d17542` passed [independent review](reviews/b-discovery-read-contracts-independent-review.md) and is integrated at `c60fe26d6aa9068a93376ae6b69de572e80918f9`. Root typecheck, 138 focused contract/build tests and the real bootstrap registry integration passed. The [report](handoffs/b-discovery-read-contracts-report.md) records exact argument/result bounds and runtime UTF-16 search semantics. Source authorization and lifecycle tool claims remain D1/D2 work; descriptors alone enable no tool.
+
+## Current parallel implementation lanes
+
+1. [D1 source evidence tools](handoffs/b-discovery-evidence-implementation-handoffs.md): exact captured membership, coverage, bounded excerpts and reproducible citations; D2 orchestration follows accepted source interfaces.
+2. [A1a financial attestation](handoffs/b-financial-attestation-handoffs.md): fixed protected process evaluates the exact reserved evidence bytes, preserving all thirteen financial checks. [Handoff review](reviews/b-financial-attestation-handoff-independent-review.md) accepts staged execution. A valid ineligible report remains auditable; execution/decoding/binding failure cannot become a successful completion.
+3. [A3a parent persistence](handoffs/b-parent-storage-handoff.md): runtime002 and transaction-bound immutable records/receipts/snapshots. [Handoff review](reviews/b-parent-storage-handoff-independent-review.md) accepts this storage-only scope. Composed inactive reads still depend on A2; no grant route or sync loop is included.
+
+All three lanes require exact-candidate independent review before integration. Their current assignments are not evidence of implemented financial authority.
