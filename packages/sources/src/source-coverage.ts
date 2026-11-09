@@ -9,6 +9,7 @@ import { EvidenceStorageError, SourceContentError, extractDocument, type Extract
 import { sqlState } from '@eapr/storage/transaction';
 import type { Pool } from 'pg';
 import { ZodError } from 'zod';
+import { fullMatch, parseAgreement, parseDirectory, type Agreement, type DirectoryClaim, type Party } from './document-identity.js';
 import { aggregateHash, documentCitations, streamContentHash } from './dossier.js';
 import { citeEvidence, readEvidence, type EvidenceAuthorization } from './evidence-records.js';
 import { SourceError } from './errors.js';
@@ -24,57 +25,14 @@ export type CapturedIdentityText = {
 const idPattern = '([A-Za-z0-9][A-Za-z0-9._:-]{0,159})';
 const datePattern = '(\\d{4}-\\d{2}-\\d{2})';
 const amountPattern = '(?:0|[1-9]\\d*)\\.\\d{2}';
-// PDF.js joins text items with spaces, including empty items at line breaks.
-const agreementHeader = 'Fixed monthly agreement ' + idPattern + ' +Seller ' + idPattern +
-  '; buyer ' + idPattern + '; account ' + idPattern +
-  ' +Legal name ([A-Za-z0-9]+(?: [A-Za-z0-9]+)*) +Monthly fee USD ' + amountPattern;
-const agreementFormats = [
-  new RegExp('^' + agreementHeader + ' +Effective ' + datePattern + '; monthly invoice anchor day 1\\.$'),
-  new RegExp('^' + agreementHeader + ' effective ' + datePattern + '\\. +Monthly invoice anchor day 1\\.$'),
-];
-const directoryHeader = new RegExp('^Seller ' + idPattern + ' reports separate customer accounts: (.+)\\. Currency USD\\.$');
-const directoryEntry = new RegExp('^' + idPattern + ' belongs to ' + idPattern + '$');
 const amendmentFormat = new RegExp('^Executed amendment to ' + idPattern + ' +Seller ' + idPattern +
   ' and buyer ' + idPattern + ' agree\\. +Effective ' + datePattern + ', replace monthly fee with USD ' +
   amountPattern + '\\. +Signed by both parties\\.$');
 
-function fullMatch(pattern: RegExp, text: string) {
-  const match = pattern.exec(text);
-  return match?.[0] === text ? match : undefined;
-}
-
-type Party = { sellerEntityId: Id; sourceBuyerId: Id; citationId: Id };
-type DirectoryClaim = Party & { sourceAccountId: Id };
-type Agreement = DirectoryClaim & { contractId: Id; displayName: string };
 type Amendment = Party & { contractId: Id };
 
 function accountKey({ sellerEntityId, sourceAccountId }: Pick<RawIdentity, 'sellerEntityId' | 'sourceAccountId'>) {
   return (sellerEntityId ?? '') + '/' + (sourceAccountId ?? '');
-}
-
-function parseAgreement({ text, citationId }: CapturedIdentityText, asOf: IsoInstant): Agreement | undefined {
-  for (const format of agreementFormats) {
-    const match = fullMatch(format, text);
-    if (!match) continue;
-    const [, contractId, sellerEntityId, sourceBuyerId, sourceAccountId, displayName, effective] = match;
-    if (IsoDateSchema.safeParse(effective).success && effective <= asOf.slice(0, 10)) {
-      return { contractId, sellerEntityId, sourceBuyerId, sourceAccountId, displayName, citationId };
-    }
-  }
-}
-
-function parseDirectory({ text, citationId }: CapturedIdentityText): DirectoryClaim[] {
-  const match = fullMatch(directoryHeader, text);
-  if (!match) return [];
-  const [, sellerEntityId, entries] = match;
-  const claims: DirectoryClaim[] = [];
-  for (const entry of entries.split('; ')) {
-    const parsed = fullMatch(directoryEntry, entry);
-    if (!parsed) return [];
-    const [, sourceAccountId, sourceBuyerId] = parsed;
-    claims.push({ sellerEntityId, sourceAccountId, sourceBuyerId, citationId });
-  }
-  return claims;
 }
 
 function parseAmendment({ text, citationId }: CapturedIdentityText): Amendment | undefined {
