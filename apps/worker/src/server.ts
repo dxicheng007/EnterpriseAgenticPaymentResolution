@@ -1,5 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
-import Fastify, { type FastifyInstance, type FastifyPluginAsync } from 'fastify';
+import Fastify, { type FastifyError, type FastifyInstance, type FastifyPluginAsync, type FastifyReply, type FastifyRequest } from 'fastify';
+import { authorizeWorkerParentRead } from './parent-read-composition.js';
+import { ParentReadError, sendParentReadError } from './routes/parent.js';
 import type { Pool } from 'pg';
 import type { Clock } from '../../../packages/storage/src/control-db.js';
 import { probeMigration, type MigrationIdentity } from '../../../packages/storage/src/transaction.js';
@@ -14,7 +16,25 @@ type WorkerDependencies = WorkerServices & { expectedMigrations: readonly Migrat
 
 export function buildWorker({ db, serviceToken, clock, expectedMigrations, featurePlugins = [] }: WorkerDependencies): FastifyInstance {
   if (!serviceToken) throw new Error('Worker service credential is required');
-  const worker = Fastify();
+  const worker: FastifyInstance = Fastify({
+    routerOptions: { maxParamLength: 160 },
+    frameworkErrors(error: FastifyError, request: FastifyRequest, reply: FastifyReply) {
+      if (error.code === 'FST_ERR_BAD_URL' || error.code === 'FST_ERR_MAX_PARAM_LENGTH') {
+        const match = /^(?:https?:\/\/[^/?#]+)?(\/internal\/(?:parent|activations))\/[^/?#]+(?:\?|$)/.exec(request.url);
+        if (request.method === 'GET' && match && worker.hasRoute({ method: 'GET', url: match[1] + '/:accountId' })) {
+          try {
+            authorizeWorkerParentRead(request, serviceToken);
+          } catch (failure) {
+            return sendParentReadError(failure, request, reply);
+          }
+          return sendParentReadError(new ParentReadError(400), request, reply);
+        }
+        const statusCode = error.code === 'FST_ERR_BAD_URL' ? 400 : 414;
+        return reply.code(statusCode).send({ error: 'Bad Request', code: error.code, message: 'Request URL is invalid', statusCode });
+      }
+      return reply.code(500).send({ error: 'Internal Server Error', message: 'Unexpected error from async constraint', statusCode: 500 });
+    },
+  });
   const expected = Buffer.from('Bearer ' + serviceToken);
   worker.get('/internal/health', async (request, reply) => {
     const supplied = Buffer.from(request.headers.authorization ?? '');

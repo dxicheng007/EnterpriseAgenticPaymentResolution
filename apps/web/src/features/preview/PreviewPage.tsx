@@ -19,7 +19,7 @@ export function PreviewPage() {
     <header>
       <p className="review-eyebrow">Development fixtures</p>
       <h1>Connector preview</h1>
-      <p>Review proposed imports and the amount still owed against an empty demo target.</p>
+      <p>Review proposed imports and the amount still owed using the scoped parent records.</p>
     </header>
     <CandidateList key={attempt} refresh={() => setAttempt(value => value + 1)} />
   </main>;
@@ -138,7 +138,8 @@ function CandidatePreview({ candidate, targetMode, verificationAvailable }: {
   ];
   return <>
     <section className="review-card">
-      <p className="review-eyebrow">Development fixture · empty target</p>
+      <p className="review-eyebrow">{targetMode === 'empty-fixture'
+        ? 'Development fixture · empty target' : 'Development fixture · parent records'}</p>
       <h2>{candidate.label}</h2>
       <p>{request.profiles.length === 1
         ? 'This preview covers one customer from the company snapshot.'

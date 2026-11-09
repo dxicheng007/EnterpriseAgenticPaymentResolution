@@ -29,6 +29,16 @@ import { migrationIdentities, readMigrationCatalog } from '../../scripts/migrate
 import { prepareVerificationPins } from '../../scripts/prepare-verification.js';
 import { createTestSystem, testNamespace } from '../fixtures/harness.js';
 
+const fixtureTarget: import('@eapr/compiler/preview-adapters').TargetReader = {
+  // Explicit version-zero fixture for this isolated verification composition test.
+  async readTarget(scope, asOf) {
+    return {
+      scope, asOf, version: 0, invoices: [], payments: [], credits: [], allocations: [], reversals: [],
+      customers: [], accounts: [], billingConfigurations: [],
+    };
+  },
+};
+
 const webOrigin = 'http://127.0.0.1:5179';
 const setupRequired = { code: 'VERIFICATION_FIXTURE_SETUP_REQUIRED' };
 const conflict = { code: 'VERIFICATION_FIXTURE_CONFLICT' };
@@ -68,7 +78,7 @@ test('real reviewer jobs use operator pins for the registered source captures', 
         await writeFile(expectedB, legacy);
         await expect(prepare()).rejects.toMatchObject(setupRequired);
         const degraded = await createLocalComposition(dependencies, {
-          webOrigin, captures, verificationSetupDiagnostic: 'VERIFICATION_FIXTURE_SETUP_REQUIRED',
+          webOrigin, captures, fixtureTarget, verificationSetupDiagnostic: 'VERIFICATION_FIXTURE_SETUP_REQUIRED',
         });
         const degradedApp = Fastify();
         for (const plugin of degraded.featurePlugins) degradedApp.register(plugin, services);
@@ -132,7 +142,7 @@ test('real reviewer jobs use operator pins for the registered source captures', 
         expect(await prepare()).toEqual(pins);
 
         const registry = createCandidateRegistry(services.db, registryRoot);
-        const options = { webOrigin, captures, registry, verification: {
+        const options = { webOrigin, captures, registry, fixtureTarget, verification: {
           pins, registryRoot, expectedMigrations: migrationIdentities(readMigrationCatalog().control),
           roots: {
             evidencePinRoot: fileURLToPath(new URL('../../.local/protected-evaluator', import.meta.url)),
@@ -341,7 +351,7 @@ test('the operator upgrade selects only exact regeneration in an isolated demo r
   try {
     // Copy modules whose paths determine the protected store and CLI roots. Reuse
     // the installed dependencies without copying or linking any original .local state.
-    for (const path of ['scripts', 'apps/control/src', 'packages', 'package.json', 'package-lock.json', 'tests/fixtures/verification-startup.ts']) {
+    for (const path of ['scripts', 'apps/control/src', 'apps/worker/src/routes/parent.ts', 'packages', 'package.json', 'package-lock.json', 'tests/fixtures/verification-startup.ts']) {
       await cp(join(checkout, path), join(directory, path), {
         recursive: true, filter: entry => !entry.split('/').includes('node_modules'),
       });

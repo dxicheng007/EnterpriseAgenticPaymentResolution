@@ -5,6 +5,10 @@ import { fileURLToPath } from 'node:url';
 import { expect, type Page, type Response } from '@playwright/test';
 import { createLogger, createServer } from 'vite';
 import { hashBytes, hashCanonical } from '@eapr/contracts';
+import { createCandidateRegistry } from '@eapr/evaluator/registry';
+import { createRegisteredScopePublication } from '../../../apps/control/src/activation-publication.js';
+import { createParentReadClient } from '../../../apps/control/src/parent-read-client.js';
+import { composeWorkerParentReads } from '../../../apps/worker/src/parent-read-composition.js';
 import { createEvidenceStore } from '@eapr/evidence';
 import { createSourceService, readManifest } from '@eapr/sources';
 import { createLocalComposition, localSourceCatalog } from '../../../apps/control/src/composition.js';
@@ -135,14 +139,37 @@ export async function openLocalReview(
 
   try {
     const store = await createEvidenceStore(originalsRoot);
+    const registryRoot = join(root, 'artifacts');
+    let serviceToken = '';
     system = await createTestSystem({
       modelMode: 'disabled',
       dbNamespace: testNamespace('c3browser'),
+      workerPlugins: [async (app, services) => {
+        serviceToken = services.serviceToken;
+        await composeWorkerParentReads(registryRoot)(app, services);
+      }],
       async controlPluginFactory({ db, clock }) {
         const dependencies = { db, clock, store };
         const { captures } = await loadDemo(dependencies, { visibleRoot, truthRoot });
-        const options = { webOrigin: origin, captures };
-        if (!fixtures) return (await createLocalComposition(dependencies, options)).featurePlugins;
+        const registry = createCandidateRegistry(db, registryRoot);
+        const parentReads = createParentReadClient('http://127.0.0.1:' + localPort('EAPR_WORKER_PORT', 3002), serviceToken, registryRoot);
+        const options = { webOrigin: origin, captures, registry, parentReads };
+        async function mountLocal(verification?: import('../../../apps/control/src/verification-composition.js').LocalVerificationOptions) {
+          const composition = await createLocalComposition(dependencies, { ...options, verification });
+          const { rows } = await db.query<{ artifact_hash: string; manifest_id: string }>(
+            'SELECT artifact_hash, manifest_id FROM artifact_captures ORDER BY manifest_id',
+          );
+          expect(rows).toHaveLength(captures.length);
+          await createRegisteredScopePublication({ registryRoot, candidates: registry }).publishRegisteredScopes(
+            await Promise.all(rows.map(async ({ artifact_hash, manifest_id }) => {
+              const candidate = await registry.getCandidate(artifact_hash, manifest_id);
+              expect(candidate.profiles).toHaveLength(1);
+              return { artifactHash: artifact_hash, manifestId: manifest_id, selectedProfileHash: candidate.profiles[0]!.hash };
+            })),
+          );
+          return composition.featurePlugins;
+        }
+        if (!fixtures) return mountLocal();
         const sources = createSourceService(dependencies, localSourceCatalog);
         const bindings = await Promise.all(captures.map(async ({ companyId, manifestId }) => {
           const manifest = await readManifest(db, companyId, manifestId);
@@ -184,15 +211,11 @@ export async function openLocalReview(
             throw new Error('Browser could not prepare private boundary probes');
           }
         }
-        const registryRoot = join(root, 'artifacts');
-        return (await createLocalComposition(dependencies, {
-          ...options,
-          verification: {
-            pins, registryRoot,
-            roots: { evidencePinRoot: fileURLToPath(fixedProtectedRoot), servedRoots: [visibleRoot, originalsRoot, registryRoot] },
-            expectedMigrations: migrationIdentities(readMigrationCatalog().control),
-          },
-        })).featurePlugins;
+        return mountLocal({
+          pins, registryRoot,
+          roots: { evidencePinRoot: fileURLToPath(fixedProtectedRoot), servedRoots: [visibleRoot, originalsRoot, registryRoot] },
+          expectedMigrations: migrationIdentities(readMigrationCatalog().control),
+        });
       },
     });
     web = await createServer({

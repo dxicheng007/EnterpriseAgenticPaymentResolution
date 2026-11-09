@@ -124,7 +124,7 @@ test(title, async ({ page }, testInfo) => {
     const catalogHeaders = await catalogResponse.request().allHeaders();
     expect(Boolean(catalogHeaders.cookie) && !('authorization' in catalogHeaders)).toBe(true);
     const catalog = await readPublic(catalogResponse, DemoCandidatesResponseSchema, 'Development catalog', bodies);
-    expect(catalog.mode === 'development-fixture' && catalog.targetMode === 'empty-fixture' && catalog.verificationAvailable).toBe(true);
+    expect(catalog.mode === 'development-fixture' && catalog.targetMode === 'persisted-parent' && catalog.verificationAvailable).toBe(true);
     expect(catalog.candidates.map(candidate => candidate.companyId)).toEqual(companyIds);
 
     const region = page.getByRole('region', { name: 'Independent verification' });
@@ -140,7 +140,7 @@ test(title, async ({ page }, testInfo) => {
     const privateFixtureIds: string[] = [];
     for (const [index, candidate] of catalog.candidates.entries()) {
       await page.getByLabel('Development candidate').selectOption(candidate.id);
-      await expect(page.getByText('Development fixture · empty target', { exact: true })).toBeVisible();
+      await expect(page.getByText('Development fixture · parent records', { exact: true })).toBeVisible();
       await expect(region).toHaveCount(0);
       await expect(previewRegion).toHaveCount(0);
       await expect(prompt).toBeVisible();

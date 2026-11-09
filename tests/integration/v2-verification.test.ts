@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { lstat, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -318,7 +318,7 @@ test('generated_b_zero_is_not_f8_balance, same_candidate_f8_transposition, diffe
   const { buildCasePlan, runCasePlan } = await import('../../packages/evaluator/src/cases.js');
 
   const origin = 'http://127.0.0.1:5176';
-  const directory = await mkdtemp(join(tmpdir(), 'eapr-verification-captures-'));
+  const directory = await mkdtemp(join(await realpath(tmpdir()), 'eapr-verification-captures-'));
   const roots = { visibleRoot: join(directory, 'visible'), truthRoot: join(directory, 'private') };
   const store = await createEvidenceStore(join(directory, 'evidence'));
   type CaptureFacts = {
@@ -329,12 +329,22 @@ test('generated_b_zero_is_not_f8_balance, same_candidate_f8_transposition, diffe
     pin: Awaited<ReturnType<typeof pinProtectedFixture>>;
   };
   const captureFacts = new Map<string, CaptureFacts>();
+  const { createRegisteredScopePublication } = await import('../../apps/control/src/activation-publication.js');
+  const { createParentReadClient } = await import('../../apps/control/src/parent-read-client.js');
+  const { composeWorkerParentReads } = await import('../../apps/worker/src/parent-read-composition.js');
+  const { localPort } = await import('../../scripts/native-db.js');
+  const registryRoot = join(directory, 'registry');
+  let serviceToken = '';
   const nonce = randomUUID();
   const ownedPins = new Set<string>();
   const originalFiles = new Map<string, string>();
   try {
     const system = await createTestSystem({
       modelMode: 'disabled', dbNamespace: testNamespace('verifyactual'),
+      workerPlugins: [async (app, services) => {
+        serviceToken = services.serviceToken;
+        await composeWorkerParentReads(registryRoot)(app, services);
+      }],
       async controlPluginFactory(services) {
         const dependencies = { ...services, store };
         const loaded = await loadDemo(dependencies, roots);
@@ -359,8 +369,11 @@ test('generated_b_zero_is_not_f8_balance, same_candidate_f8_transposition, diffe
           const pin = await pinOwnedFixture({ truthJson, snapshot, manifest, events }, truth, ownedPins);
           captureFacts.set(capture.manifestId, { manifest, snapshot, events, truth, pin });
         }
-        const registry = createCandidateRegistry(services.db, join(directory, 'registry'));
-        const composition = await createLocalComposition(dependencies, { webOrigin: origin, captures: loaded.captures, registry });
+        const registry = createCandidateRegistry(services.db, registryRoot);
+        const parentReads = createParentReadClient('http://127.0.0.1:' + localPort('EAPR_WORKER_PORT', 3002), serviceToken, registryRoot);
+        const composition = await createLocalComposition(dependencies, {
+          webOrigin: origin, captures: loaded.captures, registry, parentReads,
+        });
         const launcher = createProtectedVerificationLauncher(async candidate => {
           const facts = captureFacts.get(candidate.manifest.id);
           if (!facts || facts.manifest.hash !== candidate.manifest.hash) throw new Error('Fixture unavailable');
@@ -390,8 +403,19 @@ test('generated_b_zero_is_not_f8_balance, same_candidate_f8_transposition, diffe
       const catalog = DemoCandidatesResponseSchema.parse(
         (await system.control.request('/api/demo/candidates', { headers })).body,
       );
-      expect(catalog.verificationAvailable).toBe(false);
+      expect(catalog).toMatchObject({ verificationAvailable: false, targetMode: 'persisted-parent' });
       expect(catalog.candidates.map(candidate => candidate.companyId)).toEqual(['company-a', 'company-b']);
+      const registry = createCandidateRegistry(system.db.control, registryRoot);
+      const { rows } = await system.db.control.query<{ artifact_hash: string; manifest_id: string }>(
+        'SELECT artifact_hash, manifest_id FROM artifact_captures ORDER BY manifest_id',
+      );
+      expect(rows).toHaveLength(2);
+      await createRegisteredScopePublication({ registryRoot, candidates: registry }).publishRegisteredScopes(
+        await Promise.all(rows.map(async ({ artifact_hash, manifest_id }) => {
+          const candidate = await registry.getCandidate(artifact_hash, manifest_id);
+          return { artifactHash: artifact_hash, manifestId: manifest_id, selectedProfileHash: candidate.profiles[0]!.hash };
+        })),
+      );
       const runtimeBefore = await system.db.runtime.query('SELECT * FROM activity_events ORDER BY sequence');
       const subjects = await Promise.all(catalog.candidates.map(async candidate => {
         const preview = await system.control.request<PreviewResponse>('/api/connectors/preview', {

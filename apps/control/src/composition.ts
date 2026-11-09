@@ -1,7 +1,9 @@
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
-import type { CandidateRegistry, PreviewReadContext, SnapshotRead, SnapshotReader, TargetReader } from '@eapr/compiler/preview-adapters';
-import { DemoCandidatesResponseSchema, TargetStateSchema, type DemoCandidatesResponse, type Id } from '@eapr/contracts';
+import type { CandidateRegistration, PreviewReadContext, SnapshotRead, SnapshotReader, TargetReader } from '@eapr/compiler/preview-adapters';
+import { canonicalJson, DemoCandidatesResponseSchema, type DemoCandidatesResponse, type Id } from '@eapr/contracts';
 import { sameScope } from '@eapr/finance/validate';
+import { compile } from '@eapr/compiler/compile';
+import type { createCandidateRegistry } from '@eapr/evaluator/registry';
 import {
   companyA, companyB, createSourceService, readDossier, readEvidence, readManifest,
   SourceError, type EvidenceAuthorization, type SourceDefinition, type UploadDependencies,
@@ -9,6 +11,9 @@ import {
 import { composeDiscovery } from './discovery-composition.js';
 import { buildDemoCandidate, type DemoCapture } from './demo-candidates.js';
 import { createLocalSessionService, LocalSessionError } from './local-session.js';
+import type { ParentReadClient } from './parent-read-client.js';
+import { ParentReadError } from '../../worker/src/routes/parent.js';
+import { createParentProxyPlugin } from './routes/parent.js';
 import { createPreviewPlugin } from './routes/preview.js';
 import { createSourcePlugin, type AuthorizeSource } from './routes/sources.js';
 import {
@@ -23,7 +28,9 @@ export const localSourceCatalog: ReadonlyMap<Id, SourceDefinition> = new Map(
 export async function createLocalComposition(dependencies: UploadDependencies, options: {
   webOrigin: string;
   captures: DemoCapture[];
-  registry?: Pick<CandidateRegistry, 'registerCandidate'>;
+  registry?: Pick<ReturnType<typeof createCandidateRegistry>, 'getCandidate' | 'registerCandidate'>;
+  parentReads?: ParentReadClient;
+  fixtureTarget?: TargetReader;
   verification?: LocalVerificationOptions;
   verificationSetupDiagnostic?: VerificationSetupCode;
 }) {
@@ -31,9 +38,10 @@ export async function createLocalComposition(dependencies: UploadDependencies, o
   const service = createSourceService(dependencies, localSourceCatalog);
   const captureIds = new Map<Id, DemoCapture>();
   const captureBindings: CaptureBinding[] = [];
+  const registrations: CandidateRegistration[] = [];
   const companies = new Set<Id>();
   const catalog: DemoCandidatesResponse = {
-    mode: 'development-fixture', targetMode: 'empty-fixture', verificationAvailable: false, candidates: [], diagnostics: [],
+    mode: 'development-fixture', targetMode: options.fixtureTarget ? 'empty-fixture' : 'persisted-parent', verificationAvailable: false, candidates: [], diagnostics: [],
   };
 
   const sourceBoundary = (companyId: Id, sourceRef: Id): EvidenceAuthorization =>
@@ -65,8 +73,12 @@ export async function createLocalComposition(dependencies: UploadDependencies, o
     const result = buildDemoCandidate({
       source, capture, manifest, snapshot, events: records, citation: matching.length === 1 ? matching[0] : undefined,
     });
-    if ('candidate' in result) catalog.candidates.push(result.candidate);
-    else catalog.diagnostics.push(result.diagnostic);
+    if ('candidate' in result) {
+      catalog.candidates.push(result.candidate);
+      const { spec, profiles } = result.candidate.request;
+      const compiled = compile(spec, profiles);
+      if (compiled.ok) registrations.push({ spec, profiles, artifact: compiled.value, manifest, snapshot });
+    } else catalog.diagnostics.push(result.diagnostic);
   }
 
   const reviewer = {
@@ -123,10 +135,9 @@ export async function createLocalComposition(dependencies: UploadDependencies, o
     const candidate = catalog.candidates.find(entry => sameScope(scope, entry.scope));
     if (!candidate || !capability.allowedAccountIds.includes(scope.accountId) ||
       !capability.allowedSourceRefs.includes(candidate.sourceRef)) throw new LocalSessionError(403);
-    return TargetStateSchema.parse({
-      scope, asOf, version: 0, invoices: [], payments: [], credits: [], allocations: [], reversals: [],
-      customers: [], accounts: [], billingConfigurations: [],
-    });
+    const reader = options.parentReads ?? options.fixtureTarget;
+    if (!reader) throw new ParentReadError(503);
+    return reader.readTarget(scope, asOf, capability);
   };
 
   let verification;
@@ -144,13 +155,57 @@ export async function createLocalComposition(dependencies: UploadDependencies, o
   }
   if (setupCode) catalog.diagnostics.push(verificationSetupDiagnostic(setupCode));
   const registry = verification?.registry ?? options.registry;
+  const registrationFailures = new Map<Id, CandidateRegistration>();
+  if (!options.fixtureTarget) {
+    await Promise.all(registrations.map(async input => {
+      try {
+        if (registry) {
+          await registry.registerCandidate(input);
+          return;
+        }
+      } catch {
+        // A registry failure must leave source inspection and the catalog mounted.
+      }
+      for (const profile of input.profiles) registrationFailures.set(profile.scope.accountId, input);
+    }));
+  }
+
+  async function registrationRecovered(accountId: Id) {
+    const expected = registrationFailures.get(accountId);
+    if (!expected) return true;
+    if (!registry) return false;
+    const current = await registry.getCandidate(expected.artifact.hash, expected.manifest.id);
+    if (current.manifest.hash !== expected.manifest.hash ||
+        canonicalJson(current.snapshot) !== canonicalJson(expected.snapshot)) return false;
+    registrationFailures.delete(accountId);
+    return true;
+  }
 
   const candidatePlugin: FastifyPluginAsync = async app => {
     app.get('/api/demo/candidates', async (request, reply) => {
       reply.header('Cache-Control', 'no-store');
       try {
-        await session.authorizeReviewer(request, { mutation: false });
-        return DemoCandidatesResponseSchema.parse(catalog);
+        const grants = await session.authorizeReviewer(request, { mutation: false });
+        const candidates = catalog.candidates.filter(candidate => grants.allowedAccountIds.includes(candidate.scope.accountId) &&
+          grants.allowedSourceRefs.includes(candidate.sourceRef));
+        const diagnostics = [...catalog.diagnostics];
+        if (!options.fixtureTarget) {
+          const unavailable = await Promise.all(candidates.map(async candidate => {
+            try {
+              if (!options.parentReads) return candidate.scope.accountId;
+              await options.parentReads.readParent(candidate.scope.accountId, {}, grants, candidate.scope);
+              if (!await registrationRecovered(candidate.scope.accountId)) return candidate.scope.accountId;
+            } catch {
+              return candidate.scope.accountId;
+            }
+          }));
+          const sourceIds = unavailable.filter(id => id !== undefined);
+          if (sourceIds.length) diagnostics.push({
+            code: 'PARENT_READ_UNAVAILABLE', severity: 'blocker', fieldPaths: [], sourceIds,
+            message: 'Parent records are unavailable for preview. Complete registered-scope setup and retry.',
+          });
+        }
+        return DemoCandidatesResponseSchema.parse({ ...catalog, candidates, diagnostics });
       } catch (error) {
         if (!(error instanceof LocalSessionError)) throw error;
         return reply.code(error.statusCode).send({
@@ -172,6 +227,7 @@ export async function createLocalComposition(dependencies: UploadDependencies, o
         registerCandidate: registry?.registerCandidate.bind(registry),
       }),
       candidatePlugin,
+      ...(options.parentReads ? [createParentProxyPlugin(options.parentReads, session.authorizeReviewer)] : []),
       ...(verification ? [verification.plugin] : []),
     ],
   };
