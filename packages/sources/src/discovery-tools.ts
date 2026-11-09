@@ -105,7 +105,7 @@ function capturedCitations(capture: Capture) {
   return entries;
 }
 
-function eventEvidence(capture: Capture) {
+function eventEvidence(capture: Capture, source: SourceDefinition) {
   const evidence = new Map<Id, Id[]>();
   const events = new Map(capture.events.map(event => [event.id, event]));
   for (const { eventId, evidence: ref } of capture.apiCitations) {
@@ -134,6 +134,10 @@ function eventEvidence(capture: Capture) {
       evidence.set(event.id, [...(evidence.get(event.id) ?? []), citationId].sort());
     }
   }
+  const csvStreams = new Set(source.streams.filter(stream => stream.transport === 'csv').map(stream => stream.streamId));
+  if (capture.events.some(event => csvStreams.has(event.streamId) && !associated.has(event.id))) {
+    throw new SourceError(409, 'MANIFEST_MEMBER_MISSING', 'A pinned CSV event is missing its captured original row');
+  }
   return evidence;
 }
 
@@ -158,7 +162,7 @@ function querySnapshot(
   if (afterEventId !== undefined && position === -1) return fail('DISCOVERY_INVALID');
 
   const citations = capturedCitations(capture);
-  const byEvent = eventEvidence(capture);
+  const byEvent = eventEvidence(capture, source);
   const page: SnapshotPage = { ok: true, events: [], nextAfterEventId: null };
   for (const [offset, event] of filtered.slice(position + 1, position + 1 + limit).entries()) {
     const evidenceIds = (byEvent.get(event.id) ?? []).filter(id => {

@@ -52,7 +52,9 @@ function apiCitation(fixture: Fixture, event: RawSourceEvent) {
   return citationId(snapshotId, original, { kind: 'json', pointer: '' });
 }
 
-async function capture(source: SourceDefinition, events: RawSourceEvent[], epoch = 1): Promise<Fixture> {
+async function capture(
+  source: SourceDefinition, events: RawSourceEvent[], epoch = 1, includeBatch = true,
+): Promise<Fixture> {
   const dependencies = { db, store, clock: () => new Date(now) };
   const { companyId, sourceRef } = source;
   const id = 'manifest-tools-' + companyId + '-' + epoch;
@@ -66,7 +68,7 @@ async function capture(source: SourceDefinition, events: RawSourceEvent[], epoch
   }];
   let csvId: string | undefined;
   const csv = events.filter(event => event.streamId === 'b-files');
-  if (csv.length) {
+  if (csv.length && includeBatch) {
     const batch = { streamId: 'b-files', batchId: 'batch', sequence: 1 };
     const upload = await uploadSource(dependencies, {
       companyId, sourceRef, documentId: 'batch', documentVersion: 1, kind: 'event_csv', originalName: 'batch.csv', batch,
@@ -280,15 +282,13 @@ test('searches only pinned authorized citation excerpts in lexical order', async
 });
 
 test('projects a narrow range and preserves original citation and hash across same-byte captures', async () => {
-  const later = await capture(companyB, b.events, 2);
+  const later = await capture(companyA, a.events, 2);
   expect(a.emailHash).toBe(b.emailHash);
   expect(later.emailHash).toBe(b.emailHash);
   for (const foreign of [b.emailId, later.emailId]) {
     expect(await read(a, { name: 'readEvidence', arguments: { evidenceId: foreign } }))
       .toEqual({ ok: false, code: 'DISCOVERY_FORBIDDEN' });
   }
-  expect(await read(b, { name: 'readEvidence', arguments: { evidenceId: later.emailId } }))
-    .toEqual({ ok: false, code: 'DISCOVERY_FORBIDDEN' });
   const stored = async () => (await admin.query('SELECT evidence FROM source_evidence WHERE evidence_id=$1', [a.emailId])).rows[0]!.evidence;
   const original = await stored();
   const { excerpt, ...evidence } = original;
@@ -307,6 +307,13 @@ test('projects a narrow range and preserves original citation and hash across sa
     expect(await read(a, { name: 'readEvidence', arguments: { evidenceId: a.emailId, range } }))
       .toEqual({ ok: false, code: 'DISCOVERY_INVALID' });
   }
+});
+
+test('rejects pinned CSV events when the captured manifest omits their original batch', async () => {
+  const withoutBatch = await capture(companyB, b.events, 2, false);
+  expect(withoutBatch.csvId).toBeUndefined();
+  await expect(page(withoutBatch, { limit: 50 }))
+    .rejects.toMatchObject({ status: 409, code: 'MANIFEST_MEMBER_MISSING' });
 });
 
 test('fails closed on mismatched bindings, corrupt original extraction, and missing citation membership', async () => {
