@@ -19,16 +19,17 @@ export function createActivationReview({ repository, preparation, publisher, pub
     requireAccount(accountId, grants);
     const existing = await repository.readIntentByKey(request.idempotencyKey);
     let intent;
-    if (existing) {
-      if (existing.accountId !== accountId || canonicalJson(existing.request) !== canonicalJson(request)) {
+    if (existing?.accountId === accountId) {
+      requireSource(existing.sourceRef, grants);
+      if (canonicalJson(existing.request) !== canonicalJson(request)) {
         throw new ReviewError(409, 'IDEMPOTENCY_CONFLICT');
       }
-      requireSource(existing.sourceRef, grants);
       intent = existing;
     } else {
       const head = await repository.readHead(accountId);
       if (!head) throw new ReviewError(404, 'REVIEW_NOT_FOUND');
       requireSource(head.sourceRef, grants);
+      if (existing) throw new ReviewError(409, 'IDEMPOTENCY_CONFLICT');
       if (!requestMatchesReview(request, head.review)) throw new ReviewError(409, 'REVIEW_STALE');
       const fresh = await preparation.revalidate(accountId, grants, 'activate');
       const saved = savedAuthority.parse(head.companion);

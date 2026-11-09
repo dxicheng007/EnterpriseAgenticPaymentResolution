@@ -17,7 +17,7 @@ import { createFinancialAttestationRegistry } from '@eapr/evaluator/financial-at
 import { createCandidateRegistry } from '@eapr/evaluator/registry';
 import { loadActivationPolicy } from '@eapr/storage/activation-policy';
 import { createRegisteredScopeReader } from '@eapr/storage/activation-registry';
-import { createRegisteredScopePublication } from '../../apps/control/src/activation-publication.js';
+import { createActivationPublication, createRegisteredScopePublication } from '../../apps/control/src/activation-publication.js';
 import { createLocalComposition, localSourceCatalog } from '../../apps/control/src/composition.js';
 import { buildDemoCandidate } from '../../apps/control/src/demo-candidates.js';
 import { createFinancialCaptureReader } from '../../apps/control/src/financial-capture.js';
@@ -36,6 +36,7 @@ import { captureEvidenceFixture } from '../fixtures/evidence-v2-capture.js';
 import { testNamespace } from '../fixtures/harness.js';
 import { createWorkerClient, launchControl } from '../../apps/control/src/server.js';
 import { createParentReadClient } from '../../apps/control/src/parent-read-client.js';
+import { createActivationReview } from '../../apps/control/src/activation-review.js';
 import { createReviewPreparation } from '../../apps/control/src/review-preparation.js';
 import { createReviewProofSelection } from '../../apps/control/src/review-proof-selection.js';
 import { createReviewRepository, headToken } from '../../apps/control/src/review-repository.js';
@@ -554,6 +555,39 @@ test('composed reviewer prepares both real subjects and recovers one exact publi
         expect((await db.query('SELECT * FROM activation_intents')).rowCount).toBe(1);
         await expect(readActivationBundle({ registryRoot }, committed!.bundleHash)).rejects.toThrow('ACTIVATION_BUNDLE_MISMATCH');
         await unlink(bundleDirectory);
+
+        // The normal demo session grants both sources. Exercise a narrower reviewer against the real stored intent.
+        const activate = createActivationReview({
+          repository,
+          preparation: {
+            async revalidate() { throw new Error('Retry must not revalidate preparation'); },
+            async prepare() { throw new Error('Retry must not prepare'); },
+            async get() { throw new Error('Retry must not read a saved review'); },
+          },
+          publisher: createActivationPublication({ registryRoot, readCommittedIntent: repository.readCommittedIntent }),
+          publicationFailed: () => { throw new Error('Unexpected publication attempt'); },
+        });
+        const sourceForbidden = {
+          demoOnly: true as const, reviewer: { reviewerId: 'restricted-reviewer', sessionId: 'restricted-session' },
+          allowedAccountIds: [a.accountId, b.accountId], allowedSourceRefs: [],
+        };
+        for (const [accountId, payload] of [
+          [a.accountId, approval],
+          [a.accountId, { ...approval, expectedTargetVersion: approval.expectedTargetVersion + 1 }],
+          [b.accountId, approval],
+        ] as const) {
+          await expect(activate(accountId, payload, sourceForbidden)).rejects.toMatchObject({
+            statusCode: 403, code: 'REVIEW_FORBIDDEN',
+          });
+        }
+        await expect(activate(b.accountId, approval, {
+          ...sourceForbidden, allowedSourceRefs: [b.sourceRef],
+        })).rejects.toMatchObject({ statusCode: 409, code: 'IDEMPOTENCY_CONFLICT' });
+        await expect(activate('no-saved-review', approval, {
+          ...sourceForbidden, allowedAccountIds: ['no-saved-review'], allowedSourceRefs: [b.sourceRef],
+        })).rejects.toMatchObject({ statusCode: 404, code: 'REVIEW_NOT_FOUND' });
+        await expect(readActivationBundle({ registryRoot }, committed!.bundleHash)).rejects.toThrow('ACTIVATION_BUNDLE_MISMATCH');
+        expect(await repository.readIntentByKey(approval.idempotencyKey)).toEqual(committed);
 
         // Hold each winning transaction after it acquires the actual PostgreSQL head lock.
         const raceHead = (await repository.readHead(a.accountId))!;
