@@ -1,0 +1,24 @@
+# Independent construction handoff review
+
+**Verdict: PASS for C1 dispatch.** No blocking specification or implementability gap found for the next checkpoint. C2/C3 remain separately dispatched and reviewed. This is document/source inspection, not implementation acceptance or machine verification.
+
+Reviewed `b-discovery-construction-handoff.md` against the accepted orchestration proposal, discovery-shapes freeze, evidence-tools and evidence implementation handoffs, and current source/discovery contracts. Observed repository HEAD: `85e2c11dda2b1b61087299e4952b21ca8d27bebb`. Root's explicit 007 construction / 008 unimplemented A4 reservation ruling is the review premise; no applied migration change is authorized.
+
+## C1 readiness
+
+- The proposed inputs, role permissions, immutable exact finding revisions, investigation budgets, pending agent disposition and durable blocker origins implement accepted orchestration §§2/4 (`v4-orchestration-contract-proposal.md:103–134,189–200`). Historical derivation revisions are permitted; proposal consumption later requires current revisions. Neither evidence association nor a supported model assertion becomes reviewer or financial authority.
+- The evidence helper is implementable with the existing closed prepare port. `packages/sources/src/discovery-tools.ts` exposes `prepare` with detached capture facts; `querySnapshot` returns validated event/citation associations and filters citation exposure through `permitsEvidence`. `readEvidence` separately enforces coverage, preserving the account-only denial for file citations with unknown coverage. The handoff correctly forbids using membership-only `CaptureFacts`, model subject claims or arbitrary excerpts as account applicability proof. Unknown applicability is conservatively source-wide blocked, as accepted orchestration §2 requires. This does not require a new source coverage permission.
+- Whole-batch projected validation, exact replay before evidence I/O, current policy checks and owner-connection atomic finding publication are consistent with accepted D2 (`b-discovery-evidence-implementation-handoffs.md:64–92`) and orchestration §5 (`v4-orchestration-contract-proposal.md:228–255`). The current supervisor already supplies the replay/preparation/recheck/claim framework (`packages/discovery/src/supervisor.ts:575–700`). C1 must extend it for projected CAS/budget effects; the handoff explicitly assigns that work and tests, rather than assuming the existing read-only preflight already handles writes.
+- The 65,536-byte per-call/result and 131,072-byte model-envelope limits, finite rounds/attempts, strict schema reuse and safe activity restrictions retain accepted bounds. Deferred tools remain unavailable. C1 introduces no model client, registry operation, verification capability, approval or runtime action.
+
+## C1 migration coverage for later checkpoints
+
+The table responsibilities at handoff line 55 are sufficiently concrete to implement coherent 007 DDL now: immutable finding/proposal revisions and exact edges, stable investigation applicability and union history, versioned assessments, separately invalidatable current links, and durable tool-step-bound compilation subject/state/history. Together with C3's required proposal/hash/run/assessment/generation binding (line 106), these express the specified later publication fences without requiring financial identity tables or mutable historical payloads.
+
+Column layout, supporting same-run unique indexes/FKs, JSON payload checks and column-specific grants remain ordinary implementation choices, to be demonstrated by the required C1 migration tests. This review does not certify unwritten SQL. The implementer must surface an actual missing storage invariant before 007 is frozen; unused C2/C3 tables must not advertise implemented tools.
+
+## Explicit later obligation, not a C1 blocker
+
+Correct the C3 capture-reader seam before C3 dispatch. Handoff line 102 requests `{facts,manifest,snapshot}` “from existing `readDiscoveryCaptureContents`”, but the actual function returns `{facts,manifest,events,apiCitations,fileCitations,files}` (`packages/sources/src/discovery-reads.ts:178–181`). It validates an aggregate snapshot internally but does not return it. The C3 handoff must name an actual source-owned route to the exact validated snapshot and obtain any required narrow source-owner release; it must not assume that field exists, select latest capture, or construct a substitute snapshot from model data. This does not affect C1's existing read-tools dependency or the specified compilation persistence contracts.
+
+No implementation, tests, source edits or commits were performed. Only this independent review record was written. Exact-candidate C1 code review and its required machine evidence remain outstanding.

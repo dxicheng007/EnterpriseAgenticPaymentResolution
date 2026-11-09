@@ -2,7 +2,7 @@
 
 This checkpoint publishes completed local work, preserves separately committed candidates, and records remaining work. It is not acceptance of the complete demo. Machine checks, independent Astra review, and joint user acceptance remain distinct.
 
-**Latest:** reviewed parent persistence and protected financial attestation execution are integrated at `5ce860b`. Combined checks passed: typecheck, 332 unit tests, 32 PostgreSQL tests, V0 and V2. The Discovery monitor and pinned source readers are integrated; source-tool lifecycle execution and durable financial-attestation issuance are integrated; authenticated financial composition is in progress. Model execution is unconfigured. Customer approval/import orchestration, composed parent reads and continuing sync remain unavailable. Accepted record-category terminology is unchanged.
+**Latest:** authenticated financial attestation is integrated at `dbda672`. Combined typecheck, 339 unit tests, five focused PostgreSQL tests and full V0/V2 gates passed. The live demo retains the accepted terminology and original source/pin files. Agent findings and operator policy/publication are also integrated after review. Customer activation, live model construction and ongoing sync remain incomplete.
 
 ## Published checkpoint (historical)
 
@@ -269,3 +269,19 @@ Root moved the unimplemented review/activation-intent reservation to control008 
 ## Authoritative source observation prerequisite
 
 AS corrected candidate `b3af86b00057e3236d478c6cb038c992be4e9236` passed [independent Astra review](reviews/b-source-semantics-independent-review.md) and is integrated at `85e2c11dda2b1b61087299e4952b21ca8d27bebb`. The [report](handoffs/b-source-semantics-report.md) records real publication/append races and authenticated HTTP, including the shared router correction for valid 101–160-character source IDs and sanitized malformed-path errors. Builder typecheck, 337 unit checks and 24 PostgreSQL checks passed; reviewer independently reran four targeted PostgreSQL/HTTP cases. Default mounting, selected-profile comparisons and activation consumers remain separate.
+
+
+## Authenticated financial attestation composition
+
+A1c `ce63cfc942065d9625191881ffa7cba56df739b3` passed [independent Astra review](reviews/b-financial-attestation-composition-independent-review.md), with [implementation evidence](handoffs/b-financial-attestation-composition-report.md). Integrated `dbda6725eb21328871089b28c3da0e7d6af8b0a0` passed root typecheck, 339 units, five focused PostgreSQL checks, full V0 and full V2. V0 packet: `.evidence/dbda6725eb21328871089b28c3da0e7d6af8b0a0/V0/2026-11-09T06-35-59-816Z-77785/`. V2 packet: `.evidence/dbda6725eb21328871089b28c3da0e7d6af8b0a0/V2/2026-11-09T06-36-06-063Z-78303/`: 21 commands, 94 assertions, ten hash-verified PNGs, fifteen mode-0600 files, no diagnostics, authenticated traces disabled.
+
+The local demo restarted on this code with ready control006/runtime002 and all 253 original source/pin file hashes unchanged. Root manually ran Company A preview and verification through the browser: $800, zero parent writes, completed job `52d41f39-65ff-4a35-8214-0508988b4088`, all thirteen mandatory checks passed. This is smoke evidence, not customer approval or joint acceptance. Historical reports remain readable; only new attested runs provide this provenance. Later source closure changes require fresh financial proof before current policy installation.
+
+
+## Operator policy and discovery findings prerequisites
+
+A2 `bc272a5127af0e288cc46ae7617f00de5ffee244` passed [independent review](reviews/b-activation-policy-independent-review.md), with [implementation evidence](handoffs/b-activation-policy-report.md), and is integrated at `fcbc0cf969bd965c115d07eb76ed250ea1f70d17`. Root combined typecheck, 346 unit tests and five PostgreSQL checks passed, including actual policy setup/publication and authenticated financial verification against the changed build closure. No production policy was installed. Scope publication remains independent of customer authority; final financial proof must match final installed build policy.
+
+C1 corrected `aff21214ded3a59c1295bb1dc130079410106440` passed [fresh scoped review](reviews/b-discovery-findings-fix-review.md) and is integrated at `ae982dc230adffaa2ccf6d02b93c9151133e3407`. The [report](handoffs/b-discovery-findings-report.md) preserves four reproduced capacity failures and the 80-test focused regression. Findings remain pending agent interpretations; immutable revisions and sticky origins preserve unresolved evidence. Whole-batch projection now prevents earlier findings or children from committing before a later over-capacity delegation fails. Proposal tools and live model execution remain later checkpoints.
+
+Root combined `ae982dc` typecheck, seven focused construction/discovery/build tests and 29 PostgreSQL tests passed across findings and authenticated verification. These checks include control007 alongside existing control006 provenance.
