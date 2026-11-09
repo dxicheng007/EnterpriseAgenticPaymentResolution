@@ -1,8 +1,9 @@
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
-import type { CandidateRegistry, PreviewReadContext, SnapshotRead, SnapshotReader, TargetReader } from '@eapr/compiler/preview-adapters';
-import { DemoCandidatesResponseSchema, type DemoCandidatesResponse, type Id } from '@eapr/contracts';
+import type { CandidateRegistration, PreviewReadContext, SnapshotRead, SnapshotReader, TargetReader } from '@eapr/compiler/preview-adapters';
+import { canonicalJson, DemoCandidatesResponseSchema, type DemoCandidatesResponse, type Id } from '@eapr/contracts';
 import { sameScope } from '@eapr/finance/validate';
 import { compile } from '@eapr/compiler/compile';
+import type { createCandidateRegistry } from '@eapr/evaluator/registry';
 import {
   companyA, companyB, createSourceService, readDossier, readEvidence, readManifest,
   SourceError, type EvidenceAuthorization, type SourceDefinition, type UploadDependencies,
@@ -27,7 +28,7 @@ export const localSourceCatalog: ReadonlyMap<Id, SourceDefinition> = new Map(
 export async function createLocalComposition(dependencies: UploadDependencies, options: {
   webOrigin: string;
   captures: DemoCapture[];
-  registry?: Pick<CandidateRegistry, 'registerCandidate'>;
+  registry?: Pick<ReturnType<typeof createCandidateRegistry>, 'getCandidate' | 'registerCandidate'>;
   parentReads?: ParentReadClient;
   fixtureTarget?: TargetReader;
   verification?: LocalVerificationOptions;
@@ -37,7 +38,7 @@ export async function createLocalComposition(dependencies: UploadDependencies, o
   const service = createSourceService(dependencies, localSourceCatalog);
   const captureIds = new Map<Id, DemoCapture>();
   const captureBindings: CaptureBinding[] = [];
-  const registrations: Parameters<CandidateRegistry['registerCandidate']>[0][] = [];
+  const registrations: CandidateRegistration[] = [];
   const companies = new Set<Id>();
   const catalog: DemoCandidatesResponse = {
     mode: 'development-fixture', targetMode: options.fixtureTarget ? 'empty-fixture' : 'persisted-parent', verificationAvailable: false, candidates: [], diagnostics: [],
@@ -154,18 +155,31 @@ export async function createLocalComposition(dependencies: UploadDependencies, o
   }
   if (setupCode) catalog.diagnostics.push(verificationSetupDiagnostic(setupCode));
   const registry = verification?.registry ?? options.registry;
-  async function registerSourceCandidate(input: typeof registrations[number]) {
-    if (!registry) return false;
-    try {
-      await registry.registerCandidate(input);
-      return true;
-    } catch {
-      return false;
-    }
+  const registrationFailures = new Map<Id, CandidateRegistration>();
+  if (!options.fixtureTarget) {
+    await Promise.all(registrations.map(async input => {
+      try {
+        if (registry) {
+          await registry.registerCandidate(input);
+          return;
+        }
+      } catch {
+        // A registry failure must leave source inspection and the catalog mounted.
+      }
+      for (const profile of input.profiles) registrationFailures.set(profile.scope.accountId, input);
+    }));
   }
-  const registrationFailures = new Set((await Promise.all((options.fixtureTarget ? [] : registrations).map(async input =>
-    await registerSourceCandidate(input) ? [] : input.profiles.map(profile => profile.scope.accountId),
-  ))).flat());
+
+  async function registrationRecovered(accountId: Id) {
+    const expected = registrationFailures.get(accountId);
+    if (!expected) return true;
+    if (!registry) return false;
+    const current = await registry.getCandidate(expected.artifact.hash, expected.manifest.id);
+    if (current.manifest.hash !== expected.manifest.hash ||
+        canonicalJson(current.snapshot) !== canonicalJson(expected.snapshot)) return false;
+    registrationFailures.delete(accountId);
+    return true;
+  }
 
   const candidatePlugin: FastifyPluginAsync = async app => {
     app.get('/api/demo/candidates', async (request, reply) => {
@@ -180,7 +194,7 @@ export async function createLocalComposition(dependencies: UploadDependencies, o
             try {
               if (!options.parentReads) return candidate.scope.accountId;
               await options.parentReads.readParent(candidate.scope.accountId, {}, grants, candidate.scope);
-              if (registrationFailures.has(candidate.scope.accountId)) return candidate.scope.accountId;
+              if (!await registrationRecovered(candidate.scope.accountId)) return candidate.scope.accountId;
             } catch {
               return candidate.scope.accountId;
             }

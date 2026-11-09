@@ -1,7 +1,8 @@
-import { mkdtemp, realpath, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
+import type { CandidateRegistration } from '@eapr/compiler/preview-adapters';
 import { compile } from '@eapr/compiler/compile';
 import { canonicalJson, DemoCandidatesResponseSchema, hashCanonical, hashTargetSnapshot, ParentViewSchema, PreviewResponseSchema, targetRecordId } from '@eapr/contracts';
 import { createCandidateRegistry } from '@eapr/evaluator/registry';
@@ -15,13 +16,16 @@ import { loadDemo } from '../../scripts/load-demo.js';
 import { localPort } from '../../scripts/native-db.js';
 import { createTestSystem, testNamespace } from '../fixtures/harness.js';
 
-test('registers both source subjects before preview and enables real proxy reads after explicit publication', async () => {
+test.each(['initial publication', 'registration storage recovery'])('enables registered proxy reads after %s', async scenario => {
   const directory = await mkdtemp(join(await realpath(tmpdir()), 'eapr-parent-composition-'));
   const registryRoot = join(directory, 'artifacts');
+  const blocked = scenario === 'registration storage recovery';
+  const attempted: CandidateRegistration[] = [];
   const origin = 'http://127.0.0.1:' + localPort('EAPR_WEB_PORT', 5173);
   let serviceToken = '';
   let system: Awaited<ReturnType<typeof createTestSystem>> | undefined;
   try {
+    if (blocked) await writeFile(registryRoot, 'obstructed registry directory');
     const store = await createEvidenceStore(join(directory, 'evidence'));
     system = await createTestSystem({
       modelMode: 'disabled', dbNamespace: testNamespace('parentcomp'),
@@ -34,8 +38,15 @@ test('registers both source subjects before preview and enables real proxy reads
         const { captures } = await loadDemo(dependencies, {
           visibleRoot: join(directory, 'visible'), truthRoot: join(directory, 'truth'),
         });
+        const registry = createCandidateRegistry(db, registryRoot);
         return (await createLocalComposition(dependencies, {
-          webOrigin: origin, captures, registry: createCandidateRegistry(db, registryRoot),
+          webOrigin: origin, captures, registry: {
+            ...registry,
+            async registerCandidate(input) {
+              attempted.push(input);
+              await registry.registerCandidate(input);
+            },
+          },
           parentReads: createParentReadClient('http://127.0.0.1:' + localPort('EAPR_WORKER_PORT', 3002), serviceToken, registryRoot),
         })).featurePlugins;
       },
@@ -70,7 +81,9 @@ test('registers both source subjects before preview and enables real proxy reads
       if (!compiled.ok) throw new Error('Expected a compiled source candidate');
       const manifestId = snapshotId.slice('snapshot:'.length);
       const selectedProfileHash = request.profiles[0]!.hash;
-      expect((await registry.getCandidate(compiled.value.hash, manifestId)).profiles[0]!.hash).toBe(selectedProfileHash);
+      const registration = registry.getCandidate(compiled.value.hash, manifestId);
+      if (blocked) await expect(registration).rejects.toMatchObject({ statusCode: 404 });
+      else expect((await registration).profiles[0]!.hash).toBe(selectedProfileHash);
       selections.push({ artifactHash: compiled.value.hash, manifestId, selectedProfileHash });
 
       const parentPath = '/api/parent/' + scope.accountId;
@@ -80,8 +93,14 @@ test('registers both source subjects before preview and enables real proxy reads
       expect(await control.request('/api/connectors/preview', { method: 'POST', headers, body: request }))
         .toMatchObject({ status: 503, body: { code: 'PREVIEW_DEPENDENCY_UNAVAILABLE' } });
     }
+    if (blocked) {
+      expect(attempted).toHaveLength(2);
+      await rm(registryRoot);
+      for (const input of attempted) await registry.registerCandidate(input);
+    }
     await createRegisteredScopePublication({ registryRoot, candidates: registry }).publishRegisteredScopes(selections);
     expect((await readCatalog()).diagnostics).toEqual([]);
+    expect(attempted).toHaveLength(2);
     expect((await control.request('/api/parent/ungranted', { headers })).status).toBe(403);
     const previews = [];
     for (const { scope, request } of catalog.candidates) {
@@ -105,6 +124,7 @@ test('registers both source subjects before preview and enables real proxy reads
         method: 'POST', headers: { cookie, origin }, body: request,
       })).status).toBe(403);
     }
+    expect((await readCatalog()).diagnostics).toEqual([]);
     await worker.stop();
     expect((await readCatalog()).diagnostics).toMatchObject([{ code: 'PARENT_READ_UNAVAILABLE' }]);
     await worker.start();
