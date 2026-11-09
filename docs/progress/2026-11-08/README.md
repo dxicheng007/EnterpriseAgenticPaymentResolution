@@ -2,7 +2,7 @@
 
 This checkpoint publishes completed local work, preserves separately committed candidates, and records remaining work. It is not acceptance of the complete demo. Machine checks, independent Astra review, and joint user acceptance remain distinct.
 
-**Latest:** reviewed parent persistence and protected financial attestation execution are integrated at `5ce860b`. Combined checks passed: typecheck, 332 unit tests, 32 PostgreSQL tests, V0 and V2. The Discovery monitor and pinned source readers are integrated; source-tool lifecycle integration and durable financial-attestation issuance are in progress. Model execution is unconfigured. Customer approval/import orchestration, composed parent reads and continuing sync remain unavailable. Accepted record-category terminology is unchanged.
+**Latest:** reviewed parent persistence and protected financial attestation execution are integrated at `5ce860b`. Combined checks passed: typecheck, 332 unit tests, 32 PostgreSQL tests, V0 and V2. The Discovery monitor and pinned source readers are integrated; source-tool lifecycle execution and durable financial-attestation issuance are integrated; authenticated financial composition is in progress. Model execution is unconfigured. Customer approval/import orchestration, composed parent reads and continuing sync remain unavailable. Accepted record-category terminology is unchanged.
 
 ## Published checkpoint (historical)
 
@@ -252,3 +252,15 @@ A3a `bb8c070930c14364af1a98695ad904fec5b3c238` passed [independent review](revie
 A1a initial `4a79b53` was withheld for failure-code classification and missing temporal build-mutation evidence. Corrected `4ff530765374cc3e016a1024e44718a4105e3af2` passed [fresh scoped review](reviews/b-financial-attestation-runner-fix-review.md). Its [report](handoffs/b-financial-attestation-runner-report.md) preserves the red/green history. The protected child evaluates the exact initially decoded evidence bytes, preserves fixed request-bound mismatch diagnostics, and rejects a build change during evaluation. Valid negative comparisons remain ineligible audit results; malformed or unavailable execution cannot become a completed attestation. All thirteen financial checks remain required and legacy transport behavior is retained.
 
 Both are integrated at clean `5ce860b4a74d8db13c96c27a2af8bd5164527625`. Root typecheck, 332 unit tests, 32 real PostgreSQL tests, full V0 and full V2 passed. V0 packet: `.evidence/5ce860b4a74d8db13c96c27a2af8bd5164527625/V0/2026-11-09T03-06-51-509Z-45095/`. V2 packet: `.evidence/5ce860b4a74d8db13c96c27a2af8bd5164527625/V2/2026-11-09T03-06-57-510Z-45734/`, with 21 successful commands, 94 assertions, ten verified PNGs, fifteen mode-0600 files and no diagnostics. Historical source/selection files retained all 253 original hashes. These results do not grant customer authority, install a policy or prove a complete V3/V4 demo.
+
+
+## Durable financial verification provenance
+
+A1b `766714f80d31c6d2bbb961ff3094bc4a9a0d7615` passed [independent Astra review](reviews/b-financial-attestation-registry-independent-review.md) and is integrated at `98a13af32366a66a19512c0873fdb480ea8de4a1`. The [implementation report](handoffs/b-financial-attestation-registry-report.md) records reservation-before-launch, atomic report/attestation completion, exact replay and conflict handling, restart validation and single-entry policy binding. Root combined typecheck and 333 unit tests passed. Independent review reran the real A/B protected PostgreSQL registry test. A1c authenticated composition and policy installation remain separate; the current demo does not yet grant activation authority.
+
+
+## Guarded discovery evidence execution
+
+D2 corrected candidate `a5209db46bc82b28f95bbe31b7ff550b958677a2` passed [fresh scoped Astra review](reviews/b-discovery-evidence-lifecycle-fix-review.md) after the initial recovery finding. The [report](handoffs/b-discovery-evidence-lifecycle-report.md) records four regressions reproduced before the fix and 87 focused PostgreSQL checks after it. The real source reader now executes under durable claims and guarded settlement; observed authority revocation remains a sticky blocker through owner replacement and pause/resume. Integrated `cde1958c76abb40a3e6f34007e3edb46e42e1cb1` passed combined typecheck and 34 PostgreSQL checks across lifecycle HTTP, evidence execution and financial registry. No live model or constructed connector is claimed.
+
+Root moved the unimplemented review/activation-intent reservation to control008 and assigned control007 to discovery findings/proposals, so independently developed discovery persistence can land first without inserting an earlier migration later. No applied SQL was changed.
