@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { onSessionExpiration } from '../../../packages/client/src/http.js';
 import { getLocalSession, type LocalSession } from '../../../packages/client/src/session.js';
+import { DiscoveryPage } from './features/discovery/DiscoveryPage.js';
 import { HealthPage } from './features/health/HealthPage.js';
 import { PreviewPage } from './features/preview/PreviewPage.js';
 import { SourcesPage } from './features/sources/SourcesPage.js';
@@ -8,10 +9,11 @@ import './features/sources/review.css';
 
 const pages = [
   { id: 'health', label: 'Health' }, { id: 'sources', label: 'Sources' }, { id: 'preview', label: 'Preview' },
+  { id: 'discovery', label: 'Discovery' },
 ] as const;
 
 function currentPage() {
-  return pages.find(page => '#' + page.id === window.location.hash)?.id ?? 'health';
+  return pages.find(page => '#' + page.id === window.location.hash.split('?', 1)[0])?.id ?? 'health';
 }
 
 export function App() {
@@ -52,9 +54,9 @@ export function App() {
         aria-current={page === item.id ? 'page' : undefined}>{item.label}</a>)}</nav>
     </header>
     {page === 'health' ? <HealthPage /> : !session
-      ? <main className="review-main"><h1>{page === 'sources' ? 'Sources and evidence' : 'Connector preview'}</h1>
+      ? <main className="review-main"><h1>{page === 'sources' ? 'Sources and evidence' : page === 'discovery' ? 'Discovery' : 'Connector preview'}</h1>
         <p>{sessionFailed ? 'The demo reviewer session is required to open this workspace.' : 'Opening local demo session…'}</p>
       </main>
-      : page === 'sources' ? <SourcesPage allowedSourceRefs={session.allowedSourceRefs} /> : <PreviewPage />}
+      : page === 'sources' ? <SourcesPage allowedSourceRefs={session.allowedSourceRefs} /> : page === 'discovery' ? <DiscoveryPage /> : <PreviewPage />}
   </>;
 }
