@@ -6,6 +6,7 @@ import {
   companyA, companyB, createSourceService, readDossier, readEvidence, readManifest,
   SourceError, type EvidenceAuthorization, type SourceDefinition, type UploadDependencies,
 } from '@eapr/sources';
+import { composeDiscovery } from './discovery-composition.js';
 import { buildDemoCandidate, type DemoCapture } from './demo-candidates.js';
 import { createLocalSessionService, LocalSessionError } from './local-session.js';
 import { createPreviewPlugin } from './routes/preview.js';
@@ -68,11 +69,12 @@ export async function createLocalComposition(dependencies: UploadDependencies, o
     else catalog.diagnostics.push(result.diagnostic);
   }
 
-  const session = createLocalSessionService({
-    webOrigin: options.webOrigin, reviewerId: 'demo-reviewer',
+  const reviewer = {
+    reviewerId: 'demo-reviewer',
     allowedSourceRefs: [...localSourceCatalog.values()].map(source => source.sourceRef),
     allowedAccountIds: catalog.candidates.map(candidate => candidate.scope.accountId),
-  });
+  };
+  const session = createLocalSessionService({ webOrigin: options.webOrigin, ...reviewer });
 
   const authorizeSource: AuthorizeSource = async (request, { companyId, sourceRef, operation }) => {
     try {
@@ -161,6 +163,7 @@ export async function createLocalComposition(dependencies: UploadDependencies, o
     authorizeSource,
     featurePlugins: [
       session.plugin,
+      composeDiscovery({ catalog: localSourceCatalog, store, reviewer, authorizeReviewer: session.authorizeReviewer }),
       createSourcePlugin({ catalog: localSourceCatalog, authorizeSource, store }),
       createPreviewPlugin({
         authorizeRead, readSnapshot, readTarget,

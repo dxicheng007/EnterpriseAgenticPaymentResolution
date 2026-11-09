@@ -3,10 +3,12 @@ import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import {
   ModelResultV2Schema, ModelTurnV2Schema, IdSchema, NonnegativeIntegerSchema, createToolStepId, hashCanonical,
-  type ModelMessageV2, type ModelResultV2, type ModelTurnV2,
+  type DiscoveryBinding, type ModelMessageV2, type ModelResultV2, type ModelTurnV2,
 } from '../../contracts/src/index.js';
 import { budgets, safeCounter } from './budgets.js';
 import type { ModelClient } from './model.js';
+import { unavailableToolCode, toolSchemas } from './roles.js';
+import { executeDelegation, validateDelegation, type CaptureAccess, type CaptureFacts } from './tasks.js';
 import {
   coversGrant, discoveryError, insertSpecialist, lockRun, lockTask, markBlocker, publishDiscovery, runnable,
   type RepositoryOptions, type RunRow, type TaskRow,
@@ -24,25 +26,20 @@ type Dispatch = {
 };
 type Step = {
   id: string; dispatch_id: string; native_id: string; name: string; state: string; arguments: ModelResultV2['toolCalls'][number]['arguments'];
-  result: Extract<ModelMessageV2, { kind: 'tool_result' }>['result'];
+  result: { ok: false; code: string } | { ok: true; taskId: string; investigationId: string; revision: number };
 };
 type Reservation = { turn: ModelTurnV2; revision: number };
 type Options = RepositoryOptions & {
   model: ModelClient;
+  capture?: CaptureAccess;
   // Named test boundaries. No hook is configured by the runtime composition.
   testHooks?: {
     beforeReservationCommit?: () => Promise<void>;
     afterReservationCommit?: () => Promise<void>;
+    beforeDelegationCommit?: () => Promise<void>;
   };
 };
 
-const commonDeferredTools = new Set([
-  'describeSource', 'querySnapshot', 'searchEvidence', 'readEvidence', 'publishFinding', 'readFinding', 'requestInvestigation',
-]);
-const coordinatorDeferredTools = new Set(['delegateTask', 'beginRepair', 'finishRun']);
-const connectorDeferredTools = new Set([
-  'draftConnector', 'reviseConnector', 'compileConnector', 'runSandboxReplay', 'compareArtifacts', 'requestVerification', 'readVerification',
-]);
 const usageEnvelope = z.object({
   schemaVersion: z.literal(2), dispatchId: IdSchema, providerCallId: IdSchema,
   usage: z.strictObject({ inputTokens: NonnegativeIntegerSchema, outputTokens: NonnegativeIntegerSchema }),
@@ -64,7 +61,7 @@ function postgresJsonCompatible(value: ModelResultV2) {
   return compatible;
 }
 
-export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuthority, testHooks }: Options) {
+export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuthority, capture, testHooks }: Options) {
   const { modelId, mode } = model;
   const client = await db.connect();
   let valid = true;
@@ -225,7 +222,7 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
     const dispatchId = randomUUID();
     const parsed = ModelTurnV2Schema.safeParse({
       schemaVersion: 2, dispatchId, runId, taskId, role: task.role, instructions: 'Investigate the pinned source capture.',
-      messages: await transcript(connection, task), toolSchemas: [], limits: run.policy,
+      messages: await transcript(connection, task), toolSchemas: capture ? toolSchemas(task.role) : [], limits: run.policy,
     });
     if (!parsed.success) {
       await failTask(connection, run, task, 'MODEL_STOPPED');
@@ -362,45 +359,109 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
     };
   }
 
-  // Closed L1 boundary: no source tool or delegation is executed.
-  async function resolveUnavailableStep(runId: string, taskId: string, stepId: string) {
+  async function executePendingStep(runId: string, taskId: string, stepId: string) {
+    let facts: CaptureFacts | undefined;
+    let captureReadAttempted = false;
+    if (valid && capture) {
+      // The read is only a hint for external validation. The owner transaction authenticates
+      // the exact dispatch, run and task again before using the resulting capture facts.
+      const { rows: [selected] } = await db.query<{ binding: DiscoveryBinding; reviewer_id: string; grants: TaskRow['grants'] }>(`
+        SELECT r.binding,r.reviewer_id,t.grants FROM discovery_runs r
+        JOIN discovery_tasks t ON t.run_id=r.id AND t.role='coordinator'
+        JOIN discovery_tool_steps s ON s.run_id=r.id AND s.task_id=t.id
+        WHERE r.id=$1 AND t.id=$2 AND s.id=$3 AND s.state='pending' AND r.status IN ('queued','running')
+          AND EXISTS (SELECT 1 FROM discovery_tool_steps batch WHERE batch.dispatch_id=s.dispatch_id
+            AND batch.name='delegateTask' AND batch.state='pending')`, [runId, taskId, stepId]);
+      if (selected && coversGrant(resolveAuthority(selected.reviewer_id, selected.binding), selected.grants)) {
+        captureReadAttempted = true;
+        try { facts = await capture.readCapture(selected.binding); } catch { /* The guarded claim fails closed. */ }
+      }
+    }
     return transact(async connection => {
       const run = await lockRun(connection, runId);
       const task = await lockTask(connection, runId, taskId);
       if (!task || !permits(run, task)) return;
-      const { rows: [step] } = await connection.query<Step>(`SELECT s.* FROM discovery_tool_steps s
+      const { rows: [step] } = await connection.query<Step & { task_revision: string }>(`SELECT s.*,d.task_revision
+        FROM discovery_tool_steps s
         JOIN discovery_dispatches d ON d.run_id=s.run_id AND d.task_id=s.task_id AND d.id=s.dispatch_id
-        WHERE s.run_id=$1 AND s.task_id=$2 AND s.id=$3 AND s.generation<=$4 AND d.state='returned'
-        AND (s.state='failed' OR d.attempt=$5) FOR UPDATE OF s`, [runId, taskId, stepId, generation, task.attempt]);
-      if (step?.state === 'failed') return step.result;
-      if (!runnable(run) || task.status !== 'running' || step?.state !== 'pending') return;
-      const { rowCount: earlier } = await connection.query(`SELECT 1 FROM discovery_tool_steps
-        WHERE dispatch_id=$1 AND state='pending' AND ordinal<(SELECT ordinal FROM discovery_tool_steps WHERE id=$2) LIMIT 1`,
-      [step.dispatch_id, step.id]);
-      if (earlier) return;
-      const authorizedTool = commonDeferredTools.has(step.name) ||
-        (task.role === 'coordinator' && coordinatorDeferredTools.has(step.name)) ||
-        (task.role === 'connector' && connectorDeferredTools.has(step.name));
-      const code = authorizedTool ? 'TOOL_UNAVAILABLE' : 'TOOL_FORBIDDEN';
-      const result = { ok: false, code };
+        WHERE s.run_id=$1 AND s.task_id=$2 AND s.id=$3 AND s.generation<=$4 AND d.generation<=$4 AND d.state='returned'
+        AND (s.state IN ('failed','succeeded') OR d.attempt=$5) FOR UPDATE OF s`,
+      [runId, taskId, stepId, generation, task.attempt]);
+      if (!step || !permits(run, task)) return;
+      if (step.state === 'failed' || step.state === 'succeeded') return step.result;
+      if (!runnable(run) || task.status !== 'running' || step.state !== 'pending' ||
+          run.model_id !== modelId || run.mode !== mode) return;
+      const { rows: batch } = await connection.query<Step>(
+        'SELECT * FROM discovery_tool_steps WHERE dispatch_id=$1 ORDER BY ordinal', [step.dispatch_id]);
+      const pending = batch.filter(item => item.state === 'pending');
+      // Result acceptance and each earlier resolved step increment the task revision once.
+      if (pending[0]?.id !== step.id || !permits(run, task) ||
+          safeCounter(task.revision) !== safeCounter(step.task_revision) + 1 + batch.length - pending.length) return;
+
+      const delegates = capture && task.role === 'coordinator' ? pending.filter(item => item.name === 'delegateTask') : [];
+      let input: Awaited<ReturnType<typeof validateDelegation>> | undefined;
+      if (capture && delegates.length) {
+        // A pause or policy change may have suppressed the speculative read before
+        // this transaction. Let a later claim validate rather than blocking a valid run.
+        if (!captureReadAttempted) return;
+        let failure: string | undefined;
+        if (!facts || hashCanonical(run.binding) !== hashCanonical(facts.binding)) {
+          failure = 'DISCOVERY_CONFLICT';
+        } else {
+          try {
+            await capture.recheckCapture(connection, facts);
+            for (const delegate of delegates) {
+              const validated = await validateDelegation(connection, run, facts, delegate.arguments);
+              if (delegate.id === step.id) input = validated;
+            }
+          } catch (error) {
+            const code = error instanceof Error && 'code' in error && error.code;
+            if (code !== 'DISCOVERY_INVALID' && code !== 'DISCOVERY_CONFLICT' && code !== 'DISCOVERY_FORBIDDEN') throw error;
+            failure = code;
+          }
+        }
+        if (!permits(run, task)) return;
+        if (failure) {
+          // Record safe terminal results for transcript consistency, without publishing a
+          // call/result event or applying any effect from the rejected batch.
+          for (const item of pending) {
+            const code = item.name === 'delegateTask' ? failure : unavailableToolCode(task.role, item.name);
+            await connection.query(`UPDATE discovery_tool_steps SET state='failed',result=$2,generation=$3
+              WHERE id=$1 AND state='pending'`, [item.id, { ok: false, code }, generation]);
+          }
+          await failTask(connection, run, task, failure);
+          return { ok: false, code: step.name === 'delegateTask' ? failure : unavailableToolCode(task.role, step.name) } as const;
+        }
+      }
+
+      const result = input ? await executeDelegation(connection, run, input) : {
+        ok: false as const, code: unavailableToolCode(task.role, step.name),
+      };
+      const status = result.ok ? 'succeeded' : 'failed';
+      if (!result.ok && (result.code === 'INVESTIGATION_LIMIT' || result.code === 'SPECIALIST_LIMIT')) {
+        await publishBlock(connection, run, task, result.code);
+      }
       await publishDiscovery(connection, clock, run.id, 'tool.called', { dispatchId: step.dispatch_id, toolStepId: step.id }, task);
-      await connection.query("UPDATE discovery_tool_steps SET state='failed',result=$2,generation=$3 WHERE id=$1 AND state='pending'",
-        [step.id, result, generation]);
-      const { rowCount: pending } = await connection.query(
-        "SELECT 1 FROM discovery_tool_steps WHERE dispatch_id=$1 AND state='pending' LIMIT 1", [step.dispatch_id]);
+      await connection.query("UPDATE discovery_tool_steps SET state=$2,result=$3,generation=$4 WHERE id=$1 AND state='pending'",
+        [step.id, status, result, generation]);
       await connection.query('UPDATE discovery_tasks SET status=$2,revision=revision+1 WHERE id=$1',
-        [task.id, pending ? 'running' : 'queued']);
+        [task.id, pending.length > 1 ? 'running' : 'queued']);
       await connection.query('UPDATE discovery_runs SET revision=revision+1 WHERE id=$1', [run.id]);
-      await publishDiscovery(connection, clock, run.id, 'tool.result',
-        { dispatchId: step.dispatch_id, toolStepId: step.id, toolStatus: 'failed', diagnosticCodes: [code] }, task);
+      await publishDiscovery(connection, clock, run.id, 'tool.result', {
+        dispatchId: step.dispatch_id, toolStepId: step.id, toolStatus: status,
+        ...(!result.ok ? { diagnosticCodes: [result.code] } : {}),
+      }, task);
+      if (result.ok) await testHooks?.beforeDelegationCommit?.();
       return result;
     });
   }
 
   return {
-    generation, dispatchTask, resolveUnavailableStep,
-    // This seam seeds ready tasks only in trusted tests. L2 will call the same repository operation
-    // in a validated tool effect transaction.
+    generation, dispatchTask,
+    isValid: () => valid,
+    executePendingStep,
+    resolveUnavailableStep: executePendingStep,
+    // This seam seeds ready tasks only in trusted tests.
     ...(testHooks ? {
       addTestSpecialist: (runId: string, input: Parameters<typeof insertSpecialist>[2]) => transact(async connection => {
         const run = await lockRun(connection, runId);
