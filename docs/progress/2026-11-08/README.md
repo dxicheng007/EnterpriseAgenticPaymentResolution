@@ -214,3 +214,8 @@ The [additive authority freeze](../../superpowers/plans/2026-11-08-contract-free
 ## Authenticated activity stream
 
 M1 `a32721ce9d50472d69b8644cab42940912176f7d` passed [independent review](reviews/b-discovery-events-independent-review.md) and is integrated at `85f76868105737b3d718ee7fe5c46f5e75a7b975`. The [builder report](handoffs/b-discovery-events-report.md) records focused transport tests. Root combined typecheck and all 28 PostgreSQL tests across events, activity reads and lifecycle HTTP passed. The stream uses the same current reviewer/run authorization, exact per-event cursors, bounded backpressure and cleanup. It is control-run activity only; it does not claim the later combined control/runtime event API. The client/UI and real browser monitor proof are being implemented separately.
+
+
+## Additive authority contracts
+
+A0 `437739c96f2e27a417650c188967e26f20fc97cc` passed [independent review](reviews/b-activation-authority-contracts-independent-review.md) and is integrated at `633651778cfd4f5176831c8286f01132fd142a9f`. See [implementation evidence](handoffs/b-activation-authority-contracts-implementation-report.md). Root combined typecheck, 293 unit tests and four protected-run PostgreSQL tests passed. Strict safe attestations, complete policy tuples, scoped state/index and additive v2 bundle/hash contracts preserve existing v1 golden values. The bootstrap manifest now pins the three added runtime contract modules. These contracts neither install a trust policy nor grant financial authority.
