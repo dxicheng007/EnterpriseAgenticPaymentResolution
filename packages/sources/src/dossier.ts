@@ -1,27 +1,33 @@
 import {
-  BootstrapManifestSchema, IdSchema, SourceDossierSchema, SourceSnapshotSchema, canonicalJson, hashCanonical, hashEvent, hashManifest,
+  BootstrapManifestSchema, HashSchema, IdSchema, SourceDossierSchema, SourceSnapshotSchema, UploadMetadataSchema, canonicalJson, hashBytes, hashCanonical, hashEvent, hashManifest,
   type BootstrapManifest, type CaptureSnapshotResult, type Cursor, type Diagnostic, type EvidenceRef, type Hash, type Id, type ManifestStream,
   type RawSourceEvent, type SourceDossier, type SourceSnapshot,
 } from '@eapr/contracts';
-import type { Pool } from 'pg';
-import { EvidenceStorageError, type Extraction } from '@eapr/evidence';
+import type { Pool, QueryResultRow } from 'pg';
+import { EvidenceStorageError, extractDocument, type EvidenceStore, type Extraction } from '@eapr/evidence';
 import { publishActivity } from '@eapr/storage/activity';
 import { sqlState, withTransaction } from '@eapr/storage/transaction';
 import { citeEvidence } from './evidence-records.js';
 import { insertSourceRecord, validateSourceEvent, type PreparedSourceRecord, type SourceDefinition } from './records.js';
-import { lockSource, type StoredSourceFile, type UploadDependencies } from './uploads.js';
+import { lockSource, sourceFileId, type StoredSourceFile, type UploadDependencies } from './uploads.js';
 import { SourceError } from './errors.js';
 
-export async function readManifest(db: Pool, companyId: Id, manifestId?: Id): Promise<BootstrapManifest> {
+export type CaptureRead = <Row extends QueryResultRow>(sql:string, values:(Id|Id[])[]) => Promise<Row[]>;
+
+type ManifestRow = {manifest_id:Id;company_id:Id;source_ref:Id;epoch:string;manifest:BootstrapManifest};
+
+export async function readManifestEntry(read:CaptureRead, companyId:Id, manifestId?:Id) {
   const rows = manifestId === undefined
-    ? (await db.query<{manifest:BootstrapManifest}>(
-      'SELECT manifest FROM source_manifests WHERE company_id = $1 ORDER BY epoch DESC LIMIT 1',[companyId],
-    )).rows
-    : (await db.query<{manifest:BootstrapManifest}>(
-      'SELECT manifest FROM source_manifests WHERE company_id = $1 AND manifest_id = $2',[companyId,manifestId],
-    )).rows;
+    ? await read<ManifestRow>(
+      'SELECT * FROM source_manifests WHERE company_id = $1 ORDER BY epoch DESC LIMIT 1',[companyId])
+    : await read<ManifestRow>(
+      'SELECT * FROM source_manifests WHERE company_id = $1 AND manifest_id = $2',[companyId,manifestId]);
   if (!rows[0]) throw new SourceError(404,'MANIFEST_NOT_FOUND','Manifest was not found');
-  return BootstrapManifestSchema.parse(rows[0].manifest);
+  return {...rows[0],manifest:BootstrapManifestSchema.parse(rows[0].manifest)};
+}
+
+export async function readManifest(db: Pool, companyId: Id, manifestId?: Id): Promise<BootstrapManifest> {
+  return (await readManifestEntry(async (sql,values)=>(await db.query(sql,values)).rows,companyId,manifestId)).manifest;
 }
 
 export async function readDossier(db: Pool, companyId: Id, manifestId?: Id): Promise<SourceDossier> {
@@ -37,7 +43,8 @@ export async function readDossier(db: Pool, companyId: Id, manifestId?: Id): Pro
 type CaptureDependencies = UploadDependencies;
 
 type StreamRecord = {
-  event:RawSourceEvent; api_source_id:Id|null; api_original_hash:Hash|null; api_extraction:Extraction|null;
+  event:RawSourceEvent; source_ref:Id; stream_id:Id; sequence:string; event_id:Id; content_hash:Hash;
+  api_source_id:Id|null; api_original_hash:Hash|null; api_extraction:Extraction|null; api_byte_length:number|null;
 };
 
 export function streamContentHash(sourceRef:Id,streamId:Id,resumeAfter:Cursor,events:readonly RawSourceEvent[]) {
@@ -47,14 +54,17 @@ export function streamContentHash(sourceRef:Id,streamId:Id,resumeAfter:Cursor,ev
 async function streamRecords(
   db:Pick<Pool,'query'>,sourceRef:Id,streamId:Id,resumeAfter:Cursor,
 ):Promise<StreamRecord[]> {
-  return (await db.query<StreamRecord>(
-    'SELECT event,api_source_id,api_original_hash,api_extraction FROM source_events ' +
-    'WHERE source_ref = $1 AND stream_id = $2 AND sequence <= $3 ORDER BY sequence',
-    [sourceRef,streamId,resumeAfter],
-  )).rows;
+  return readStreamRecords(async (sql,values)=>(await db.query(sql,values)).rows,sourceRef,streamId,resumeAfter);
 }
 
-function validateManifestStreams(manifest:BootstrapManifest,source:SourceDefinition) {
+function readStreamRecords(read:CaptureRead,sourceRef:Id,streamId:Id,resumeAfter:Cursor) {
+  return read<StreamRecord>(
+    'SELECT * FROM source_events WHERE source_ref = $1 AND stream_id = $2 AND sequence <= $3 ORDER BY sequence',
+    [sourceRef,streamId,resumeAfter],
+  );
+}
+
+export function validateManifestStreams(manifest:BootstrapManifest,source:SourceDefinition) {
   if (manifest.companyId !== source.companyId || manifest.sourceRef !== source.sourceRef ||
       manifest.streams.length !== source.streams.length ||
       manifest.streams.some(stream=>!source.streams.some(defined=>defined.streamId === stream.streamId)) ||
@@ -134,26 +144,73 @@ function matchesStream(manifest:BootstrapManifest,member:ManifestStream,events:r
     streamContentHash(manifest.sourceRef,member.streamId,member.resumeAfter,events) === member.snapshotHash;
 }
 
-export async function readSnapshot(db:Pool, id:Id) {
-  const row = (await db.query<{snapshot:SourceSnapshot}>(
-    'SELECT snapshot FROM source_snapshots WHERE snapshot_id = $1',[id],
-  )).rows[0];
+type SnapshotRow = {snapshot_id:Id;manifest_id:Id;stream_id:Id|null;snapshot:SourceSnapshot};
+
+export async function readSnapshotEntry(read:CaptureRead,id:Id) {
+  const row = (await read<SnapshotRow>('SELECT * FROM source_snapshots WHERE snapshot_id = $1',[id]))[0];
   if (!row) throw new SourceError(404,'SNAPSHOT_NOT_FOUND','Source snapshot was not found');
-  return SourceSnapshotSchema.parse(row.snapshot);
+  return {...row,snapshot:SourceSnapshotSchema.parse(row.snapshot)};
+}
+
+export async function readSnapshot(db:Pool, id:Id) {
+  return (await readSnapshotEntry(async (sql,values)=>(await db.query(sql,values)).rows,id)).snapshot;
 }
 
 function issue(code:string,message:string,id:Id):Diagnostic {
   return {code,severity:'blocker',message,sourceIds:[id],fieldPaths:[]};
 }
 
-async function inspectBaseline(
-  {db,store}:CaptureDependencies, manifest:BootstrapManifest, snapshotId:Id,
+type FileRow = StoredSourceFile & {
+  company_id:Id;source_ref:Id;document_id:Id;document_version:string;
+  batch_id:Id|null;batch_sequence:string|null;batch_stream_id:Id|null;
+};
+
+function validateFileRow(row:FileRow, manifest:BootstrapManifest) {
+  const metadata = UploadMetadataSchema.parse(row.metadata);
+  if (row.company_id !== manifest.companyId || row.source_ref !== manifest.sourceRef) {
+    throw new SourceError(409,'SOURCE_EPOCH_CONFLICT','Document row does not belong to the pinned source');
+  }
+  if (row.file_id !== sourceFileId(metadata) || row.document_id !== metadata.documentId ||
+      row.document_version !== String(metadata.documentVersion) || row.batch_id !== (metadata.batch?.batchId ?? null) ||
+      row.batch_stream_id !== (metadata.batch?.streamId ?? null) ||
+      row.batch_sequence !== (metadata.batch ? String(metadata.batch.sequence) : null)) {
+    throw new SourceError(409,'SOURCE_HASH_CONFLICT','Pinned document metadata conflicts');
+  }
+}
+
+function validateEventRow(row:StreamRecord,source:SourceDefinition,streamId:Id) {
+  const {event} = row;
+  if (event?.sourceRef !== row.source_ref || event?.streamId !== streamId ||
+      event?.rawIdentity?.companyId !== source.companyId || event?.id !== row.event_id ||
+      String(event?.sequence) !== row.sequence) {
+    throw new SourceError(409,'SOURCE_EPOCH_CONFLICT','Event does not match its pinned source identity');
+  }
+  if (event.contentHash !== row.content_hash) {
+    throw new SourceError(409,'SOURCE_HASH_CONFLICT','Pinned event row hash conflicts');
+  }
+  return validateSourceEvent(source,event);
+}
+
+async function verifyExtraction(bytes:Uint8Array,kind:StoredSourceFile['metadata']['kind']|'api_json',expected:Extraction) {
+  const extracted = await extractDocument(kind,bytes);
+  // The persisted extractor version identifies the original capture. Compare its output with the original bytes.
+  if (extracted.mediaType !== expected?.mediaType ||
+      canonicalJson(extracted.document) !== canonicalJson(expected.document ?? null)) {
+    throw new SourceError(409,'SOURCE_HASH_CONFLICT','Pinned extraction conflicts with its original');
+  }
+  return extracted;
+}
+
+export async function inspectBaseline(
+  read:CaptureRead, store:Pick<EvidenceStore,'get'>, manifest:BootstrapManifest, snapshotId:Id,
+  source?:SourceDefinition,
 ) {
   const diagnostics: Diagnostic[] = [];
   const missingMembers: Id[] = [];
   const citations: EvidenceRef[] = [];
   const files: StoredSourceFile[] = [];
   const eventIds: Id[] = [];
+  const validatedEvents:RawSourceEvent[] = [];
   function missing(id:Id) {
     missingMembers.push(id);
     diagnostics.push(issue('MANIFEST_MEMBER_MISSING','A pinned source member is missing',id));
@@ -161,23 +218,29 @@ async function inspectBaseline(
   function conflict(id:Id) {
     diagnostics.push(issue('SOURCE_HASH_CONFLICT','A pinned source member hash conflicts',id));
   }
-  async function verifyBytes(id:Id,hash:Hash) {
+  async function verifyBytes(id:Id,hash:Hash,byteLength?:number|null) {
+    if (source) HashSchema.parse(hash);
     try {
-      await store.get(hash);
-      return true;
+      const bytes = await store.get(hash);
+      if (source && (bytes.byteLength !== byteLength || hashBytes(bytes) !== hash)) {
+        conflict(id);
+        return;
+      }
+      return bytes;
     } catch (error) {
       if (sqlState(error) === 'ENOENT') missing(id);
       else if (error instanceof EvidenceStorageError && error.code === 'SOURCE_HASH_CONFLICT') conflict(id);
       else throw new SourceError(503,'SOURCE_UNAVAILABLE','Original source byte storage is unavailable');
-      return false;
+      return undefined;
     }
   }
   for (const member of manifest.files) {
-    const row = (await db.query<StoredSourceFile>('SELECT * FROM source_files WHERE file_id = $1',[member.fileId])).rows[0];
+    const row = (await read<FileRow>('SELECT * FROM source_files WHERE file_id = $1',[member.fileId]))[0];
     if (!row) {
       missing(member.fileId);
       continue;
     }
+    if (source) validateFileRow(row,manifest);
     const {metadata} = row;
     if (metadata.companyId !== manifest.companyId || metadata.sourceRef !== manifest.sourceRef) {
       diagnostics.push(issue('SOURCE_EPOCH_CONFLICT','Document does not belong to the pinned source',member.fileId));
@@ -190,12 +253,21 @@ async function inspectBaseline(
       conflict(member.fileId);
       continue;
     }
-    if (await verifyBytes(member.fileId,member.sha256)) files.push(row);
+    const bytes = await verifyBytes(member.fileId,member.sha256,row.byte_length);
+    if (bytes) {
+      if (source) await verifyExtraction(bytes,metadata.kind,row.extraction);
+      files.push(row);
+    }
   }
   for (const member of manifest.streams) {
     let pinned: SourceSnapshot;
     try {
-      pinned = await readSnapshot(db,member.snapshotId);
+      const entry = await readSnapshotEntry(read,member.snapshotId);
+      pinned = entry.snapshot;
+      if (source && (entry.manifest_id !== manifest.id || entry.stream_id !== member.streamId ||
+          pinned.id !== member.snapshotId)) {
+        throw new SourceError(409,'SOURCE_EPOCH_CONFLICT','Stream snapshot does not match its pinned identity');
+      }
     } catch (error) {
       if (!(error instanceof SourceError) || error.status !== 404) throw error;
       missing(member.snapshotId);
@@ -205,8 +277,12 @@ async function inspectBaseline(
       diagnostics.push(issue('SOURCE_EPOCH_CONFLICT','Stream snapshot does not belong to the pinned epoch',member.snapshotId));
       continue;
     }
-    const records = await streamRecords(db,manifest.sourceRef,member.streamId,member.resumeAfter);
-    const events = records.map(row=>row.event);
+    if (source && (member.eventIds.length !== Number(member.resumeAfter) || pinned.evidenceIds.length !== 0)) {
+      conflict(member.snapshotId);
+      continue;
+    }
+    const records = await readStreamRecords(read,manifest.sourceRef,member.streamId,member.resumeAfter);
+    const events = records.map(row=>source ? validateEventRow(row,source,member.streamId) : row.event);
     const ids = new Set(events.map(event=>event.id));
     const absent = member.eventIds.filter(id=>!ids.has(id));
     if (absent.length) {
@@ -220,15 +296,32 @@ async function inspectBaseline(
       continue;
     }
     eventIds.push(...events.map(event=>event.id));
+    if (source) validatedEvents.push(...events);
+    const transport = source?.streams.find(stream=>stream.streamId === member.streamId)?.transport;
     for (const row of records) {
-      if (row.api_source_id && row.api_original_hash && row.api_extraction &&
-          await verifyBytes(row.api_source_id,row.api_original_hash)) {
+      if (!row.api_source_id || !row.api_original_hash || !row.api_extraction) {
+        if (source && transport !== 'csv') missing(row.event_id);
+        continue;
+      }
+      const bytes = await verifyBytes(row.api_source_id,row.api_original_hash,row.api_byte_length);
+      if (bytes) {
+        if (source) {
+          const expectedId = 'api:' + hashCanonical({companyId:manifest.companyId,sourceRef:manifest.sourceRef,eventId:row.event_id});
+          if (row.api_source_id !== expectedId) {
+            throw new SourceError(409,'SOURCE_EPOCH_CONFLICT','API original does not match its pinned event identity');
+          }
+          const extraction = await verifyExtraction(bytes,'api_json',row.api_extraction);
+          if (extraction.document.kind !== 'json' ||
+              canonicalJson(extraction.document.value) !== canonicalJson(row.event.payload)) {
+            throw new SourceError(409,'SOURCE_HASH_CONFLICT','API original does not match its pinned event content');
+          }
+        }
         citations.push(citeEvidence({snapshotId,sourceId:row.api_source_id,contentHash:row.api_original_hash,
           extraction:row.api_extraction,locator:{kind:'json',pointer:''}}));
       }
     }
   }
-  return {diagnostics,missingMembers:[...new Set(missingMembers)].sort(),citations,eventIds:[...new Set(eventIds)].sort(),files};
+  return {diagnostics,missingMembers:[...new Set(missingMembers)].sort(),citations,eventIds:[...new Set(eventIds)].sort(),files,validatedEvents};
 }
 
 async function loadManifestById(db:Pool,manifestId:Id) {
@@ -283,7 +376,8 @@ export async function captureBaseline(
   const existing = await storedCapture(db,manifestId,snapshotId);
   if (existing) return existing;
 
-  const inspected = await inspectBaseline(dependencies,manifest,snapshotId);
+  const inspected = await inspectBaseline(async (sql,values)=>(await db.query(sql,values)).rows,
+    dependencies.store,manifest,snapshotId);
   const {eventIds,diagnostics,missingMembers} = inspected;
   const complete = diagnostics.length === 0;
   const citations = complete
