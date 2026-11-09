@@ -1,0 +1,11 @@
+# Additive first-activation authority contract freeze
+
+This freeze records the independently reviewed architecture and bounded A0 representation assignment. It does not implement activation, install a trust policy, or establish an eligible result. Existing v1 contracts and financial checks remain unchanged.
+
+Normative architecture: [proposal](../../progress/2026-11-08/handoffs/v3-activation-authority-proposal.md), SHA-256 `23e7117c3b1ac8cb5c4c44b044ed2efd53530f55e38294f0165ec9ba9db1f737`, and [handoffs](../../progress/2026-11-08/handoffs/v3-activation-authority-handoffs.md), SHA-256 `063bab1a66159f118f269c97c84a537c1529a64a0c8a7d743039f6b4096be45a`. The [scoped architecture review](../../progress/2026-11-08/reviews/v3-activation-authority-fix-review.md) accepts R1/R2.
+
+[A0's exact implementation assignment](../../progress/2026-11-08/handoffs/b-activation-authority-contracts.md), SHA-256 `f3de0b89d92ef4c3f8c545906b75703c3b0822b7381ea84b91862e0a9fff8524`, defines the strict schema fields, hash preimages, diagnostics, normalization and compatibility vectors. Root adopts these representation details within the reviewed architecture. It grants contracts-only implementation ownership; the exact candidate still requires independent code review before downstream consumers use it. Hash validation and structural acceptance never authenticate issuance.
+
+The accepted S3a runner is integrated at `735e680`. S3b candidate `dbf2f09` passed independent review and is undergoing combined integration checks. Neither alone supplies trusted financial attestation, installed policy, combined readiness, or runtime authority. Current code state supersedes the architecture documents' historical status notes.
+
+Control005 remains bootstrap-registry ownership. Root reserves control006 for financial provenance, control007 for review/activation intents, and runtime002 for parent activation storage. These reservations do not authorize SQL implementation. Contracts index/package subpaths have one A0 writer; evaluator exports and monitor composition have separate owners. Source semantic producer AS and composed parent reads A3b are explicit prerequisites to A4/A5.

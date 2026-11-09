@@ -3,6 +3,8 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./bootstrap-jobs": "./src/bootstrap-jobs.ts",
+    "./bootstrap-registry": "./src/bootstrap-registry.ts",
     "./bootstrap-launcher": "./src/bootstrap-launcher.ts",
     "./bootstrap-verify": "./src/bootstrap-verify.ts",
     "./verify": "./src/verify.ts",
