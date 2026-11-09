@@ -9,3 +9,5 @@ export * from './activity.js';
 export * from './canonical.js';
 export * from './local-demo.js';
 export * from './source-coverage.js';
+export * from './discovery.js';
+export * from './discovery-helpers.js';
