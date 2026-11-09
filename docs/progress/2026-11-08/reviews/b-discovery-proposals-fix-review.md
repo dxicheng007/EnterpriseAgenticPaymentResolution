@@ -1,0 +1,21 @@
+# C2 independent fix review — round 1
+
+**Original P2: ADDRESSED. Spec verdict: PASS for the scoped fix. Quality verdict: PASS for the scoped fix.** No remaining actionable finding was identified in the original result-boundary issue or breakage introduced by this correction.
+
+Reviewed exact candidate `ced4a6a275f561fc56cb6cd2e55ae20d81442f0b` against withheld candidate `6a8e24fcef1f8b9e0a0118246d6bfea3a1a10eb4` in the acquisition-verification-startup worktree. Independently confirmed HEAD and a clean working tree, inspected the four-file committed diff, original independent P2, C2 handoff, and report fix appendix. `git diff --check` for this range passed.
+
+## Why the finding is addressed
+
+- `assessProposal` now checks the complete successful envelope through `DraftConnectorResultSchema`, whose refinement measures canonical UTF-8 bytes against 65,536. The same builder serves draft/revise publication and finding-driven refresh. Oversize throws the existing typed `TOOL_RESULT_LIMIT`; blocker origins are neither dropped nor shortened.
+- `refreshProposalAssessments` first loads the current proposals and computes every bounded reassessment, then persists them. Thus an oversized later proposal cannot cause an earlier assessment write within this helper. Both existing persistence callers receive results from the bounded builder; the finding, assessment/current link, activity, and resolution remain within the owner transaction.
+- Ordered preflight carries a cumulative finding-publication prefix. At its first finding it seeds the projected assessment map from durable current state and all earlier proposal plans. Subsequent proposal plans replace their projected current entry. Each finding reassesses that map against the entire accumulated finding prefix, preserving diagnostics and advancing assessment revisions. This covers earlier projected drafts/revisions as well as proposals already stored before the batch.
+- Projection advances the observed run revision for each remaining step, including both claim and resolution for source reads. The selected SQL-only publication still uses the transaction's single final increment. Reassessment replaces map entries without mutating the separately retained selected proposal plan, so a later projected finding does not rewrite the earlier proposal's own result or observed revision.
+- Fresh and recovered execution use the same preflight over ordered nonterminal steps. The run lock and reloaded batch/authority checks remain intact. A projected overflow is handled before selected publication and fails the remaining steps with the safe limit code; recovery rebuilds projection from durable state instead of reusing speculative state or executing terminal steps again.
+
+## Regression evidence and checkpoint limits
+
+Reviewed the new parameterized PostgreSQL regression: one additional finding fits, a second crosses the ceiling, and fresh/recovered variants require both steps to fail with `TOOL_RESULT_LIMIT`, with unchanged proposal result, assessment count, blocker count, and tool activity. The report records both variants red on the withheld candidate, then green with 62 focused integration tests, seven unit tests, and typecheck on the fix before commit. These are implementer-reported machine results, not independent reruns. The newly added regression uses an existing durable proposal; earlier projected proposal handling was independently inspected in code rather than demonstrated by a new dedicated overflow test.
+
+No concrete unresolved concern justified another runtime proof or broad test run in this scoped review. Independent execution here was limited to candidate/worktree inspection and diff validation. No source/test edits, commits, subagents, provider calls, or database lease use occurred; only this requested review report was written.
+
+This closes the original C2 review finding for this exact candidate. It does not merge the branch or establish joint user acceptance. Broader lifecycle/HTTP/activity checks were reported on the withheld candidate and were not rerun after this fix. C3 compilation, registry publication, replay evaluation, verification jobs, live provider competence, activation, financial readiness, and automatic synchronization remain outside this checkpoint.

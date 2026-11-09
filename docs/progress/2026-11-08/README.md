@@ -2,7 +2,7 @@
 
 This checkpoint publishes completed local work, preserves separately committed candidates, and records remaining work. It is not acceptance of the complete demo. Machine checks, independent Astra review, and joint user acceptance remain distinct.
 
-**Latest:** authenticated parent reads are integrated at `ff0238c`. Combined typecheck, unit and focused PostgreSQL checks, and full V0/V2 gates passed. The running demo uses actual worker parent reads for both published customer scopes; both remain inactive, preview writes zero parent records, and all 253 original source/pin hashes are unchanged. Approval preparation is being implemented. Discovery proposals are undergoing a result-limit correction before acceptance. Customer activation, live model construction and ongoing sync remain incomplete.
+**Latest:** authenticated parent reads are integrated at `ff0238c`. Combined typecheck, unit and focused PostgreSQL checks, and full V0/V2 gates passed. The running demo uses actual worker parent reads for both published customer scopes; both remain inactive, preview writes zero parent records, and all 253 original source/pin hashes are unchanged. Approval preparation is being implemented. Discovery proposals and their result-limit correction are integrated at `d91a1af`, after independent review and combined typecheck, 351 unit tests and 115 PostgreSQL checks. Customer activation, live model construction and ongoing sync remain incomplete. See the [three-team handoff](../../superpowers/plans/2026-11-08-team-expansion-handoff.md) for current ownership and dependency gates.
 
 | PRD slice | Current status | Remaining acceptance |
 | --- | --- | --- |
@@ -10,7 +10,7 @@ This checkpoint publishes completed local work, preserves separately committed c
 | V1 — Sources and evidence | Implemented; machine gate passing | Joint evidence review |
 | V2 — Preview and financial verification | Implemented; latest integrated gate passing | Joint preview acceptance |
 | V3 — Customer approval and activation | Parent reads and proof/storage prerequisites integrated; approval preparation active | Actual worker import, receipt recovery and reviewer flow |
-| V4 — Agent construction | Lifecycle, monitor, read tools and findings integrated; proposals under correction | Document applicability, compilation, provider and live checks |
+| V4 — Agent construction | Lifecycle, monitor, read tools, findings and proposals integrated | Document applicability, compilation, provider and live checks |
 | V5 — Ongoing deterministic sync | Not operational | Bounded sync and cutover workflow |
 | V6 — Failure and recovery proof | Component protections tested | End-to-end sync/recovery verification |
 | V7 — Full demo | Incomplete | Two-company rehearsal and joint acceptance |
@@ -309,3 +309,12 @@ Root ran typecheck, unit tests, focused parent-read/composition/findings Postgre
 After a preserving restart, root selected the two exact candidates from the authenticated current catalog, resolved their registered captures and explicitly published only their scope metadata. No activation policy or customer authority was installed. Authenticated live reads returned version zero and null activation for both customers; preview returned 80000/0 cents and zero parent writes. Canonical before/after contents of all runtime tables were identical. All 253 historical source/pin file hashes remained unchanged. This was API smoke evidence, not a new manual browser review or joint acceptance.
 
 Accepted design handoffs now cover [approval preparation](handoffs/b-activation-review-handoff.md), its [receipt observation mirror](handoffs/b-activation-review-mirror-addendum.md), [worker activation](handoffs/b-worker-activation-handoff.md), and [discovery proposals](handoffs/b-discovery-proposals-handoff.md). These handoffs are not implementation claims. Control008 is reserved for approval/intents and the immutable receipt observation mirror. Actual worker receipts remain authoritative.
+
+
+## Discovery proposal checkpoint and team handoff
+
+C2 corrected `ced4a6a275f561fc56cb6cd2e55ae20d81442f0b` passed [scoped Astra review](reviews/b-discovery-proposals-fix-review.md) after the [original finding](reviews/b-discovery-proposals-independent-review.md). Its [report](handoffs/b-discovery-proposals-report.md) records fresh and recovered batch regressions reproduced before the fix. Root combined `d91a1af393584159d327dcdeaa7212acc7bf3d2d` passed typecheck, 351 unit tests and 115 PostgreSQL tests across proposals, findings, evidence tools, lifecycle, HTTP lifecycle and activity. This is not a live-model or full V4 gate claim.
+
+A4 `78f355e49925b30cffa6b380b0a28f153d40376b` is preserved remotely on `codex/activation-review`, not merged into main. The [WIP report](handoffs/b-activation-review-report.md) records typecheck, 82 PostgreSQL checks, actual isolated setup/pending-intent/restart smoke, remaining adversarial coverage and pending independent review. A pending intent is not an import or worker receipt. The source document applicability [handoff](handoffs/b-document-applicability-handoff.md) passed [design correction review](reviews/b-document-applicability-handoff-fix-review.md); implementation has not started.
+
+The [three-team expansion handoff](../../superpowers/plans/2026-11-08-team-expansion-handoff.md) passed [independent document review](reviews/team-expansion-handoff-review.md). It assigns the existing team financial authority/runtime integration, the first new developer source/discovery construction, and the second new developer reviewer/operations presentation and demo verification. The source association producer and read-only parent inspection can start independently; dependent approval/sync paths remain explicitly gated. Implementation agents are checkpointed, not running new work. The local supervisor remains running on `d91a1af` with ready control007/runtime002 and inactive customer scopes.

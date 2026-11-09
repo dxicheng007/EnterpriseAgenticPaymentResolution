@@ -2,8 +2,9 @@
 
 Reconstruct an acquired company's contract-to-cash history and translate its existing records into a predefined simulated parent system. Design-time agents will propose evidence-backed connector rules; explicit per-customer approval authorizes bounded, deterministic synchronization. The product does not issue invoices or move money.
 
-**Current build:** local PostgreSQL-backed source capture, evidence inspection, single-customer development connector previews, and independent verification. Live agent construction, activation, persisted parent imports, and ongoing sync are not implemented yet. Preview performs zero parent writes.
+**Current build:** local PostgreSQL-backed source capture, evidence inspection, registered parent-state reads, development connector previews, independent verification, and persisted discovery findings/proposals. The monitor and scripted orchestration checks exist; live agent construction, customer activation, persisted parent imports, and ongoing sync remain incomplete. Preview performs zero parent writes.
 
+- [Three-team handoff: current state, remaining tasks, and dependencies](docs/superpowers/plans/2026-11-08-team-expansion-handoff.md)
 - [Progress, verification, branches, and next work](docs/progress/2026-11-08/README.md)
 - [PRD v2](prdv2.md)
 - [Vertical implementation plan](docs/superpowers/plans/2026-11-08-implementation-plan.md)
@@ -21,7 +22,7 @@ npm exec playwright install chromium
 npm run dev
 ```
 
-Open http://127.0.0.1:5173. The loopback demo establishes a local reviewer session without a sign-in screen. Native setup creates isolated local databases and synthetic source records. See [process instructions](apps/AGENTS.md) and [verification setup](docs/demo/verification-setup.md).
+Open http://127.0.0.1:5173. The loopback demo establishes a local reviewer session without a sign-in screen. Native setup creates isolated local databases and synthetic source records. See [process instructions](apps/AGENTS.md), [parent-read scope publication](docs/demo/parent-read-setup.md), and [verification setup](docs/demo/verification-setup.md). A fresh checkout needs explicit scope publication before parent-backed preview; this does not approve a customer.
 
 ```sh
 npm run typecheck
