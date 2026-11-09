@@ -5,11 +5,12 @@ import { Pool } from 'pg';
 import { afterAll, beforeAll, expect, test } from 'vitest';
 import { createToolStepId, hashCanonical, hashEvent, hashManifest, hashProfile, type BootstrapManifest, type DiscoveryBinding, type DiscoverySubject, type JsonObject, type MappingOp, type ModelResultV2, type ProposalResult, type RawSourceEvent } from '@eapr/contracts';
 import { createEvidenceStore, type EvidenceStore } from '@eapr/evidence';
-import { captureBaseline, companyA, createDiscoveryReadTools, prepareApiRecord, publishManifest, readDiscoveryCapture, streamContentHash, type DiscoveryReadTools } from '@eapr/sources';
+import { captureBaseline, companyA, createDiscoveryReadTools, prepareApiRecord, publishManifest, readDiscoveryCapture, streamContentHash } from '@eapr/sources';
 import { eventA } from '../../packages/sources/src/company-a.js';
 import { localSourceCatalog } from '../../apps/control/src/composition.js';
 import { recheckDiscoveryCapture } from '../../apps/control/src/discovery-composition.js';
 import { createDiscoveryRepository } from '../../packages/discovery/src/repository.js';
+import type { DiscoveryReadTools } from '../../packages/discovery/src/read-tools.js';
 import { acquireDiscoverySupervisor } from '../../packages/discovery/src/supervisor.js';
 import { loadDemo } from '../../scripts/load-demo.js';
 import { migrate, migrationStreams, readMigrationCatalog } from '../../scripts/migrate.js';
@@ -76,27 +77,42 @@ const captureAccess = {
 
 function instrumentReads(onFirstBlob?: (invocation: number) => Promise<void>, afterPrepare?: (invocation: number) => Promise<void>) {
   let preparations = 0;
+  let documentPreparations = 0;
   let blobReads = 0;
+  function openAdapter(invocation: number, holdFirstBlob = false) {
+    let first = true;
+    return createDiscoveryReadTools({ db, store: {
+      async get(hash) {
+        blobReads++;
+        if (holdFirstBlob && first) {
+          first = false;
+          await onFirstBlob?.(invocation);
+        }
+        return store.get(hash);
+      },
+    } }, localSourceCatalog);
+  }
   const readTools: DiscoveryReadTools = {
     async prepare(input) {
       const invocation = ++preparations;
-      let first = true;
-      const adapter = createDiscoveryReadTools({ db, store: {
-        async get(hash) {
-          blobReads++;
-          if (first) {
-            first = false;
-            await onFirstBlob?.(invocation);
-          }
-          return store.get(hash);
-        },
-      } }, localSourceCatalog);
-      const prepared = await adapter.prepare(input);
+      const prepared = await openAdapter(invocation).prepare(input);
+      await afterPrepare?.(invocation);
+      return prepared;
+    },
+    async prepareDocumentApplicability(input) {
+      const invocation = ++preparations;
+      documentPreparations += 1;
+      const prepared = await openAdapter(invocation, true).prepareDocumentApplicability(input);
       await afterPrepare?.(invocation);
       return prepared;
     },
   };
-  return { readTools, get preparations() { return preparations; }, get blobReads() { return blobReads; } };
+  return {
+    readTools,
+    get preparations() { return preparations; },
+    get documentPreparations() { return documentPreparations; },
+    get blobReads() { return blobReads; },
+  };
 }
 
 async function acquire(model: ReturnType<typeof scriptedModel>['model'], readTools: DiscoveryReadTools,
@@ -197,6 +213,65 @@ async function submittedFor(run: Awaited<ReturnType<typeof createRun>>, alias = 
     }],
   } satisfies JsonObject;
   return { submitted, citation };
+}
+
+async function documentPartition(run: Awaited<ReturnType<typeof createRun>>) {
+  const adapter = createDiscoveryReadTools({ db, store }, localSourceCatalog);
+  const { binding } = run.facts;
+  const sourceRead = { companyId: binding.companyId, sourceRef: binding.sourceRef, sourceWide: true, accounts: [] };
+  const { rows } = await db.query<{ evidence_id: string }>(
+    'SELECT evidence_id FROM source_evidence WHERE snapshot_id=$1 AND file_id IS NOT NULL ORDER BY evidence_id',
+    [binding.snapshotId]);
+  const evidenceIds = rows.map(row => row.evidence_id);
+  if (evidenceIds.length === 0) throw new Error('Expected file evidence in capture');
+  return adapter.prepareDocumentApplicability({ binding, sourceRead, evidenceIds });
+}
+
+async function agreementCitation(
+  run: Awaited<ReturnType<typeof createRun>>,
+  alias: Extract<DiscoverySubject, { kind: 'source_account' }>,
+) {
+  const partition = await documentPartition(run);
+  const match = partition.associations.find(association =>
+    association.subject.sellerEntityId === alias.sellerEntityId &&
+    association.subject.sourceAccountId === alias.sourceAccountId);
+  if (!match) throw new Error('Expected captured agreement for alias');
+  return match.evidenceId;
+}
+
+async function unresolvedDocumentCitation(run: Awaited<ReturnType<typeof createRun>>) {
+  const partition = await documentPartition(run);
+  const id = partition.unresolvedEvidenceIds[0];
+  if (!id) throw new Error('Expected unresolved file citation');
+  return id;
+}
+
+function withAccountDocumentEvidence(
+  submitted: Awaited<ReturnType<typeof submittedFor>>['submitted'],
+  alias: Extract<DiscoverySubject, { kind: 'source_account' }>,
+  evidenceId: string,
+) {
+  const profile = submitted.profiles[0]!;
+  return {
+    ...submitted,
+    profiles: [{
+      ...profile,
+      approvedLookups: [{ id: 'alias-map', valueType: 'parent-account',
+        entries: [{ source: alias.sourceAccountId, target: 'proposed-account', evidenceRefs: [evidenceId] }] }],
+      contractTerms: profile.contractTerms.map(term => ({ ...term, evidenceRefs: [evidenceId] })),
+      bootstrap: { ...profile.bootstrap, customer: {
+        ...profile.bootstrap.customer, evidenceRefs: [evidenceId],
+      } },
+    }],
+  };
+}
+
+async function agreementDraft(
+  run: Awaited<ReturnType<typeof createRun>>,
+  alias = run.facts.sourceAccounts[0]!,
+) {
+  const { submitted } = await submittedFor(run, alias);
+  return withAccountDocumentEvidence(submitted, alias, await agreementCitation(run, alias));
 }
 
 for (const companyId of ['company-a', 'company-b']) {
@@ -621,16 +696,14 @@ test('source-wide document readability preserves an inspectable draft with unres
     const run = await createRun('unknown-document-proposal', model);
     const task = await delegateConnector(run, owner);
     const { submitted } = await submittedFor(run);
-    const { rows: [document] } = await db.query<{ evidence_id: string }>(
-      'SELECT evidence_id FROM source_evidence WHERE snapshot_id=$1 AND file_id IS NOT NULL ORDER BY evidence_id LIMIT 1',
-      [run.facts.binding.snapshotId]);
+    const document = await unresolvedDocumentCitation(run);
     const profile = submitted.profiles[0]!;
     const input = { ...submitted, profiles: [{ ...profile, contractTerms: profile.contractTerms.map(term => ({
-      ...term, evidenceRefs: [document!.evidence_id],
+      ...term, evidenceRefs: [document],
     })), findings: [{
       id: 'legacy-pending', taskId: task, scope: profile.scope, fieldPath: '/monthly_fee', value: 12500,
       origin: 'agent', reviewDisposition: 'pending', provenanceClass: 'unresolved', evidenceStatus: 'insufficient',
-      evidenceRefs: [document!.evidence_id], derivationInputs: [], revision: 1,
+      evidenceRefs: [document], derivationInputs: [], revision: 1,
     }] }] };
     const [step] = await run.execute(owner, [draftCall('draft', input)], 1, task);
     expect(await storedStep(step!)).toMatchObject({ state: 'succeeded', result: { ok: true } });
@@ -669,11 +742,9 @@ test.each(['authorized', 'retained-alias', 'retained-citation', 'unknown-coverag
         }] }],
       }] };
       if (variant === 'unknown-coverage') {
-        const { rows: [document] } = await db.query<{ evidence_id: string }>(
-          'SELECT evidence_id FROM source_evidence WHERE snapshot_id=$1 AND file_id IS NOT NULL ORDER BY evidence_id LIMIT 1',
-          [run.facts.binding.snapshotId]);
+        const document = await unresolvedDocumentCitation(run);
         prior = { ...submitted, profiles: [{ ...profile, contractTerms: profile.contractTerms.map(term => ({
-          ...term, evidenceRefs: [document!.evidence_id],
+          ...term, evidenceRefs: [document],
         })) }] };
       }
       await run.execute(owner, [draftCall('wide-draft', prior)], 1, wide);
@@ -923,6 +994,326 @@ test.each([false, true])('later reassessment overflow rolls back the whole batch
       .toEqual([{ count: originCount }]);
     expect((await db.query('SELECT count(*)::integer FROM discovery_proposal_assessments WHERE run_id=$1', [run.runId])).rows)
       .toEqual([{ count: 1 }]);
+  } finally {
+    await owner.close();
+  }
+});
+
+for (const companyId of ['company-a', 'company-b']) {
+  test('a proposal citing the alias agreement clears only the applicability diagnostic for ' + companyId, async () => {
+    const model = scriptedModel();
+    const owner = await acquire(model.model, instrumentReads().readTools);
+    try {
+      const run = await createRun('agreement-clears-' + companyId, model, captures.find(item => item.companyId === companyId)!);
+      const task = await delegateConnector(run, owner);
+      const alias = run.facts.sourceAccounts[0]!;
+      const { submitted, citation } = await submittedFor(run, alias);
+      const agreement = await agreementCitation(run, alias);
+      const profile = submitted.profiles[0]!;
+      const input = {
+        ...submitted,
+        profiles: [{
+          ...profile,
+          approvedLookups: [{ id: 'alias-map', valueType: 'parent-account',
+            entries: [{ source: alias.sourceAccountId, target: 'proposed-account', evidenceRefs: [agreement] }] }],
+          contractTerms: profile.contractTerms.map(term => ({ ...term, evidenceRefs: [agreement] })),
+          bootstrap: { ...profile.bootstrap, customer: {
+            ...profile.bootstrap.customer, evidenceRefs: [agreement], displayName: 'Model Name Change',
+          } },
+        }],
+      };
+      const [step] = await run.execute(owner, [draftCall('draft', input)], 1, task);
+      expect(await storedStep(step!)).toMatchObject({ state: 'succeeded', result: { ok: true } });
+      const proposal = (await run.state()).proposals[0]!;
+      expect(proposal.assessment.diagnosticCodes).not.toContain('PROPOSAL_EVIDENCE_APPLICABILITY_UNRESOLVED');
+      expect(proposal.state).not.toBe('compiled');
+      expect(proposal).not.toHaveProperty('artifactHash');
+      expect((await run.state()).verificationJobs).toEqual([]);
+      expect((await db.query(
+        "SELECT payload->'profiles'->0->'bootstrap'->'customer'->>'displayName' AS name FROM discovery_proposal_revisions WHERE run_id=$1",
+        [run.runId])).rows).toEqual([{ name: 'Model Name Change' }]);
+      expect(citation).not.toBe(agreement);
+    } finally {
+      await owner.close();
+    }
+  });
+}
+
+test('profile-wide bound ref on alias A satisfies bound check while B needs its own parent-account entry', async () => {
+  const model = scriptedModel();
+  const owner = await acquire(model.model, instrumentReads().readTools);
+  try {
+    const run = await createRun('multi-alias-matrix', model);
+    const task = await delegateConnector(run, owner);
+    const [aliasA, aliasB] = run.facts.sourceAccounts;
+    expect(aliasA && aliasB).toBeTruthy();
+    const { submitted } = await submittedFor(run, aliasA!);
+    const agreementA = await agreementCitation(run, aliasA!);
+    const agreementB = await agreementCitation(run, aliasB!);
+    const profile = submitted.profiles[0]!;
+    const sharedBound = {
+      ...submitted,
+      profiles: [{
+        ...profile,
+        sourceAccountIds: [aliasA!.sourceAccountId, aliasB!.sourceAccountId],
+        approvedLookups: [{ id: 'alias-map', valueType: 'parent-account', entries: [
+          { source: aliasA!.sourceAccountId, target: 'proposed-account', evidenceRefs: [agreementA] },
+          { source: aliasB!.sourceAccountId, target: 'proposed-account', evidenceRefs: [agreementB] },
+        ] }],
+        contractTerms: profile.contractTerms.map(term => ({ ...term, evidenceRefs: [agreementA] })),
+        bootstrap: { ...profile.bootstrap, customer: {
+          ...profile.bootstrap.customer, evidenceRefs: [agreementA],
+        } },
+      }],
+    };
+    const [cleared] = await run.execute(owner, [draftCall('both-entries', sharedBound)], 1, task);
+    expect(await storedStep(cleared!)).toMatchObject({ state: 'succeeded', result: { ok: true } });
+    expect((await run.state()).proposals[0]!.assessment.diagnosticCodes)
+      .not.toContain('PROPOSAL_EVIDENCE_APPLICABILITY_UNRESOLVED');
+
+    const stolen = {
+      ...sharedBound,
+      profiles: [{
+        ...sharedBound.profiles[0]!,
+        approvedLookups: [{ id: 'alias-map', valueType: 'parent-account', entries: [
+          { source: aliasA!.sourceAccountId, target: 'proposed-account', evidenceRefs: [agreementA] },
+          { source: aliasB!.sourceAccountId, target: 'proposed-account', evidenceRefs: [agreementA] },
+        ] }],
+      }],
+    };
+    const proposal = (await run.state()).proposals[0]!;
+    const [blocked] = await run.execute(owner, [reviseCall('b-cites-a', proposal, stolen)], 2, task);
+    expect(await storedStep(blocked!)).toMatchObject({ state: 'succeeded', result: { ok: true } });
+    expect((await run.state()).proposals[0]).toMatchObject({
+      state: 'compile_blocked', assessment: { diagnosticCodes: ['PROPOSAL_EVIDENCE_APPLICABILITY_UNRESOLVED'] },
+    });
+  } finally {
+    await owner.close();
+  }
+});
+
+test('wrong-account agreement and mixed unresolved bound refs keep the applicability diagnostic', async () => {
+  const model = scriptedModel();
+  const owner = await acquire(model.model, instrumentReads().readTools);
+  try {
+    const run = await createRun('wrong-and-mixed-agreement', model);
+    const task = await delegateConnector(run, owner);
+    const [alias, sibling] = run.facts.sourceAccounts;
+    const { submitted } = await submittedFor(run, alias!);
+    const siblingAgreement = await agreementCitation(run, sibling!);
+    const unresolved = await unresolvedDocumentCitation(run);
+    const ownAgreement = await agreementCitation(run, alias!);
+    const profile = submitted.profiles[0]!;
+
+    const wrongAccount = {
+      ...submitted,
+      profiles: [{
+        ...profile,
+        approvedLookups: [{ id: 'alias-map', valueType: 'parent-account',
+          entries: [{ source: alias!.sourceAccountId, target: 'proposed-account', evidenceRefs: [siblingAgreement] }] }],
+        contractTerms: profile.contractTerms.map(term => ({ ...term, evidenceRefs: [siblingAgreement] })),
+        bootstrap: { ...profile.bootstrap, customer: {
+          ...profile.bootstrap.customer, evidenceRefs: [siblingAgreement],
+        } },
+      }],
+    };
+    const [wrongStep] = await run.execute(owner, [draftCall('wrong-account', wrongAccount)], 1, task);
+    expect(await storedStep(wrongStep!)).toMatchObject({ state: 'succeeded', result: { ok: true } });
+    expect((await run.state()).proposals[0]).toMatchObject({
+      state: 'compile_blocked', assessment: { diagnosticCodes: ['PROPOSAL_EVIDENCE_APPLICABILITY_UNRESOLVED'] },
+    });
+
+    const proposal = (await run.state()).proposals[0]!;
+    const mixed = {
+      ...submitted,
+      profiles: [{
+        ...profile,
+        approvedLookups: [{ id: 'alias-map', valueType: 'parent-account',
+          entries: [{ source: alias!.sourceAccountId, target: 'proposed-account', evidenceRefs: [ownAgreement] }] }],
+        contractTerms: profile.contractTerms.map(term => ({ ...term, evidenceRefs: [ownAgreement, unresolved] })),
+        bootstrap: { ...profile.bootstrap, customer: {
+          ...profile.bootstrap.customer, evidenceRefs: [ownAgreement],
+        } },
+      }],
+    };
+    const [mixedStep] = await run.execute(owner, [reviseCall('mixed', proposal, mixed)], 2, task);
+    expect(await storedStep(mixedStep!)).toMatchObject({ state: 'succeeded', result: { ok: true } });
+    expect((await run.state()).proposals[0]).toMatchObject({
+      state: 'compile_blocked', assessment: { diagnosticCodes: ['PROPOSAL_EVIDENCE_APPLICABILITY_UNRESOLVED'] },
+    });
+  } finally {
+    await owner.close();
+  }
+});
+
+test('retained-only and spec-only document refs stay readability-only for applicability', async () => {
+  const model = scriptedModel();
+  const owner = await acquire(model.model, instrumentReads().readTools);
+  try {
+    const run = await createRun('retained-spec-only-docs', model);
+    const task = await delegateConnector(run, owner);
+    const alias = run.facts.sourceAccounts[0]!;
+    const { submitted, citation } = await submittedFor(run, alias);
+    const agreement = await agreementCitation(run, alias);
+    const unresolved = await unresolvedDocumentCitation(run);
+    const profile = submitted.profiles[0]!;
+    const input = {
+      ...submitted,
+      spec: { ...submitted.spec, evidenceRefs: [citation, unresolved] },
+      profiles: [{
+        ...profile,
+        approvedLookups: [{ id: 'alias-map', valueType: 'parent-account',
+          entries: [{ source: alias.sourceAccountId, target: 'proposed-account', evidenceRefs: [agreement] }] }],
+        contractTerms: profile.contractTerms.map(term => ({ ...term, evidenceRefs: [agreement] })),
+        bootstrap: { ...profile.bootstrap, customer: {
+          ...profile.bootstrap.customer, evidenceRefs: [agreement],
+        } },
+      }],
+    };
+    const [step] = await run.execute(owner, [draftCall('draft', input)], 1, task);
+    expect(await storedStep(step!)).toMatchObject({ state: 'succeeded', result: { ok: true } });
+    expect((await run.state()).proposals[0]!.assessment.diagnosticCodes)
+      .not.toContain('PROPOSAL_EVIDENCE_APPLICABILITY_UNRESOLVED');
+  } finally {
+    await owner.close();
+  }
+});
+
+test.each(['pause', 'policy', 'owner'] as const)(
+  'proposal document association is fenced by %s before commit', async fence => {
+    const model = scriptedModel();
+    const entered = barrier<void>();
+    const release = barrier<void>();
+    const hold = async () => { entered.resolve(); await release.promise; };
+    const reads = instrumentReads(fence === 'policy' ? undefined : hold);
+    let owner = await acquire(model.model, reads.readTools, fence === 'policy' ? { beforeProposalCommit: hold } : {});
+    let pending: Promise<unknown> | undefined;
+    try {
+      const run = await createRun('association-fence-' + fence, model);
+      const task = await delegateConnector(run, owner);
+      const input = await agreementDraft(run);
+      const [step] = await run.accept(owner, [draftCall('draft', input)], 1, task);
+      const before = await toolActivity(run);
+      pending = owner.executePendingStep(run.runId, task, step!);
+      await entered.promise;
+      if (fence === 'pause') await run.action('pause', 'pause-during-association');
+      if (fence === 'policy') enabled = false;
+      if (fence === 'owner') {
+        await owner.close();
+        owner = await acquire(model.model, reads.readTools);
+      }
+      release.resolve();
+      expect(await pending).toBeUndefined();
+      enabled = true;
+      expect((await run.state()).proposals).toEqual([]);
+      expect(await toolActivity(run)).toEqual(before);
+      expect(await storedStep(step!)).toMatchObject({ state: 'pending', result: null });
+      expect(reads.documentPreparations).toBeGreaterThan(0);
+    } finally {
+      enabled = true;
+      release.resolve();
+      await pending;
+      await owner.close();
+    }
+  },
+);
+
+test('exact replay of an associated proposal draft performs no producer call', async () => {
+  const model = scriptedModel();
+  const reads = instrumentReads();
+  const owner = await acquire(model.model, reads.readTools);
+  let restarted: Owner | undefined;
+  try {
+    const run = await createRun('association-replay', model);
+    const task = await delegateConnector(run, owner);
+    const input = await agreementDraft(run);
+    const [step] = await run.execute(owner, [draftCall('draft', input)], 1, task);
+    const proposal = (await run.state()).proposals[0]!;
+    expect(proposal.assessment.diagnosticCodes).not.toContain('PROPOSAL_EVIDENCE_APPLICABILITY_UNRESOLVED');
+    expect(reads.documentPreparations).toBeGreaterThan(0);
+    const preparations = reads.preparations;
+    const documents = reads.documentPreparations;
+    const activity = await toolActivity(run);
+    await owner.close();
+    restarted = await acquire(model.model, reads.readTools);
+    expect(await restarted.executePendingStep(run.runId, task, step!)).toEqual({ ok: true, result: proposal });
+    expect(reads.preparations).toBe(preparations);
+    expect(reads.documentPreparations).toBe(documents);
+    expect(await toolActivity(run)).toEqual(activity);
+  } finally {
+    await restarted?.close();
+    await owner.close();
+  }
+});
+
+test('a fresh associated run clears applicability without runtime writes', async () => {
+  const model = scriptedModel();
+  const owner = await acquire(model.model, instrumentReads().readTools);
+  try {
+    const beforeRuntime = await runtimeFingerprint();
+    const run = await createRun('association-fresh-run', model);
+    const task = await delegateConnector(run, owner);
+    const input = await agreementDraft(run);
+    const [step] = await run.execute(owner, [draftCall('draft', input)], 1, task);
+    expect(await storedStep(step!)).toMatchObject({ state: 'succeeded', result: { ok: true } });
+    expect((await run.state()).proposals[0]!.assessment.diagnosticCodes)
+      .not.toContain('PROPOSAL_EVIDENCE_APPLICABILITY_UNRESOLVED');
+    expect((await run.state()).proposals[0]!.state).not.toBe('compiled');
+    expect(await runtimeFingerprint()).toBe(beforeRuntime);
+  } finally {
+    await owner.close();
+  }
+});
+
+test('stale expectedRevision rejects after a successful associated draft', async () => {
+  const model = scriptedModel();
+  const owner = await acquire(model.model, instrumentReads().readTools);
+  try {
+    const run = await createRun('association-stale-revision', model);
+    const task = await delegateConnector(run, owner);
+    const input = await agreementDraft(run);
+    await run.execute(owner, [draftCall('draft', input)], 1, task);
+    const proposal = (await run.state()).proposals[0]!;
+    const [step] = await run.execute(owner, [{
+      id: 'stale', name: 'reviseConnector',
+      arguments: { ...input, proposalId: proposal.proposalId, expectedRevision: 99 },
+    }], 2, task);
+    expect(await storedStep(step!)).toMatchObject({ state: 'failed', result: { ok: false, code: 'DISCOVERY_CONFLICT' } });
+    expect((await run.state()).proposals[0]).toMatchObject({ proposalId: proposal.proposalId, revision: 1 });
+  } finally {
+    await owner.close();
+  }
+});
+
+test('unsupported document then associated revision clears only the current applicability diagnostic', async () => {
+  const model = scriptedModel();
+  const owner = await acquire(model.model, instrumentReads().readTools);
+  try {
+    const run = await createRun('association-sticky-diagnostic', model);
+    const task = await delegateConnector(run, owner);
+    const alias = run.facts.sourceAccounts[0]!;
+    const { submitted } = await submittedFor(run, alias);
+    const blocked = withAccountDocumentEvidence(submitted, alias, await unresolvedDocumentCitation(run));
+    await run.execute(owner, [draftCall('blocked', blocked)], 1, task);
+    const first = (await run.state()).proposals[0]!;
+    expect(first).toMatchObject({
+      state: 'compile_blocked', assessment: { diagnosticCodes: ['PROPOSAL_EVIDENCE_APPLICABILITY_UNRESOLVED'] },
+    });
+    const cleared = withAccountDocumentEvidence(submitted, alias, await agreementCitation(run, alias));
+    await run.execute(owner, [reviseCall('associated', first, cleared)], 2, task);
+    const second = (await run.state()).proposals[0]!;
+    expect(second.assessment.diagnosticCodes).not.toContain('PROPOSAL_EVIDENCE_APPLICABILITY_UNRESOLVED');
+    expect(second.revision).toBe(2);
+    const { rows: assessments } = await db.query<{ proposal_revision: string; codes: string[] }>(
+      `SELECT proposal_revision::text, payload->'diagnosticCodes' AS codes
+       FROM discovery_proposal_assessments WHERE run_id=$1 ORDER BY proposal_revision`,
+      [run.runId]);
+    expect(assessments).toHaveLength(2);
+    expect(assessments[0]).toMatchObject({
+      proposal_revision: '1', codes: ['PROPOSAL_EVIDENCE_APPLICABILITY_UNRESOLVED'],
+    });
+    expect(assessments[1]!.proposal_revision).toBe('2');
+    expect(assessments[1]!.codes).not.toContain('PROPOSAL_EVIDENCE_APPLICABILITY_UNRESOLVED');
   } finally {
     await owner.close();
   }

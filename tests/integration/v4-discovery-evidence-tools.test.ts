@@ -6,12 +6,13 @@ import { Pool } from 'pg';
 import { afterAll, beforeAll, expect, test } from 'vitest';
 import { createToolStepId, hashCanonical, hashManifest, type BootstrapManifest, type DiscoveryBinding, type ModelResultV2 } from '@eapr/contracts';
 import { createEvidenceStore, type EvidenceStore } from '@eapr/evidence';
-import { captureBaseline, createDiscoveryReadTools, publishManifest, readDiscoveryCapture, uploadSource, type DiscoveryReadTools } from '@eapr/sources';
+import { captureBaseline, createDiscoveryReadTools, publishManifest, readDiscoveryCapture, uploadSource } from '@eapr/sources';
 import { localSourceCatalog } from '../../apps/control/src/composition.js';
 import { composeDiscovery, recheckDiscoveryCapture } from '../../apps/control/src/discovery-composition.js';
 import { createLocalSessionService } from '../../apps/control/src/local-session.js';
 import { createDiscoveryRepository } from '../../packages/discovery/src/repository.js';
 import { createDiscoveryService } from '../../packages/discovery/src/service.js';
+import type { DiscoveryReadTools } from '../../packages/discovery/src/read-tools.js';
 import { acquireDiscoverySupervisor } from '../../packages/discovery/src/supervisor.js';
 import { loadDemo } from '../../scripts/load-demo.js';
 import { migrate, migrationStreams, readMigrationCatalog } from '../../scripts/migrate.js';
@@ -82,21 +83,29 @@ const captureAccess = {
 function instrumentReads(onFirstBlob?: (invocation: number) => Promise<void>, afterPrepare?: (invocation: number) => Promise<void>) {
   let preparations = 0;
   let blobReads = 0;
+  function openAdapter(invocation: number) {
+    let first = true;
+    return createDiscoveryReadTools({ db, store: {
+      async get(hash) {
+        blobReads++;
+        if (first) {
+          first = false;
+          await onFirstBlob?.(invocation);
+        }
+        return store.get(hash);
+      },
+    } }, localSourceCatalog);
+  }
   const readTools: DiscoveryReadTools = {
     async prepare(input) {
       const invocation = ++preparations;
-      let first = true;
-      const adapter = createDiscoveryReadTools({ db, store: {
-        async get(hash) {
-          blobReads++;
-          if (first) {
-            first = false;
-            await onFirstBlob?.(invocation);
-          }
-          return store.get(hash);
-        },
-      } }, localSourceCatalog);
-      const prepared = await adapter.prepare(input);
+      const prepared = await openAdapter(invocation).prepare(input);
+      await afterPrepare?.(invocation);
+      return prepared;
+    },
+    async prepareDocumentApplicability(input) {
+      const invocation = ++preparations;
+      const prepared = await openAdapter(invocation).prepareDocumentApplicability(input);
       await afterPrepare?.(invocation);
       return prepared;
     },
