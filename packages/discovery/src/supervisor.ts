@@ -14,7 +14,7 @@ import {
 import { prepareFindingEvidence, type PreparedFindingEvidence } from './construction-evidence.js';
 import { publishFinding, readFinding, validateFindingPublication } from './findings.js';
 import { budgets, safeCounter } from './budgets.js';
-import { nextRevision, refreshProposalAssessments } from './assessments.js';
+import { nextRevision, readCurrentProposalAssessments, reassessProposals, refreshProposalAssessments } from './assessments.js';
 import { prepareProposalEvidence, type PreparedProposalEvidence, type ProposalInput } from './proposal-evidence.js';
 import { publishProposal, readProposalHistory, validateProposalPublication } from './proposals.js';
 import type { ModelClient } from './model.js';
@@ -756,13 +756,14 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
       const proposalPlans: Awaited<ReturnType<typeof validateProposalPublication>>[] = [];
       let proposalPlan: (typeof proposalPlans)[number] | undefined;
       let observedRunRevision: number | undefined;
+      let projectedAssessments: Awaited<ReturnType<typeof readCurrentProposalAssessments>>['current'] | undefined;
       if (!failure) {
         try {
           if (findingPublications.size || proposalPublications.size) observedRunRevision = nextRevision(lockedRun.revision);
           let projectedRunRevision = safeCounter(lockedRun.revision);
           for (const facts of preflightFacts) await recheck(connection, lockedRun, facts);
           for (const item of remaining) {
-            if (proposalPublications.size) {
+            if (observedRunRevision !== undefined) {
               // A source-read claim and resolution each increment the run, while SQL-only tools increment once.
               projectedRunRevision = nextRevision(projectedRunRevision);
               if (calls.has(item.id)) projectedRunRevision = nextRevision(projectedRunRevision);
@@ -773,6 +774,14 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
               await recheck(connection, lockedRun, finding.prepared.facts);
               const plan = await validateFindingPublication(connection, context, finding.input, finding.prepared, publications);
               publications.push(plan);
+              if (!projectedAssessments) {
+                ({ current: projectedAssessments } = await readCurrentProposalAssessments(connection, lockedRun.id));
+                for (const proposal of proposalPlans) projectedAssessments.set(proposal.payload.id, proposal);
+              }
+              await reassessProposals(connection, projectedAssessments, {
+                runId: lockedRun.id, runDiagnostics: lockedRun.diagnostics,
+                observedRunRevision: projectedRunRevision, projectedFindings: publications,
+              });
               if (step.id === item.id) publication = plan;
             }
             const proposal = proposalPublications.get(item.id);
@@ -784,6 +793,7 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
                 { findings: publications, history, observedRunRevision: projectedRunRevision },
               );
               proposalPlans.push(plan);
+              projectedAssessments?.set(plan.payload.id, plan);
               if (step.id === item.id) proposalPlan = plan;
             }
             const requested = findingReads.get(item.id);

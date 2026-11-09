@@ -825,3 +825,105 @@ test('an earlier projected finding revision makes a later old citation fail befo
     await owner.close();
   }
 });
+
+async function seedNearLimitOrigins(run: Run, current: ProposalResult) {
+  const size = (blockerRefs: ProposalResult['assessment']['blockerRefs']) => Buffer.byteLength(JSON.stringify({
+    ok: true, result: { ...current, state: 'compile_blocked', assessment: { ...current.assessment, blockerRefs } },
+  }));
+  const code = 'FINDING_RESOLUTION_PENDING';
+  const target = 65_536 - 150;
+  let refs: ProposalResult['assessment']['blockerRefs'] = [];
+  for (let width = 160; width >= 130; width--) {
+    refs = [];
+    for (let index = 0; ; index++) {
+      const ref = { findingId: 'historical-' + Math.floor(index / 4).toString().padStart(width - 11, '0'),
+        revision: index % 4 + 1, code };
+      if (size([...refs, ref]) > target) break;
+      refs.push(ref);
+    }
+    const filler = { findingId: 'f', revision: 1, code };
+    const length = 1 + target - size([...refs, filler]);
+    if (length >= 1 && length <= 160) {
+      refs.push({ ...filler, findingId: 'f'.repeat(length) });
+      break;
+    }
+  }
+  expect(size(refs)).toBe(target);
+  const added = (index: number) => ({ findingId: index.toString().padStart(36, '0'), revision: 1, code });
+  expect(size([...refs, added(1)])).toBeLessThan(65_536);
+  expect(size([...refs, added(1), added(2)])).toBeGreaterThan(65_536);
+
+  const client = await admin.connect();
+  try {
+    await client.query('BEGIN');
+    const rows = refs.map((ref, index) => ({
+      ...ref, task_id: run.runId + '-history-task-' + Math.floor(index / 36),
+      dispatch_id: run.runId + '-history-dispatch-' + Math.floor(index / 4),
+      step_id: run.runId + '-history-step-' + index, attempt: Math.floor(index / 4) % 9 + 1, ordinal: index % 4,
+    }));
+    const entries = JSON.stringify(rows);
+    const records = `jsonb_to_recordset($2) AS x("findingId" text,revision int,code text,task_id text,
+      dispatch_id text,step_id text,attempt int,ordinal int)`;
+    await client.query(`INSERT INTO discovery_tasks(run_id,id,investigation_id,role,question,grants,status)
+      SELECT DISTINCT t.run_id,x.task_id,t.investigation_id,'contract','Historical test finding',t.grants,'succeeded'
+      FROM discovery_tasks t CROSS JOIN ${records} WHERE t.run_id=$1 AND t.role='coordinator'`, [run.runId, entries]);
+    await client.query(`INSERT INTO discovery_dispatches(id,run_id,task_id,attempt,generation,task_revision,state,request_hash,accounting)
+      SELECT DISTINCT dispatch_id,$1,task_id,attempt,1,1,'returned','test','known' FROM ${records}`, [run.runId, entries]);
+    await client.query(`INSERT INTO discovery_tool_steps(id,dispatch_id,run_id,task_id,native_id,ordinal,name,input_hash,arguments,generation,state)
+      SELECT step_id,dispatch_id,$1,task_id,step_id,ordinal,'publishFinding','test','{}',1,'succeeded'
+      FROM ${records}`, [run.runId, entries]);
+    await client.query(`INSERT INTO discovery_finding_identities(run_id,id,investigation_id,current_revision)
+      SELECT $1,x."findingId",t.investigation_id,max(x.revision) FROM ${records}
+      JOIN discovery_tasks t ON t.id=x.task_id GROUP BY x."findingId",t.investigation_id`, [run.runId, entries]);
+    await client.query(`INSERT INTO discovery_finding_revisions(run_id,finding_id,revision,investigation_id,task_id,tool_step_id,payload)
+      SELECT $1,x."findingId",x.revision,t.investigation_id,x.task_id,x.step_id,
+        $3::jsonb || jsonb_build_object('id',x."findingId",'revision',x.revision,'taskId',x.task_id)
+      FROM ${records} JOIN discovery_tasks t ON t.id=x.task_id`, [run.runId, entries, {
+      schemaVersion: 2, subject: { kind: 'source' }, fieldPath: '/terms', value: null,
+      provenanceClass: 'unresolved', evidenceStatus: 'insufficient', evidenceRefs: [], derivationInputs: [],
+      alternatives: [], unresolvedQuestions: [], reviewDisposition: 'pending', origin: 'agent',
+    }]);
+    await client.query(`INSERT INTO discovery_finding_blockers(run_id,finding_id,origin_revision,investigation_id,code)
+      SELECT $1,x."findingId",x.revision,t.investigation_id,x.code FROM ${records}
+      JOIN discovery_tasks t ON t.id=x.task_id`, [run.runId, entries]);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+  return refs.length;
+}
+
+test.each([false, true])('later reassessment overflow rolls back the whole batch, recovered=%s', async recovered => {
+  const model = scriptedModel();
+  const reads = instrumentReads();
+  let owner = await acquire(model.model, reads.readTools);
+  try {
+    const run = await createRun('reassessment-overflow-' + recovered, model);
+    const task = await delegateConnector(run, owner);
+    const { submitted } = await submittedFor(run);
+    await run.execute(owner, [draftCall('draft', submitted)], 1, task);
+    const before = (await run.state()).proposals[0]!;
+    const originCount = await seedNearLimitOrigins(run, before);
+    const activity = await toolActivity(run);
+    const ids = await run.accept(owner, [publish('fits-alone'), publish('crosses-limit')], 2, task);
+    if (recovered) {
+      await owner.close();
+      owner = await acquire(model.model, reads.readTools);
+    }
+    for (const step of ids) await owner.executePendingStep(run.runId, task, step);
+    expect(await Promise.all(ids.map(storedStep))).toMatchObject(ids.map(() => ({
+      state: 'failed', result: { ok: false, code: 'TOOL_RESULT_LIMIT' },
+    })));
+    expect((await run.state()).proposals).toEqual([before]);
+    expect(await toolActivity(run)).toEqual(activity);
+    expect((await db.query('SELECT count(*)::integer FROM discovery_finding_blockers WHERE run_id=$1', [run.runId])).rows)
+      .toEqual([{ count: originCount }]);
+    expect((await db.query('SELECT count(*)::integer FROM discovery_proposal_assessments WHERE run_id=$1', [run.runId])).rows)
+      .toEqual([{ count: 1 }]);
+  } finally {
+    await owner.close();
+  }
+});

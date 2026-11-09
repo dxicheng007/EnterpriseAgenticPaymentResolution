@@ -5,7 +5,7 @@ import {
   hashCanonical, hashProfile, type DiscoveryProposalV2, type ProposalResult,
 } from '../../contracts/src/index.js';
 import {
-  DraftConnectorInputSchema, DraftConnectorResultSchema, ReviseConnectorInputSchema,
+  DraftConnectorInputSchema, ReviseConnectorInputSchema,
 } from '../../contracts/src/discovery-construction-tools.js';
 import { assessProposal, nextRevision, persistAssessment, type ProjectedFinding } from './assessments.js';
 import { budgets } from './budgets.js';
@@ -194,7 +194,6 @@ export async function validateProposalPublication(
     runId: run.id, observedRunRevision, runDiagnostics: run.diagnostics,
     payload, assessmentRevision: 1, diagnosticCodes, projectedFindings,
   });
-  if (!DraftConnectorResultSchema.safeParse({ ok: true, result }).success) throw discoveryError(409, 'TOOL_RESULT_LIMIT');
   return { submitted: input, payload, payloadHash: hashCanonical(payload), newInvestigations, result };
 }
 
