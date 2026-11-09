@@ -1097,7 +1097,7 @@ export async function acquireDiscoverySupervisor({
     compiledDiagnostics?: Parameters<typeof buildBlockedCompileResult>[1];
     blocked?: ReturnType<typeof buildBlockedCompileResult>;
     payloadInvestigationIds?: string[];
-  }) {
+  }, revoked = false) {
     const authorityRevoked = Symbol('compile authority revoked before settle');
     try {
       return await transact(async connection => {
@@ -1112,12 +1112,12 @@ export async function acquireDiscoverySupervisor({
         const stillAuthorized = () => permits(run, task) &&
           hashCanonical(run.grants) === hashCanonical(claim.run.grants) &&
           hashCanonical(task.grants) === hashCanonical(claim.task.grants);
-        if (!stillAuthorized()) return;
+        if (revoked || !stillAuthorized()) return interruptForbiddenRead(connection, context);
 
         let toolResult: CompileConnectorResult;
         try {
           await recheck(connection, run, claim.capture.facts);
-          if (!stillAuthorized()) return;
+          if (!stillAuthorized()) return interruptForbiddenRead(connection, context);
           const existing = await readCompileStep(connection, step.id);
           if (!existing || existing.state === 'settled') throw discoveryError(409);
           if (existing.state === 'registered' && !outcome.registration) {
@@ -1152,7 +1152,8 @@ export async function acquireDiscoverySupervisor({
           toolResult = { ok: false, code };
         }
 
-        if (!stillAuthorized()) return;
+        // Any settle writes above must roll back when policy is gone before resolve.
+        if (!stillAuthorized()) throw authorityRevoked;
         const blocker = !toolResult.ok && (toolResult.code === 'DISCOVERY_CONFLICT' || toolResult.code === 'TOOL_RESULT_LIMIT') ?
           toolResult.code : undefined;
         const settled = await resolveStep(connection, context, toolResult, blocker);
@@ -1162,6 +1163,8 @@ export async function acquireDiscoverySupervisor({
       });
     } catch (error) {
       if (error !== authorityRevoked) throw error;
+      // Observation / registry may already exist; interrupt the claim so it cannot publish current.
+      return settleCompileClaim(claim, outcome, true);
     }
   }
 

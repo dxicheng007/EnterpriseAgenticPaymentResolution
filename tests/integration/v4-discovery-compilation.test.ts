@@ -414,6 +414,39 @@ test('assessment blockers never publish a current compiled candidate', async () 
   }
 });
 
+test('policy revoke at settle rolls back current compiled and interrupts the claim', async () => {
+  const model = scriptedModel();
+  const reads = instrumentReads();
+  const entered = barrier<void>();
+  const release = barrier<void>();
+  const { owner } = await acquire(model.model, reads.readTools, {
+    testHooks: { beforeCompileSettleCommit: async () => { entered.resolve(); await release.promise; } },
+  });
+  let pending: Promise<unknown> | undefined;
+  try {
+    const run = await createRun('compile-policy-revoke', model);
+    const task = await delegateConnector(run, owner);
+    const proposal = await draftClearProposal(run, owner, task, 1);
+    const [step] = await run.accept(owner, [compileCall('compile', proposal)], 2, task);
+    pending = owner.executePendingStep(run.runId, task, step!);
+    await entered.promise;
+    enabled = false;
+    release.resolve();
+    expect(await pending).toBeUndefined();
+    enabled = true;
+    expect((await run.state()).proposals[0]?.state).not.toBe('compiled');
+    expect((await run.state()).proposals[0]).not.toHaveProperty('artifactHash');
+    expect((await db.query('SELECT compile_step_id FROM discovery_proposal_current WHERE run_id=$1', [run.runId])).rows)
+      .toEqual([{ compile_step_id: null }]);
+    expect(await storedStep(step!)).toMatchObject({ state: 'interrupted', result: null });
+  } finally {
+    enabled = true;
+    release.resolve();
+    try { await pending; } catch { /* revoked */ }
+    await owner.close();
+  }
+}, 40_000);
+
 test('owner loss after registry write leaves an orphan without current compiled', async () => {
   const model = scriptedModel();
   const reads = instrumentReads();
