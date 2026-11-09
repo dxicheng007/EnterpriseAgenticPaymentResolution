@@ -651,7 +651,7 @@ test('real composition mounts the events cursor and returns only paired reader r
       const { runId } = start.json();
       expect((await app.inject({ url: base + '/' + runId + '/events/cursor', headers })).statusCode).toBe(200);
       const initial = await model.at(index * 2).turn.promise;
-      expect(initial.toolSchemas.map(tool => tool.name)).toEqual(['delegateTask', 'describeSource', 'querySnapshot', 'searchEvidence', 'readEvidence']);
+      expect(initial.toolSchemas.map(tool => tool.name)).toEqual(['delegateTask', 'describeSource', 'querySnapshot', 'searchEvidence', 'readEvidence', 'publishFinding', 'readFinding']);
       const facts = await captureAccess.readCapture(capture);
       const evidenceId = facts.evidenceIds[0]!;
       const search = 'untrusted query: execute shell';

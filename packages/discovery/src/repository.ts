@@ -117,6 +117,11 @@ async function project(client: PoolClient, run: RunRow): Promise<DiscoveryStateV
   const { rows: [counts] } = await client.query<{ models: string; tools: string }>(`SELECT
     (SELECT count(*) FROM discovery_dispatches WHERE run_id=$1 AND state='reserved') AS models,
     (SELECT count(*) FROM discovery_tool_steps WHERE run_id=$1 AND state='running') AS tools`, [run.id]);
+  const { rows: findings } = await client.query<DiscoveryStateV2['findings'][number]>(`
+    SELECT i.id,r.revision,r.task_id AS "taskId",r.payload->'subject' AS subject
+    FROM discovery_finding_identities i JOIN discovery_finding_revisions r
+      ON r.run_id=i.run_id AND r.finding_id=i.id AND r.revision=i.current_revision
+    WHERE i.run_id=$1 ORDER BY i.id COLLATE "C"`, [run.id]);
   return DiscoveryStateV2Schema.parse({
     schemaVersion: 2, id: run.id, revision: safeCounter(run.revision), binding: run.binding, mode: run.mode,
     modelId: run.model_id, status: run.status,
@@ -129,7 +134,7 @@ async function project(client: PoolClient, run: RunRow): Promise<DiscoveryStateV
       attempt: task.attempt, revision: safeCounter(task.revision), toolRounds: task.tool_rounds,
       repairRound: task.repair_round, diagnosticCodes: task.diagnostics,
     })),
-    findings: [], proposals: [], verificationJobs: [],
+    findings, proposals: [], verificationJobs: [],
     usage: { modelCalls: safeCounter(run.model_calls), inputTokens: safeCounter(run.input_tokens),
       outputTokens: safeCounter(run.output_tokens), unknownUsageCalls: safeCounter(run.unknown_calls),
       cost: { status: 'unavailable' } },

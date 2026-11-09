@@ -6,6 +6,12 @@ import {
   IdSchema, NonnegativeIntegerSchema, VersionSchema, createToolStepId, hashCanonical,
   type DiscoveryReadToolCall, type DiscoveryReadToolResult, type ModelMessageV2, type ModelResultV2, type ModelTurnV2,
 } from '../../contracts/src/index.js';
+import {
+  PublishFindingInputSchema, PublishFindingResultSchema, ReadFindingInputSchema, ReadFindingResultSchema,
+  type PublishFindingResult, type ReadFindingResult, type ReadFindingInput,
+} from '../../contracts/src/discovery-construction-tools.js';
+import { prepareFindingEvidence, type PreparedFindingEvidence } from './construction-evidence.js';
+import { publishFinding, readFinding, validateFindingPublication } from './findings.js';
 import { budgets, safeCounter } from './budgets.js';
 import type { ModelClient } from './model.js';
 import { captureFailure, parseReadResult, prepareRead, type DiscoveryReadTools } from './read-tools.js';
@@ -26,7 +32,7 @@ type Dispatch = {
   id: string; run_id: string; task_id: string; generation: string; task_revision: string;
   state: 'reserved' | 'returned' | 'interrupted'; result_hash: string | null; accepted: ModelResultV2 | null;
 };
-type ToolResult = DiscoveryReadToolResult | { ok: true; taskId: string; investigationId: string; revision: number } |
+type ToolResult = DiscoveryReadToolResult | PublishFindingResult | ReadFindingResult | { ok: true; taskId: string; investigationId: string; revision: number } |
   { ok: false; code: string };
 type Step = {
   id: string; dispatch_id: string; native_id: string; name: string; generation: string; state: 'pending' | 'running' | 'failed' | 'succeeded' | 'interrupted'; arguments: ModelResultV2['toolCalls'][number]['arguments'];
@@ -36,6 +42,11 @@ const delegateSuccess = z.strictObject({
   ok: z.literal(true), taskId: IdSchema, investigationId: IdSchema, revision: VersionSchema,
 });
 const failedTool = z.strictObject({ ok: z.literal(false), code: IdSchema });
+const findingResults = { publishFinding: PublishFindingResultSchema, readFinding: ReadFindingResultSchema };
+function findingTool(name: string): name is keyof typeof findingResults {
+  return name === 'publishFinding' || name === 'readFinding';
+}
+
 const terminal = (step: Step) => step.state === 'failed' || step.state === 'succeeded';
 type StepContext = { run: RunRow; task: TaskRow; step: Step; batch: Step[] };
 type ReadClaim = { revision: string; call: DiscoveryReadToolCall; run: RunRow; task: TaskRow; step: Step };
@@ -49,6 +60,7 @@ type Options = RepositoryOptions & {
     beforeReservationCommit?: () => Promise<void>;
     afterReservationCommit?: () => Promise<void>;
     beforeDelegationCommit?: () => Promise<void>;
+    beforeFindingCommit?: () => Promise<void>;
     beforeReadResultCommit?: () => Promise<void>;
   };
 };
@@ -216,6 +228,10 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
   }
 
   function replayResult(task: TaskRow, step: Step) {
+    if (findingTool(step.name)) {
+      const parsed = findingResults[step.name].safeParse(step.result);
+      return parsed.success && parsed.data.ok === (step.state === 'succeeded') ? parsed.data : undefined;
+    }
     const name = DiscoveryReadToolNameSchema.safeParse(step.name);
     if (name.success) {
       const result = parseReadResult(name.data, step.result);
@@ -512,7 +528,7 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
     }
     const readName = DiscoveryReadToolNameSchema.safeParse(step.name);
     await publishDiscovery(connection, clock, run.id, 'tool.result', {
-      ...(readName.success ? { toolName: readName.data } : {}),
+      ...(readName.success ? { toolName: readName.data } : findingTool(step.name) ? { toolName: step.name } : {}),
       dispatchId: step.dispatch_id, toolStepId: step.id, toolStatus: status,
       ...(!result.ok ? { diagnosticCodes: [result.code] } : {}),
     }, task);
@@ -526,8 +542,13 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
 
   function validationFailure(error: unknown) {
     const code = error instanceof Error && 'code' in error && error.code;
-    if (code !== 'DISCOVERY_INVALID' && code !== 'DISCOVERY_CONFLICT' && code !== 'DISCOVERY_FORBIDDEN') throw error;
-    return code;
+    switch (code) {
+      case 'DISCOVERY_INVALID':
+      case 'DISCOVERY_CONFLICT':
+      case 'DISCOVERY_FORBIDDEN':
+        return code;
+      default: throw error;
+    }
   }
 
   async function settleRead(claim: ReadClaim, prepared: Awaited<ReturnType<typeof prepareRead>>, revoked = false) {
@@ -593,9 +614,38 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
     }
     if (delegates.some(item => !delegateTaskInput.safeParse(item.arguments).success)) failure = 'DISCOVERY_INVALID';
 
+    let revokedDuringPreparation = false;
+    const findingPublications = new Map<string, {
+      input: z.infer<typeof PublishFindingInputSchema>; prepared: PreparedFindingEvidence;
+    }>();
+    const findingReads = new Map<string, ReadFindingInput>();
+    if (capture && readTools) for (const item of remaining) {
+      if (failure || !findingTool(item.name)) continue;
+      if (item.name === 'readFinding') {
+        const parsed = ReadFindingInputSchema.safeParse(item.arguments);
+        if (!parsed.success) failure = 'DISCOVERY_INVALID';
+        else findingReads.set(item.id, parsed.data);
+      } else {
+        const parsed = PublishFindingInputSchema.safeParse(item.arguments);
+        if (!parsed.success) {
+          failure = 'DISCOVERY_INVALID';
+          continue;
+        }
+        if (!valid) return;
+        if (!permits(run, task)) {
+          if (!abandonedRead(context.step)) return;
+          revokedDuringPreparation = true;
+          break;
+        }
+        const prepared = await prepareFindingEvidence({ binding: run.binding, sourceRead: task.grants.sourceRead, input: parsed.data }, readTools);
+        if ('code' in prepared) failure = prepared.code;
+        else findingPublications.set(item.id, { input: parsed.data, prepared });
+      }
+    }
+
     const preflightFacts: CaptureFacts[] = [];
     let delegationFacts: CaptureFacts | undefined;
-    if (!failure && capture && delegates.length) {
+    if (!failure && !revokedDuringPreparation && capture && (delegates.length || findingReads.size)) {
       try {
         delegationFacts = await capture.readCapture(run.binding);
         preflightFacts.push(delegationFacts);
@@ -603,9 +653,8 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
         failure = 'DISCOVERY_CONFLICT';
       }
     }
-    let revokedDuringPreparation = false;
     if (readTools) for (const call of calls.values()) {
-      if (failure) break;
+      if (failure || revokedDuringPreparation) break;
       if (!valid) return;
       if (!permits(run, task)) {
         if (!abandonedRead(context.step)) return;
@@ -619,6 +668,7 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
       else if (!result.ok) failure = result.code;
     }
 
+    const authorityRevoked = Symbol('finding authority revoked before commit');
     const applied = await transact(async connection => {
       const selected = await loadStep(connection, runId, taskId, stepId);
       if (selected?.replay) return {
@@ -632,22 +682,44 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
           !await permitsStep(connection, current, revokedDuringPreparation) || !claimable(current)) return;
       const { run: lockedRun, task: lockedTask, step } = current;
       let input: Awaited<ReturnType<typeof validateDelegation>> | undefined;
+      let read: ReadFindingResult | undefined;
+      const publications: Awaited<ReturnType<typeof validateFindingPublication>>[] = [];
+      let publication: (typeof publications)[number] | undefined;
       if (!failure) {
         try {
           for (const facts of preflightFacts) await recheck(connection, lockedRun, facts);
+          for (const item of remaining) {
+            const finding = findingPublications.get(item.id);
+            const context = { run: lockedRun, task: lockedTask, step: item };
+            if (finding) {
+              await recheck(connection, lockedRun, finding.prepared.facts);
+              const plan = await validateFindingPublication(connection, context, finding.input, finding.prepared, publications);
+              publications.push(plan);
+              if (step.id === item.id) publication = plan;
+            }
+            const requested = findingReads.get(item.id);
+            if (requested) {
+              const result = await readFinding(connection, context, requested);
+              if (step.id === item.id) read = result;
+            }
+          }
           if (delegationFacts) for (const delegate of delegates) {
             const validated = await validateDelegation(connection, lockedRun, delegationFacts, delegate.arguments);
             if (delegate.id === step.id) input = validated;
           }
         } catch (error) {
-          failure = validationFailure(error);
+          const code = error instanceof Error && 'code' in error && error.code;
+          failure = code === 'FINDING_IDENTITY_LIMIT' || code === 'FINDING_REVISION_LIMIT' || code === 'TOOL_RESULT_LIMIT' ?
+            code : validationFailure(error);
         }
       }
       if (!await permitsStep(connection, current)) return;
       if (failure) {
+        const limit = failure === 'FINDING_IDENTITY_LIMIT' || failure === 'FINDING_REVISION_LIMIT';
         const codeFor = (item: Step) =>
-          (capture && readTools && DiscoveryReadToolNameSchema.safeParse(item.name).success) || delegates.some(delegate => delegate.id === item.id) ?
-            failure : unavailableToolCode(task.role, item.name);
+          (capture && readTools && (DiscoveryReadToolNameSchema.safeParse(item.name).success || findingTool(item.name))) ||
+          delegates.some(delegate => delegate.id === item.id) ?
+            (limit ? 'DISCOVERY_CONFLICT' : failure) : unavailableToolCode(task.role, item.name);
         for (const item of remaining) {
           await connection.query(`UPDATE discovery_tool_steps SET state='failed',result=$2,generation=$3
             WHERE id=$1 AND state IN ('pending','interrupted')`, [item.id, { ok: false, code: codeFor(item) }, generation]);
@@ -667,6 +739,20 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
         const claim: ReadClaim = { ...current, call, revision: lockedTask.revision };
         return { claim };
       }
+      if (publication || read) {
+        const result = publication ? await publishFinding(connection, current, publication) : read!;
+        await publishDiscovery(connection, clock, lockedRun.id, 'tool.called', {
+          dispatchId: step.dispatch_id, toolStepId: step.id, toolName: step.name,
+        }, lockedTask);
+        if (publication) await publishDiscovery(connection, clock, lockedRun.id, 'finding.revised', {
+          findingId: publication.finding.id, findingRevision: publication.finding.revision,
+          toolStepId: step.id, diagnosticCodes: publication.blockers.map(blocker => blocker.code),
+        }, lockedTask);
+        await resolveStep(connection, current, result);
+        if (publication) await testHooks?.beforeFindingCommit?.();
+        if (!permits(lockedRun, lockedTask)) throw authorityRevoked;
+        return { result };
+      }
       const result = input ? await executeDelegation(connection, lockedRun, input) : {
         ok: false as const, code: unavailableToolCode(lockedTask.role, step.name),
       };
@@ -679,8 +765,12 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
       await resolveStep(connection, current, result);
       if (result.ok) await testHooks?.beforeDelegationCommit?.();
       return { result };
+    }).catch(error => {
+      if (error !== authorityRevoked) throw error;
     });
-    if (!applied?.claim || !readTools) return applied?.result;
+    if (!applied?.claim || !readTools) {
+      return findingTool(context.step.name) && !permits(run, task) ? undefined : applied?.result;
+    }
     const { claim } = applied;
     try {
       if (!valid) return;
