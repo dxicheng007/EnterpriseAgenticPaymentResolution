@@ -2,7 +2,11 @@
 
 This checkpoint publishes completed local work, preserves separately committed candidates, and records remaining work. It is not acceptance of the complete demo. Machine checks, independent Astra review, and joint user acceptance remain distinct.
 
-## Branches and exact candidates
+## Published checkpoint (historical)
+
+The table and capability list below describe the first publication. Later accepted work is recorded under Continued build update and Latest integrated checkpoint.
+
+### Branches and exact candidates
 
 | Branch | State at checkpoint | Review status |
 | --- | --- | --- |
@@ -76,3 +80,14 @@ An explicit new-root v2 upgrade of the running demo succeeded. Fingerprints conf
 The source coverage wire contract `9a627f6` was independently reviewed and integrated at `33364f0`. Its [review](reviews/source-coverage-contract-independent-review.md) records 31 focused tests, typecheck, and 90 independent malformed-input/scope/normalization assertions. The [guided-discovery implementation handoff](handoffs/guided-discovery-implementation.md) defines the separate evidence-backed source read and UI consumers. At this update those consumers are not accepted or integrated; the contract does not itself establish source authenticity.
 
 The reproducible [actual-v2 browser checkpoint](handoffs/c3-v2-browser.md) is being implemented. The [V2 verification runner](handoffs/b-v2-verifier.md) follows its independent acceptance. These handoffs describe planned tests and required evidence; their presence is not a claim that those tasks passed. V4 orchestration architecture is separately under review and has no implemented lifecycle or provider yet.
+
+## Latest integrated checkpoint
+
+Reviewed integration `fbd6f0fe3ce6bf3fda9a128c7d6aebf4d1549970` adds the evidence-backed source-account read and reproducible actual-v2 browser verification. Root ran typecheck and 166 unit tests successfully on the combined code, followed by the actual-v2 Chromium test on an isolated PostgreSQL lease (one passed, 20.2 seconds). The all-thirteen financial-check browser result is repeatable; this is still not the complete V2 gate or user acceptance.
+
+- [Source coverage read review](reviews/source-coverage-read-independent-review.md): accepted candidate `c5d51b6`; captured agreements, directories and related evidence establish source observations without approving a parent identity. The real route preserves all 30/28 source events and performs no writes.
+- [Actual-v2 browser review](reviews/c3-v2-browser-independent-review.md): accepted candidate `98bc50c` (code `1ac3248`); real paired source preparation, protected verifier jobs, thirteen passing checks per company, two safe screenshots and unchanged runtime records.
+
+The guided preview UI, full V2 command, and bounded discovery contract types are being implemented in separate worktrees. Their pending work is not part of the accepted integration above. The source read is implemented but the running main control process will be restarted after the UI is accepted, so the live demo and repository may temporarily differ.
+
+The discovery design has passed its architecture fix review for contract and activity-read primitives. No discovery lifecycle, provider adapter, agent monitor, activation or ongoing synchronization is implemented by that architecture approval. API-key configuration remains deferred. The next stages remain guided review, executable V2 evidence, separate bootstrap verification and activation, observable discovery, and deterministic continuing sync.
