@@ -435,18 +435,38 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
     return { context: { run, task, step, batch } } as const;
   }
 
-  function claimable({ run, task, step }: StepContext) {
-    return runnable(run) && permits(run, task) && (step.state === 'pending' ||
-      (!!capture && !!readTools && step.state === 'interrupted' && safeCounter(step.generation) < generation &&
-        DiscoveryReadToolNameSchema.safeParse(step.name).success));
+  function abandonedRead(step: Step) {
+    return step.state === 'interrupted' && safeCounter(step.generation) < generation &&
+      DiscoveryReadToolNameSchema.safeParse(step.name).success;
+  }
+
+  async function interruptForbiddenRead(connection: PoolClient, { run, task, step }: StepContext) {
+    await connection.query("UPDATE discovery_tool_steps SET state='interrupted',result=NULL WHERE id=$1", [step.id]);
+    await failTask(connection, run, task, 'DISCOVERY_FORBIDDEN', true);
+    await publishDiscovery(connection, clock, run.id, 'discovery.interrupted', {
+      dispatchId: step.dispatch_id, taskState: 'interrupted', status: run.status === 'paused' ? 'paused' : 'blocked',
+      diagnosticCodes: ['DISCOVERY_FORBIDDEN'],
+    }, task);
+  }
+
+  async function permitsStep(connection: PoolClient, context: StepContext, revoked = false) {
+    if (!revoked && permits(context.run, context.task)) return true;
+    if (abandonedRead(context.step)) await interruptForbiddenRead(connection, context);
+    return false;
+  }
+
+  function claimable({ run, step }: StepContext) {
+    return runnable(run) && (step.state === 'pending' || (!!capture && !!readTools && abandonedRead(step)));
   }
 
   async function refencePausedRead(runId: string, taskId: string, stepId: string) {
-    if (!capture || !readTools) return;
-    const eligible = ({ run, task, step }: StepContext) => run.status === 'paused' && !run.diagnostics.length &&
-      step.state === 'interrupted' && safeCounter(step.generation) < generation && permits(run, task);
-    const initial = await transact(async connection => (await loadStep(connection, runId, taskId, stepId))?.context);
-    if (!initial || !eligible(initial)) return;
+    const eligible = ({ run, step }: StepContext) => run.status === 'paused' && !run.diagnostics.length && abandonedRead(step);
+    const initial = await transact(async connection => {
+      const context = (await loadStep(connection, runId, taskId, stepId))?.context;
+      if (!context || !abandonedRead(context.step) || !await permitsStep(connection, context)) return;
+      return context;
+    });
+    if (!initial || !eligible(initial) || !capture || !readTools) return;
     let facts: CaptureFacts | undefined;
     let failure: string | undefined;
     try {
@@ -456,13 +476,14 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
     }
     await transact(async connection => {
       const context = (await loadStep(connection, runId, taskId, stepId))?.context;
-      if (!context || !eligible(context) || context.task.revision !== initial.task.revision) return;
+      if (!context || !abandonedRead(context.step) || context.task.revision !== initial.task.revision ||
+          !await permitsStep(connection, context) || !eligible(context)) return;
       const { run, task, step } = context;
       if (!failure) {
         try { await recheck(connection, run, facts); }
         catch (error) { failure = validationFailure(error); }
       }
-      if (!permits(run, task)) return;
+      if (!await permitsStep(connection, context)) return;
       if (failure) {
         if (failure === 'DISCOVERY_CONFLICT') {
           await connection.query("UPDATE discovery_tool_steps SET state='failed',result=$2,generation=$3 WHERE id=$1",
@@ -520,18 +541,10 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
         if (step.state !== 'running' || safeCounter(step.generation) !== generation ||
             step.dispatch_id !== claim.step.dispatch_id || task.revision !== claim.revision) return;
 
-        async function interruptRead() {
-          await connection.query("UPDATE discovery_tool_steps SET state='interrupted' WHERE id=$1", [step.id]);
-          await failTask(connection, run, task, 'DISCOVERY_FORBIDDEN', true);
-          await publishDiscovery(connection, clock, run.id, 'discovery.interrupted', {
-            dispatchId: step.dispatch_id, taskState: 'interrupted', status: run.status === 'paused' ? 'paused' : 'blocked',
-            diagnosticCodes: ['DISCOVERY_FORBIDDEN'],
-          }, task);
-        }
         const stillAuthorized = () => permits(run, task) &&
           hashCanonical(run.grants) === hashCanonical(claim.run.grants) &&
           hashCanonical(task.grants) === hashCanonical(claim.task.grants);
-        if (revoked || !stillAuthorized()) return interruptRead();
+        if (revoked || !stillAuthorized()) return interruptForbiddenRead(connection, context);
 
         let result = parseReadResult(claim.call.name, prepared.result);
         if (!result || !postgresJsonCompatible(result) || (result.ok && !('facts' in prepared))) {
@@ -541,7 +554,7 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
           try { await recheck(connection, run, prepared.facts); }
           catch (error) { result = { ok: false, code: validationFailure(error) }; }
         }
-        if (!stillAuthorized()) return interruptRead();
+        if (!stillAuthorized()) return interruptForbiddenRead(connection, context);
         const blocker = !result.ok && (result.code === 'DISCOVERY_CONFLICT' || result.code === 'TOOL_RESULT_LIMIT') ?
           result.code : undefined;
         const settled = await resolveStep(connection, context, result, blocker);
@@ -561,6 +574,7 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
     const initial = await transact(async connection => {
       const selected = await loadStep(connection, runId, taskId, stepId);
       if (!selected || (selected.replay && !permits(selected.run, selected.task))) return;
+      if (selected.context && !await permitsStep(connection, selected.context)) return;
       return selected;
     });
     if (initial?.replay) return permits(initial.run, initial.task) ? replayResult(initial.task, initial.replay) : undefined;
@@ -589,9 +603,15 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
         failure = 'DISCOVERY_CONFLICT';
       }
     }
+    let revokedDuringPreparation = false;
     if (readTools) for (const call of calls.values()) {
       if (failure) break;
-      if (!valid || !permits(run, task)) return;
+      if (!valid) return;
+      if (!permits(run, task)) {
+        if (!abandonedRead(context.step)) return;
+        revokedDuringPreparation = true;
+        break;
+      }
       const prepared = await prepareRead(readTools, { ...call, binding: run.binding, sourceRead: task.grants.sourceRead });
       const result = parseReadResult(call.name, prepared.result);
       if ('facts' in prepared) preflightFacts.push(prepared.facts);
@@ -605,10 +625,11 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
         result: permits(selected.run, selected.task) ? replayResult(selected.task, selected.replay) : undefined,
       };
       const current = selected?.context;
-      if (!current || !claimable(current) || current.task.revision !== task.revision ||
+      if (!current || current.task.revision !== task.revision ||
           hashCanonical(current.run.binding) !== hashCanonical(run.binding) ||
           hashCanonical(current.run.grants) !== hashCanonical(run.grants) ||
-          hashCanonical(current.task.grants) !== hashCanonical(task.grants)) return;
+          hashCanonical(current.task.grants) !== hashCanonical(task.grants) ||
+          !await permitsStep(connection, current, revokedDuringPreparation) || !claimable(current)) return;
       const { run: lockedRun, task: lockedTask, step } = current;
       let input: Awaited<ReturnType<typeof validateDelegation>> | undefined;
       if (!failure) {
@@ -622,7 +643,7 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
           failure = validationFailure(error);
         }
       }
-      if (!permits(lockedRun, lockedTask)) return;
+      if (!await permitsStep(connection, current)) return;
       if (failure) {
         const codeFor = (item: Step) =>
           (capture && readTools && DiscoveryReadToolNameSchema.safeParse(item.name).success) || delegates.some(delegate => delegate.id === item.id) ?

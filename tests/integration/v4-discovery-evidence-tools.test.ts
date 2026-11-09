@@ -164,6 +164,96 @@ async function assertOwnerOutsideTransaction() {
   expect(rows).toEqual([{ state: 'idle', xact_start: null }]);
 }
 
+test.each(['paused', 'runnable', 'paused-prepare', 'runnable-prepare'] as const)(
+  'persists revoked authority for an abandoned claimed read during %s recovery', async recovery => {
+    const model = scriptedModel();
+    const claimed = barrier<void>();
+    const releaseClaim = barrier<void>();
+    const preparing = barrier<void>();
+    const releasePreparation = barrier<void>();
+    const paused = recovery.startsWith('paused');
+    const duringPreparation = recovery.endsWith('prepare');
+    const oldReads = instrumentReads(async invocation => {
+      if (invocation !== 2) return;
+      claimed.resolve();
+      await releaseClaim.promise;
+    });
+    const holdPreparation = async () => {
+      await assertOwnerOutsideTransaction();
+      preparing.resolve();
+      await releasePreparation.promise;
+    };
+    const reads = instrumentReads(undefined, !paused && duringPreparation ? holdPreparation : undefined);
+    let owner = await acquire(model.model, oldReads.readTools);
+    let replacement: ReturnType<typeof acquireDiscoverySupervisor> | undefined;
+    let work: Promise<unknown> | undefined;
+    let capturePreparations = 0;
+    try {
+      const run = await createRun('revoked-recovery-' + recovery, model);
+      const [id] = await run.accept(owner, [describeCall]);
+      const stale = owner.executePendingStep(run.runId, run.taskId, id!);
+      await claimed.promise;
+      expect(await run.state()).toMatchObject({ inFlightToolSteps: 1 });
+      if (paused) await run.action('pause', 'before-owner-loss');
+      await owner.close();
+
+      if (!duringPreparation) enabled = false;
+      replacement = acquireDiscoverySupervisor({
+        db, clock, resolveAuthority, model: model.model, readTools: reads.readTools,
+        capture: {
+          ...captureAccess,
+          async readCapture(selection) {
+            capturePreparations++;
+            const facts = await captureAccess.readCapture(selection);
+            if (paused && duringPreparation) await holdPreparation();
+            return facts;
+          },
+        },
+      });
+      if (!paused || !duringPreparation) {
+        owner = (await replacement)!;
+        work = owner.executePendingStep(run.runId, run.taskId, id!);
+      }
+      if (duringPreparation) {
+        await preparing.promise;
+        enabled = false;
+        releasePreparation.resolve();
+      }
+      owner = (await replacement)!;
+      expect(await work).toBeUndefined();
+      releaseClaim.resolve();
+      expect(await stale).toBeUndefined();
+
+      enabled = true;
+      const diagnostics = [{ code: 'DISCOVERY_FORBIDDEN' }];
+      expect(await storedStep(id!)).toMatchObject({ state: 'interrupted', result: null });
+      expect(await run.state()).toMatchObject({
+        status: paused ? 'paused' : 'blocked', inFlightToolSteps: 0, diagnostics,
+        tasks: [{ status: 'interrupted' }],
+      });
+      expect((await db.query('SELECT diagnostics FROM discovery_tasks WHERE id=$1', [run.taskId])).rows)
+        .toEqual([{ diagnostics: ['DISCOVERY_FORBIDDEN'] }]);
+      await owner.close();
+      owner = await acquire(model.model, reads.readTools);
+      if (!paused) await run.action('pause', 'after-owner-loss');
+      expect(await run.action('resume', 'after-policy-restore')).toMatchObject({ status: 'blocked', diagnostics });
+      expect(await owner.executePendingStep(run.runId, run.taskId, id!)).toBeUndefined();
+      await owner.dispatchTask(run.runId, run.taskId)?.done;
+      expect(capturePreparations).toBe(paused && duringPreparation ? 1 : 0);
+      expect(reads.preparations).toBe(!paused && duringPreparation ? 1 : 0);
+      expect(model.calls).toBe(1);
+      expect((await toolActivity(run.runId)).map(event => event.type)).toEqual(['tool.called']);
+    } finally {
+      enabled = true;
+      releaseClaim.resolve();
+      releasePreparation.resolve();
+      await work;
+      await (await replacement)?.close();
+      await owner.close();
+    }
+  },
+);
+
 test.each(['runnable', 'paused', 'paused-with-blocker'] as const)('refences the same read after owner loss while %s', async disposition => {
   const model = scriptedModel();
   const reads = instrumentReads();

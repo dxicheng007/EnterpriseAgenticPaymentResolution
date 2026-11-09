@@ -31,10 +31,10 @@ export async function createDiscoveryService(options: Options) {
     if (!owner || !owner.isValid()) owner = await acquireDiscoverySupervisor({ ...options, model: modelClient, capture: options });
     if (!owner || closed) return;
     const { rows } = await db.query<{
-      run_id: string; task_id: string; step_id: string | null; reviewer_id: string;
+      run_id: string; task_id: string; step_id: string | null; recovering_read: boolean | null; reviewer_id: string;
       binding: DiscoveryBinding; run_grants: Grants; task_grants: Grants;
     }>(`
-      SELECT r.id AS run_id, t.id AS task_id, p.id AS step_id, r.binding, r.reviewer_id,
+      SELECT r.id AS run_id, t.id AS task_id, p.id AS step_id, p.state='interrupted' AS recovering_read, r.binding, r.reviewer_id,
         r.grants AS run_grants, t.grants AS task_grants
       FROM discovery_runs r JOIN discovery_tasks t ON t.run_id=r.id
       LEFT JOIN LATERAL (
@@ -53,8 +53,10 @@ export async function createDiscoveryService(options: Options) {
       ) ORDER BY r.id,t.id`, [modelClient.modelId, modelClient.mode, owner.generation, !!options.readTools]);
     for (const row of rows) {
       if (closed) break;
-      if (pendingTasks.has(row.task_id) || !coversGrant(row.run_grants, row.task_grants) ||
-          !coversGrant(options.resolveAuthority(row.reviewer_id, row.binding), row.task_grants)) continue;
+      if (pendingTasks.has(row.task_id)) continue;
+      // Recovery must observe policy under the owner fence so revocation becomes durable.
+      if (!row.recovering_read && (!coversGrant(row.run_grants, row.task_grants) ||
+          !coversGrant(options.resolveAuthority(row.reviewer_id, row.binding), row.task_grants))) continue;
       if (row.step_id) {
         const generation = owner.generation;
         if (pendingSteps.get(row.task_id) === generation) continue;
