@@ -347,8 +347,9 @@ test('commits a single child effect with saved replay, and reuses native call ID
     const [one, two] = await steps(runId);
     const result = await owner.executePendingStep(runId, coordinator, one.id);
     expect(result).toMatchObject({ ok: true, investigationId: expect.any(String), taskId: expect.any(String), revision: 1 });
+    if (!result?.ok || !('investigationId' in result)) throw new Error('Expected a delegation result');
     expect(await owner.executePendingStep(runId, coordinator, two.id)).toMatchObject({
-      ok: true, investigationId: result?.ok ? result.investigationId : '',
+      ok: true, investigationId: result.investigationId,
     });
     expect(await projection(runId)).toEqual({ children: 2, investigations: 2, specialists: 2, tools: 4 });
     expect(await owner.executePendingStep(runId, coordinator, one.id)).toEqual(result);
@@ -370,7 +371,7 @@ test('commits a single child effect with saved replay, and reuses native call ID
     model.at(2).result.resolve(modelResult(last));
     await finish.done;
 
-    if (!result?.ok) throw new Error('Expected a child');
+    if (!result?.ok || !('taskId' in result)) throw new Error('Expected a child');
     const specialist = owner.dispatchTask(runId, result.taskId)!;
     const child = await model.at(3).turn.promise;
     expect(child.taskId).toBe(result.taskId);
@@ -693,7 +694,9 @@ test('keeps same raw accounts under different sellers distinct and never invents
     const right = await owner.executePendingStep(runId, taskId, second.id);
     expect(left).toMatchObject({ ok: true });
     expect(right).toMatchObject({ ok: true });
-    if (!left?.ok || !right?.ok) throw new Error('Expected both seller tasks');
+    if (!left?.ok || !right?.ok || !('investigationId' in left) || !('investigationId' in right)) {
+      throw new Error('Expected both seller tasks');
+    }
     expect(left.investigationId).not.toBe(right.investigationId);
     expect(await projection(runId)).toEqual({ children: 2, investigations: 3, specialists: 2, tools: 4 });
   } finally {

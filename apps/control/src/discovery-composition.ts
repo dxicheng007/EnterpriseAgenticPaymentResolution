@@ -5,7 +5,7 @@ import {
   hashCanonical, hashEvent, hashManifest, type Id, type RawSourceEvent,
 } from '@eapr/contracts';
 import type { EvidenceStore } from '@eapr/evidence';
-import { readDiscoveryCapture, streamContentHash, type SourceDefinition, type UploadDependencies } from '@eapr/sources';
+import { createDiscoveryReadTools, readDiscoveryCapture, streamContentHash, type SourceDefinition, type UploadDependencies } from '@eapr/sources';
 import type { ModelClient } from '../../../packages/discovery/src/model.js';
 import { discoveryError } from '../../../packages/discovery/src/repository.js';
 import { createDiscoveryService } from '../../../packages/discovery/src/service.js';
@@ -122,6 +122,7 @@ export function composeDiscovery(options: {
       sourceRefForCompany: companyId => catalog.get(companyId)?.sourceRef,
       readCapture: selection => readDiscoveryCapture({ db, store }, catalog, selection),
       recheckCapture: recheckDiscoveryCapture,
+      readTools: createDiscoveryReadTools({ db, store }, catalog),
       resolveAuthority(reviewerId, { companyId, sourceRef }) {
         if (reviewerId !== reviewer.reviewerId || catalog.get(companyId)?.sourceRef !== sourceRef ||
             !reviewer.allowedSourceRefs.includes(sourceRef)) return;

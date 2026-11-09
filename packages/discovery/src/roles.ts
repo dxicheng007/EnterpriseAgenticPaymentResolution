@@ -1,3 +1,4 @@
+import { discoveryReadToolSchemas } from '../../contracts/src/index.js';
 import type { TaskRow } from './repository.js';
 import { delegateTaskTool } from './tasks.js';
 
@@ -9,8 +10,11 @@ const connector = new Set([
   'draftConnector', 'reviseConnector', 'compileConnector', 'runSandboxReplay', 'compareArtifacts', 'requestVerification', 'readVerification',
 ]);
 
-export function toolSchemas(role: TaskRow['role']) {
-  return role === 'coordinator' ? [delegateTaskTool] : [];
+export function toolSchemas(role: TaskRow['role'], reads = false) {
+  return [
+    ...(role === 'coordinator' ? [delegateTaskTool] : []),
+    ...(reads ? discoveryReadToolSchemas : []),
+  ];
 }
 
 export function unavailableToolCode(role: TaskRow['role'], name: string) {
