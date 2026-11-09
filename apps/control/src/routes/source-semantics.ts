@@ -1,7 +1,7 @@
 import { ApiErrorSchema, IdSchema, type Id, type SemanticPreflight } from '@eapr/contracts';
 import { SourceError } from '@eapr/sources';
 import type { FastifyPluginAsync } from 'fastify';
-import type { ControlServices } from '../server.js';
+import { sourceSemanticsRoute, type ControlServices } from '../server.js';
 
 function invalidRequest() {
   return new SourceError(400,'SOURCE_METADATA_INVALID','Source request is invalid');
@@ -20,7 +20,7 @@ export function sourceSemanticsPlugin(
         code:mapped.code,message:mapped.message,diagnostics:mapped.diagnostics,correlationId:request.id,
       }));
     });
-    app.get<{Params:{sourceRef:string}}>('/internal/sources/:sourceRef/semantics',{
+    app.get<{Params:{sourceRef:string}}>(sourceSemanticsRoute,{
       exposeHeadRoute:false,
       onRequest:async (request,reply)=>{
         reply.header('Cache-Control','no-store');

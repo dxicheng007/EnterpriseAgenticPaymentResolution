@@ -48,8 +48,12 @@ const synthetic:SourceDefinition = {
   })),
 };
 const foreign = {...companyA,companyId:'company-foreign',sourceRef:'foreign-source'};
-const catalog = new Map([companyA,companyB,synthetic,foreign].map(source=>[source.companyId,source]));
-const allowed = [companyA.sourceRef,companyB.sourceRef,synthetic.sourceRef,allowedUnknown];
+const longSources = [101,160].map(length=>({
+  ...companyA,companyId:'company-long-' + length,sourceRef:'x'.repeat(length),
+}));
+const catalog = new Map([companyA,companyB,synthetic,foreign,...longSources].map(source=>[source.companyId,source]));
+const allowed = [companyA.sourceRef,companyB.sourceRef,synthetic.sourceRef,allowedUnknown,
+  ...longSources.map(source=>source.sourceRef)];
 const capability = {token:sourceToken,sourceRefs:allowed};
 
 let dependencies:UploadDependencies;
@@ -122,7 +126,7 @@ function manifest(
   source:SourceDefinition,epoch:number,versions:SemanticVersionMap,
   events:readonly RawSourceEvent[] = [],files:ManifestFile[] = [],
 ):BootstrapManifest {
-  const id = source.sourceRef + ':epoch:' + epoch;
+  const id = source.companyId + ':epoch:' + epoch;
   const input = {
     id,sourceRef:source.sourceRef,companyId:source.companyId,epoch,asOf,semanticVersions:versions,files,
     schemaVersions:Object.fromEntries(source.contracts.map(contract=>[contract.resource,contract.schemaVersion])),
@@ -550,4 +554,25 @@ it('rejects a missing watermark row even when the post-watermark range is contig
   await admin.query('DELETE FROM source_events WHERE source_ref = $1 AND event_id = $2',
     [watermark!.sourceRef,watermark!.id]);
   await errorResponse(await get(companyA.sourceRef),503,'SOURCE_SEMANTICS_UNAVAILABLE');
+});
+
+
+it('routes the full source ID range through the private capability',async ()=>{
+  for (const source of longSources) {
+    const versions = {[aKey]:'long-source-revision'};
+    await publishBaseline(dependencies,source,manifest(source,2,versions),[]);
+    await errorResponse(await get(source.sourceRef,{}),403,'SOURCE_FORBIDDEN');
+    expect(await observe(source.sourceRef)).toEqual({sourceRef:source.sourceRef,checkedAt:asOf,versions});
+  }
+});
+
+it('sanitizes malformed path encoding and overlong parameters before the route',async ()=>{
+  for (const ref of ['secret-marker%ZZ','secret-marker%','secret-marker%C0%AF','secret-marker'.repeat(13)]) {
+    await errorResponse(await get(ref),400,'SOURCE_METADATA_INVALID');
+  }
+  const unrelated = await fetch(controlOrigin + '/api/sources/secret-marker%ZZ/dossier');
+  expect(unrelated.status).toBe(400);
+  const body = await unrelated.json();
+  expect(body).toMatchObject({error:'Bad Request',code:'FST_ERR_BAD_URL',statusCode:400});
+  expect(JSON.stringify(body)).not.toContain('secret-marker');
 });
