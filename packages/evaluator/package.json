@@ -3,6 +3,8 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./bootstrap-launcher": "./src/bootstrap-launcher.ts",
+    "./bootstrap-verify": "./src/bootstrap-verify.ts",
     "./verify": "./src/verify.ts",
     "./registry": "./src/registry.ts",
     "./runner": "./src/runner.ts",
