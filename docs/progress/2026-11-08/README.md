@@ -209,3 +209,8 @@ S3b `dbf2f09451e6094a0f801867751cac2ff3db16ea` passed [independent Astra review]
 Root combined typecheck, 279 unit tests, four affected PostgreSQL tests and full V0 passed on clean `c664e2c`. V0 packet: `.evidence/c664e2cf731e802191b35f4ae371a98a96a04b4e/V0/2026-11-09T02-28-15-385Z-22583/`. Previous V2 packet remains tied to `735e680`; it is not relabeled as a later run. Authenticated readiness composition, financial attestation, first import and ongoing sync remain separate work.
 
 The [additive authority freeze](../../superpowers/plans/2026-11-08-contract-freeze-v4-activation-authority.md) and [A0 assignment](handoffs/b-activation-authority-contracts.md) define the next contract-only implementation. Monitor server and client/UI have separate assigned owners; real browser proof depends on the actual server stream.
+
+
+## Authenticated activity stream
+
+M1 `a32721ce9d50472d69b8644cab42940912176f7d` passed [independent review](reviews/b-discovery-events-independent-review.md) and is integrated at `85f76868105737b3d718ee7fe5c46f5e75a7b975`. The [builder report](handoffs/b-discovery-events-report.md) records focused transport tests. Root combined typecheck and all 28 PostgreSQL tests across events, activity reads and lifecycle HTTP passed. The stream uses the same current reviewer/run authorization, exact per-event cursors, bounded backpressure and cleanup. It is control-run activity only; it does not claim the later combined control/runtime event API. The client/UI and real browser monitor proof are being implemented separately.
