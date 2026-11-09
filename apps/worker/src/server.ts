@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyPluginAsync, type FastifyReply, type FastifyRequest } from 'fastify';
 import { authorizeWorkerParentRead } from './parent-read-composition.js';
+import { authorizeActivationService, invalidActivationRequest, sendActivationError } from './routes/activation.js';
 import { ParentReadError, sendParentReadError } from './routes/parent.js';
 import type { Pool } from 'pg';
 import type { Clock } from '../../../packages/storage/src/control-db.js';
@@ -20,6 +21,15 @@ export function buildWorker({ db, serviceToken, clock, expectedMigrations, featu
     routerOptions: { maxParamLength: 160 },
     frameworkErrors(error: FastifyError, request: FastifyRequest, reply: FastifyReply) {
       if (error.code === 'FST_ERR_BAD_URL' || error.code === 'FST_ERR_MAX_PARAM_LENGTH') {
+        if (request.method === 'GET' && /^(?:https?:\/\/[^/?#]+)?\/internal\/receipts\/[^/?#]+(?:\?|$)/.test(request.url) &&
+            worker.hasRoute({ method: 'GET', url: '/internal/receipts/:key' })) {
+          try {
+            authorizeActivationService(request, serviceToken);
+          } catch (failure) {
+            return sendActivationError(failure, request, reply);
+          }
+          return sendActivationError(invalidActivationRequest(), request, reply);
+        }
         const match = /^(?:https?:\/\/[^/?#]+)?(\/internal\/(?:parent|activations))\/[^/?#]+(?:\?|$)/.exec(request.url);
         if (request.method === 'GET' && match && worker.hasRoute({ method: 'GET', url: match[1] + '/:accountId' })) {
           try {

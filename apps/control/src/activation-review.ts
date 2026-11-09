@@ -3,17 +3,19 @@ import {
   ActivationBundleV2Schema, HashSchema, canonicalJson, hashBundleV2,
   type ActivationRequest,
 } from '@eapr/contracts';
+import type { createActivationDelivery } from './activation-delivery.js';
 import type { createActivationPublication } from './activation-publication.js';
 import type { LocalReviewerContext } from './local-session.js';
 import { requireAccount, requireSource, type ReviewPreparation } from './review-preparation.js';
 import { headToken, requestMatchesReview, ReviewError, type ReviewRepository } from './review-repository.js';
 
 const savedAuthority = z.object({ authorityDigest: HashSchema, authorityContent: z.unknown() });
-export function createActivationReview({ repository, preparation, publisher, publicationFailed }: {
+export function createActivationReview({ repository, preparation, publisher, publicationFailed, deliver }: {
   repository: ReviewRepository;
   preparation: ReviewPreparation;
   publisher: ReturnType<typeof createActivationPublication>;
   publicationFailed: () => void;
+  deliver?: ReturnType<typeof createActivationDelivery>;
 }) {
   return async function activate(accountId: string, request: ActivationRequest, grants: LocalReviewerContext) {
     requireAccount(accountId, grants);
@@ -48,6 +50,7 @@ export function createActivationReview({ repository, preparation, publisher, pub
       const bundle = ActivationBundleV2Schema.parse({ ...draft, hash: hashBundleV2(draft) });
       intent = await repository.commitIntent(headToken(head.review), bundle);
     }
+    if (deliver) return deliver(intent);
     try {
       await publisher.publishIntent(intent.intentId);
     } catch {

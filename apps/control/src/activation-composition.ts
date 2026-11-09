@@ -2,6 +2,8 @@ import { createFinancialAttestationRegistry } from '@eapr/evaluator/financial-at
 import type { createCandidateRegistry } from '@eapr/evaluator/registry';
 import { loadActivationPolicy } from '@eapr/storage/activation-policy';
 import { createRegisteredScopeReader } from '@eapr/storage/activation-registry';
+import { createActivationDelivery } from './activation-delivery.js';
+import type { ActivationWorkerClient } from './activation-worker-client.js';
 import { createActivationPublication } from './activation-publication.js';
 import { createActivationReview } from './activation-review.js';
 import { createFinancialCaptureReader, type FinancialSourceDependencies } from './financial-capture.js';
@@ -18,6 +20,7 @@ export type LocalActivationOptions = {
   policyPath: string;
   selectionPath?: string;
   bootstrapRoots: BootstrapRoots;
+  worker?: ActivationWorkerClient;
 };
 
 export async function composeActivationReview(source: FinancialSourceDependencies, options: LocalActivationOptions & {
@@ -44,8 +47,12 @@ export async function composeActivationReview(source: FinancialSourceDependencie
   return [
     createReviewPlugin(preparation, authorize),
     async app => {
+      const publicationFailed = () => app.log.warn('ACTIVATION_PUBLICATION_PENDING');
+      const deliver = options.worker && createActivationDelivery({
+        worker: options.worker, publisher, repository, publicationFailed,
+      });
       await app.register(createActivationReviewPlugin(createActivationReview({
-        repository, preparation, publisher, publicationFailed: () => app.log.warn('ACTIVATION_PUBLICATION_PENDING'),
+        repository, preparation, publisher, publicationFailed, deliver,
       }), authorize));
     },
   ] satisfies import('fastify').FastifyPluginAsync[];

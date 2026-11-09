@@ -12,7 +12,8 @@ export function createActivationReviewPlugin(activate: ActivationReview, authori
       const accountId = parseReviewAccount(request);
       const approval = ActivationRequestSchema.safeParse(request.body);
       if (!approval.success) throw new ReviewError(400, 'REVIEW_REQUEST_INVALID');
-      return reply.header('Cache-Control', 'no-store').code(202).send(await activate(accountId, approval.data, grants));
+      const result = await activate(accountId, approval.data, grants);
+      return reply.header('Cache-Control', 'no-store').code('receipt' in result ? 200 : 202).send(result);
     });
   };
 }

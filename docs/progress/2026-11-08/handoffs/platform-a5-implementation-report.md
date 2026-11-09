@@ -1,0 +1,9 @@
+# A5 implementation checkpoint
+
+Status is partial pending the remaining adversarial matrix, normal supervisor proof and exact-candidate review. Based on accepted P1 `17d6714e6fb9264750a7575f28a41b951a94a90d`.
+
+The A5 worker authenticates the strict application and scoped receipt routes, resolves an exact stored receipt first, independently validates the installed policy and source semantics, and recomputes and persists the first import under fresh transaction locks. The control reviewer path dispatches an already committed intent and mirrors an exact runtime receipt. A4 publication-only composition remains available to its existing callers without an activation transport. A new-key conflict remains `ALREADY_ACTIVE` and the authorized consumer can inspect the existing scoped activation GET.
+
+Typecheck passed. The real A/B issued-proof integration test passed on leased PostgreSQL 55441 and HTTP 3241/3242. It checks an explicit first A approval, B initially inactive, A 80,000 cents at cutover, real original records and one activity, rollback after all twelve runtime write points, real 40001/40P01 with pooled client reuse and exhaustion, a same-key replay and one source-outage race, tampered authority and source cases, and B's separate zero-balance nonempty approval and distinct-key race. It exercises real lost worker response, failed control mirror write, policy rotation of an unsucceeded pending intent, head correction, historical target view after advancing the target, and recovery after worker and control restart without policy or registry. Focused route, source-client and malformed-bundle tests passed separately (3 cases). No migration or evaluator closure changed.
+
+Outstanding matrix includes explicit cross-scope economic lock contention through A5, remaining capture and plan tamper cases, a racing policy mismatch recovery, startup and dependency isolation, and adjacent regression runs. Full slice and joint acceptance are separate.
