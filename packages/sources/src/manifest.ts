@@ -1,8 +1,9 @@
 import {
   RawSourceEventSchema, type BootstrapManifest, type CaptureSnapshotResult, type ChangePage, type Cursor,
-  type Id, type RawSourceEvent, type SourceSnapshot,
+  type Id, type RawSourceEvent, type SemanticPreflight, type SourceSnapshot,
 } from '@eapr/contracts';
 import { captureBaseline, publishBaseline, readManifest, readSnapshot } from './dossier.js';
+import { readCurrentSemantics } from './current-semantics.js';
 import { fetchChanges } from './change-feed.js';
 import { SourceError } from './errors.js';
 import type { PreparedSourceRecord, SourceDefinition } from './records.js';
@@ -16,6 +17,9 @@ export function createSourceService(dependencies:UploadDependencies,catalog:Read
     return source;
   }
   return {
+    readCurrentSemantics(sourceRef:Id):Promise<SemanticPreflight> {
+      return readCurrentSemantics(dependencies,catalog,sourceRef);
+    },
     getManifest(companyId:Id):Promise<BootstrapManifest> {
       return readManifest(db,companyId);
     },

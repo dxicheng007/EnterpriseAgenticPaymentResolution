@@ -1,6 +1,6 @@
-import Fastify, { type FastifyInstance, type FastifyPluginAsync } from 'fastify';
+import Fastify, { type FastifyError, type FastifyInstance, type FastifyPluginAsync, type FastifyReply, type FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
-import { ServiceHealthSchema, type Diagnostic, type HealthResponse, type ServiceHealth } from '../../../packages/contracts/src/index.js';
+import { ApiErrorSchema, ServiceHealthSchema, type Diagnostic, type HealthResponse, type ServiceHealth } from '../../../packages/contracts/src/index.js';
 import type { Clock } from '../../../packages/storage/src/control-db.js';
 import { probeMigration, type MigrationIdentity } from '../../../packages/storage/src/transaction.js';
 
@@ -37,10 +37,33 @@ export type ControlServices = {
 
 type ControlDependencies = ControlServices & { expectedMigrations: readonly MigrationIdentity[]; featurePlugins?: FastifyPluginAsync<ControlServices>[] };
 
+export const sourceSemanticsRoute = '/internal/sources/:sourceRef/semantics';
+const sourceSemanticsPath = /^(?:https?:\/\/[^/?#]+)?\/internal\/sources\/[^/?#]+\/semantics(?:\?|$)/;
 const unavailable: ServiceHealth = { status: 'not_ready', database: 'unavailable', migrationVersion: null };
 
 export function buildControl({ db, workerClient, clock, expectedMigrations, featurePlugins = [] }: ControlDependencies): FastifyInstance {
-  const control = Fastify();
+  const control: FastifyInstance = Fastify({
+    // Keep the router's shared parameter limit aligned with IdSchema.
+    routerOptions: { maxParamLength: 160 },
+    frameworkErrors(error: FastifyError, request: FastifyRequest, reply: FastifyReply) {
+      // The router can reject a malformed URL before route-level hooks can sanitize it.
+      if (error.code === 'FST_ERR_BAD_URL' || error.code === 'FST_ERR_MAX_PARAM_LENGTH') {
+        if (request.method === 'GET' && sourceSemanticsPath.test(request.url) &&
+            control.hasRoute({ method: 'GET', url: sourceSemanticsRoute })) {
+          return reply.code(400).header('Cache-Control', 'no-store').send(ApiErrorSchema.parse({
+            code: 'SOURCE_METADATA_INVALID', message: 'Source request is invalid', diagnostics: [], correlationId: request.id,
+          }));
+        }
+        const statusCode = error.code === 'FST_ERR_BAD_URL' ? 400 : 414;
+        return reply.code(statusCode).send({
+          error: 'Bad Request', code: error.code, message: 'Request URL is invalid', statusCode,
+        });
+      }
+      return reply.code(500).send({
+        error: 'Internal Server Error', message: 'Unexpected error from async constraint', statusCode: 500,
+      });
+    },
+  });
   control.get('/api/health', async (_request, reply) => {
     const [local, remote] = await Promise.all([
       probeMigration(db, expectedMigrations),
