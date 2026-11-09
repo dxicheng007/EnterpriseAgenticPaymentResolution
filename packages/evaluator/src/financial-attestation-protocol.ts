@@ -36,7 +36,12 @@ export const FinancialEvaluatorCompletionV1Schema = strict({
   reservationHash: HashSchema, report: VerificationReportSchema,
 });
 export const FinancialRequestSchema = guardKeys(z.union([FinancialProbeInputV1Schema, FinancialEvaluatorInputV1Schema]));
-export const FinancialResponseSchema = guardKeys(z.union([FinancialProbeResultV1Schema, FinancialEvaluatorCompletionV1Schema]));
+const FinancialMismatchSchema = strict({
+  protocolVersion: z.literal('financial-attestation-mismatch-1'), jobId: IdSchema, requestHash: HashSchema,
+});
+export const FinancialResponseSchema = guardKeys(z.union([
+  FinancialProbeResultV1Schema, FinancialEvaluatorCompletionV1Schema, FinancialMismatchSchema,
+]));
 export const FinancialRootsSchema = strict({
   evidencePinRoot: z.string().min(1), servedRoots: z.string().min(1).array(),
 });

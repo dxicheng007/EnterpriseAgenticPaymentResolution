@@ -159,8 +159,17 @@ test('fixed financial launcher binds and evaluates both registered metadata-bear
             .rejects.toThrow(mismatch);
 
           const badPin = { ...request.reservation, evidencePin: { ...probe.evidencePin, bundleHash: hashCanonical('wrong') } };
-          await expect(launcher.launch({ ...request, reservation: { ...badPin, hash: hashFinancialReservation(badPin) } }))
-            .rejects.toThrow('FINANCIAL_ATTESTATION_UNAVAILABLE');
+          await expect(launcher.launch({
+            ...request, reservation: { ...badPin, hash: hashFinancialReservation(badPin) },
+          })).rejects.toThrow(mismatch);
+
+          const malformedRoot = join(directory, 'malformed');
+          await mkdir(malformedRoot, { mode: 0o700 });
+          await writeFile(pinPath(malformedRoot, producer.fixtureSetId, '2'), 'malformed fixture', { mode: 0o400 });
+          const malformedLauncher = createProtectedFinancialLauncher({
+            registry, roots: { ...roots, evidencePinRoot: malformedRoot },
+          });
+          await expect(malformedLauncher.launch(request)).rejects.toThrow('FINANCIAL_ATTESTATION_UNAVAILABLE');
 
           const servedLink = join(directory, 'served-link');
           await symlink(roots.evidencePinRoot, servedLink);
@@ -186,6 +195,14 @@ test('fixed financial launcher binds and evaluates both registered metadata-bear
           expect(validateFinancialCompletion(request, interposed.value).report.eligible).toBe(true);
           expect(await readFile(abaPin)).toEqual(v2Bytes);
           expect(await transport('execution-failure')).toEqual({ ok: false, code: 'EXIT_FAILED' });
+
+          const buildMutationRoot = join(directory, 'build-mutation');
+          await mkdir(buildMutationRoot, { mode: 0o700 });
+          await writeFile(pinPath(buildMutationRoot, producer.fixtureSetId, '2'), v2Bytes, { mode: 0o400 });
+          const mutatedBuild = await transport('interposition', buildMutationRoot);
+          expect(await readFile(join(buildMutationRoot, 'plan-batch.ts'), 'utf8'))
+            .toContain('Isolated build mutation during subject execution.');
+          expect(mutatedBuild).toEqual({ ok: false, code: 'REQUEST_MISMATCH' });
 
           const alteredProfile = signProfile({
             ...profile, version: profile.version + 1,

@@ -34,7 +34,8 @@ test('financial private transport bounds frames and binds exact requests', async
     ['wrong-job', 'REQUEST_MISMATCH'], ['wrong-request', 'REQUEST_MISMATCH'],
     ['invalid-utf8', 'OUTPUT_INVALID'], ['extra-line', 'OUTPUT_INVALID'], ['no-newline', 'OUTPUT_INVALID'],
     ['stderr-limit', 'OUTPUT_TOO_LARGE'], ['stdout-limit', 'OUTPUT_TOO_LARGE'], ['aggregate-limit', 'OUTPUT_TOO_LARGE'],
-    ['failed-exit', 'EXIT_FAILED'],
+    ['failed-exit', 'EXIT_FAILED'], ['child-mismatch', 'REQUEST_MISMATCH'],
+    ['child-mismatch-unbound', 'REQUEST_MISMATCH'], ['child-mismatch-extra', 'OUTPUT_INVALID'],
   ];
   expect(await execute('correct')).toMatchObject({ ok: true, value: { jobId: 'correct' } });
   expect(await execute('correct', 100)).toEqual({ ok: false, code: 'INPUT_TOO_LARGE' });

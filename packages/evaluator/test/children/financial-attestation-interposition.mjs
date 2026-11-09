@@ -5,10 +5,21 @@ import { readFileSync, writeFileSync, chmodSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 
 const originalOpen = fs.open;
+const originalReadFile = fs.readFile;
+const compiler = new URL('../../../compiler/src/plan-batch.ts', import.meta.url);
+let buildCopy;
+let mutated = false;
+fs.readFile = (path, ...args) => originalReadFile(
+  mutated && path instanceof URL && path.href === compiler.href ? buildCopy : path, ...args,
+);
 const originalSpawn = childProcess.spawn;
 let swapped;
 fs.open = async function (path, ...args) {
   const file = await originalOpen(path, ...args);
+  if (typeof path === 'string' && path.includes('/build-mutation/') && !buildCopy) {
+    buildCopy = new URL('./plan-batch.ts', 'file:' + path);
+    await fs.copyFile(compiler, buildCopy);
+  }
   if (typeof path !== 'string' || !path.includes('/aba/')) return file;
   const close = file.close.bind(file);
   file.close = async () => {
@@ -29,6 +40,10 @@ childProcess.spawn = function (...args) {
     writeFileSync(swapped.path, swapped.original);
     chmodSync(swapped.path, 0o400);
     swapped.restored = true;
+  }
+  if (buildCopy && !mutated) {
+    writeFileSync(buildCopy, '\n// Isolated build mutation during subject execution.\n', { flag: 'a' });
+    mutated = true;
   }
   if (process.argv[1].includes('execution-failure')) throw new Error('Simulated subject startup failure');
   return originalSpawn(...args);

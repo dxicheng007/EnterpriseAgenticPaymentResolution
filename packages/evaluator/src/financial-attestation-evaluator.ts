@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { EvidencePinV1Schema, hashCanonical } from '@eapr/contracts';
 import { decodeProtectedEvidenceBundle } from './evidence-fixtures.js';
 import { readFinancialBuildHash } from './financial-attestation-build.js';
-import { FinancialContextSchema, FinancialRequestSchema, type FinancialContext } from './financial-attestation-protocol.js';
+import { FinancialContextSchema, FinancialRequestSchema, type FinancialContext, type FinancialRequest } from './financial-attestation-protocol.js';
 import { financialMessageLimit, readFinancialMessage } from './financial-attestation-runner.js';
 import { bindFinancialRequest, financialEqual, validateFinancialCompletion } from './financial-attestation-verify.js';
 import { evaluateFinancialSubject } from './financial-evaluate.js';
@@ -58,34 +58,39 @@ async function readEvidencePin(roots: FinancialContext['roots'], fixtureSetId: s
   }
 }
 
-try {
-  const [rawRequest, rawContext] = await Promise.all([
-    readFinancialMessage(process.stdin), readFinancialMessage(createReadStream('', { fd: 3 })),
-  ]);
-  const request = FinancialRequestSchema.parse(rawRequest);
-  const context = FinancialContextSchema.parse(rawContext);
-  const requestHash = hashCanonical(request);
-  if (context.requestHash !== requestHash) throw new Error();
-  const capture = bindFinancialRequest(request);
+class BindingMismatch extends Error {}
+
+function requireBinding(matches: boolean): asserts matches {
+  if (!matches) throw new BindingMismatch();
+}
+
+async function evaluate(request: FinancialRequest, context: FinancialContext, requestHash: string) {
+  requireBinding(context.requestHash === requestHash);
+  let capture;
+  try {
+    capture = bindFinancialRequest(request);
+  } catch {
+    throw new BindingMismatch();
+  }
   const { artifact, profiles, manifest, snapshot, events } = request.capture;
   const probe = request.protocolVersion === 'financial-attestation-probe-1';
   const evaluatorBuildHash = probe ? request.evaluatorBuildHash : request.reservation.evaluatorBuildHash;
   const fixtureSetId = probe ? request.selection.fixtureSetId : request.reservation.evidencePin.fixtureSetId;
-  if (await readFinancialBuildHash() !== evaluatorBuildHash) throw new Error();
+  requireBinding(await readFinancialBuildHash() === evaluatorBuildHash);
 
   const bytes = await readEvidencePin(context.roots, fixtureSetId);
   const fixture = await decodeProtectedEvidenceBundle(bytes, manifest);
   const evidencePin = EvidencePinV1Schema.parse({ fixtureSetId, fixtureSetVersion: '2', bundleHash: JSON.parse(bytes).bundleHash });
-  if (fixture.truth.fixtureSetId !== fixtureSetId || fixture.truth.fixtureSetVersion !== '2' ||
-    fixture.truth.purpose !== 'construction' || !financialEqual(fixture.snapshot, snapshot) ||
-    !financialEqual([...fixture.events].sort((a, b) => a.id < b.id ? -1 : 1), events)) throw new Error();
+  requireBinding(fixture.truth.fixtureSetId === fixtureSetId && fixture.truth.fixtureSetVersion === '2' &&
+    fixture.truth.purpose === 'construction' && financialEqual(fixture.snapshot, snapshot) &&
+    financialEqual([...fixture.events].sort((a, b) => a.id < b.id ? -1 : 1), events));
 
   const binding = { jobId: request.jobId, requestHash, evidencePin, capture, evaluatorBuildHash };
   let result;
   if (probe) {
     result = { protocolVersion: 'financial-attestation-probe-result-1', ...binding };
   } else {
-    if (!financialEqual(request.reservation.evidencePin, evidencePin)) throw new Error();
+    requireBinding(financialEqual(request.reservation.evidencePin, evidencePin));
     const report = await evaluateFinancialSubject({
       protocolVersion: 1, jobId: request.jobId, artifact, profiles, manifest, evaluatorBuildHash,
       fixtureSetId, fixtureSetVersion: evidencePin.fixtureSetVersion,
@@ -95,9 +100,26 @@ try {
     }).completion;
   }
   // Equality with already decoded and validated bytes also revalidates the full bundle digest.
-  if (await readEvidencePin(context.roots, fixtureSetId) !== bytes ||
-    await readFinancialBuildHash() !== evaluatorBuildHash) throw new Error();
-  process.stdout.write(JSON.stringify(result) + '\n');
+  requireBinding(await readEvidencePin(context.roots, fixtureSetId) === bytes);
+  requireBinding(await readFinancialBuildHash() === evaluatorBuildHash);
+  return result;
+}
+
+try {
+  const [rawRequest, rawContext] = await Promise.all([
+    readFinancialMessage(process.stdin), readFinancialMessage(createReadStream('', { fd: 3 })),
+  ]);
+  const request = FinancialRequestSchema.parse(rawRequest);
+  const context = FinancialContextSchema.parse(rawContext);
+  const requestHash = hashCanonical(request);
+  let response;
+  try {
+    response = await evaluate(request, context, requestHash);
+  } catch (error) {
+    if (!(error instanceof BindingMismatch)) throw error;
+    response = { protocolVersion: 'financial-attestation-mismatch-1', jobId: request.jobId, requestHash };
+  }
+  process.stdout.write(JSON.stringify(response) + '\n');
 } catch {
   process.exitCode = 1;
 }

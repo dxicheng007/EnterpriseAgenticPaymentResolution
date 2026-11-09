@@ -20,6 +20,16 @@ const output = {
   capture: { companyId: 'company', sourceRef: 'source', manifestId: 'manifest', manifestHash: '1'.repeat(64),
     snapshotId: 'snapshot:manifest', snapshotHash: '1'.repeat(64), snapshotObjectHash: '1'.repeat(64), eventsHash: '1'.repeat(64) },
 };
+if (request.jobId.startsWith('child-mismatch')) {
+  const mismatch = {
+    protocolVersion: 'financial-attestation-mismatch-1', jobId: request.jobId,
+    requestHash: request.jobId === 'child-mismatch-unbound' ? '0'.repeat(64) : context.requestHash,
+  };
+  if (request.jobId === 'child-mismatch-extra') mismatch.detail = 'private';
+  process.stdout.write(JSON.stringify(mismatch) + '\n');
+  process.exit(0);
+}
+
 switch (request.jobId) {
   case 'wrong-job': output.jobId = 'another-job'; break;
   case 'wrong-request': output.requestHash = '0'.repeat(64); break;

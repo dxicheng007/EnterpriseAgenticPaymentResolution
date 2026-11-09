@@ -11,12 +11,17 @@ const cwd = fileURLToPath(new URL('../../../', import.meta.url));
 const evaluator = new URL('./financial-attestation-evaluator.ts', import.meta.url);
 
 /** Internal seam for scripted transport tests. The production child and caps are fixed. */
-export function exchangeFinancialEvaluator(
+export async function exchangeFinancialEvaluator(
   entrypoint: URL, input: FinancialRequest, launchContext: Buffer, options = limits,
 ) {
-  return exchange(entrypoint, input, FinancialRequestSchema, FinancialResponseSchema, options,
+  const result = await exchange(entrypoint, input, FinancialRequestSchema, FinancialResponseSchema, options,
     'report-line', (request, response) => request.jobId === response.jobId &&
       hashCanonical(request) === response.requestHash, { cwd, launchContext });
+  if (!result.ok) return result;
+  if (result.value.protocolVersion === 'financial-attestation-mismatch-1') {
+    return { ok: false, code: 'REQUEST_MISMATCH' } as const;
+  }
+  return { ok: true, value: result.value } as const;
 }
 
 export function runFinancialEvaluator(input: FinancialRequest, context: FinancialContext) {
