@@ -77,6 +77,7 @@ const captureAccess = {
 
 function instrumentReads(onFirstBlob?: (invocation: number) => Promise<void>, afterPrepare?: (invocation: number) => Promise<void>) {
   let preparations = 0;
+  let documentPreparations = 0;
   let blobReads = 0;
   function openAdapter(invocation: number, holdFirstBlob = false) {
     let first = true;
@@ -100,12 +101,18 @@ function instrumentReads(onFirstBlob?: (invocation: number) => Promise<void>, af
     },
     async prepareDocumentApplicability(input) {
       const invocation = ++preparations;
+      documentPreparations += 1;
       const prepared = await openAdapter(invocation, true).prepareDocumentApplicability(input);
       await afterPrepare?.(invocation);
       return prepared;
     },
   };
-  return { readTools, get preparations() { return preparations; }, get blobReads() { return blobReads; } };
+  return {
+    readTools,
+    get preparations() { return preparations; },
+    get documentPreparations() { return documentPreparations; },
+    get blobReads() { return blobReads; },
+  };
 }
 
 async function acquire(model: ReturnType<typeof scriptedModel>['model'], readTools: DiscoveryReadTools,
@@ -264,43 +271,7 @@ async function agreementDraft(
   alias = run.facts.sourceAccounts[0]!,
 ) {
   const { submitted } = await submittedFor(run, alias);
-  const agreement = await agreementCitation(run, alias);
-  const profile = submitted.profiles[0]!;
-  return {
-    ...submitted,
-    profiles: [{
-      ...profile,
-      approvedLookups: [{ id: 'alias-map', valueType: 'parent-account',
-        entries: [{ source: alias.sourceAccountId, target: 'proposed-account', evidenceRefs: [agreement] }] }],
-      contractTerms: profile.contractTerms.map(term => ({ ...term, evidenceRefs: [agreement] })),
-      bootstrap: { ...profile.bootstrap, customer: {
-        ...profile.bootstrap.customer, evidenceRefs: [agreement],
-      } },
-    }],
-  };
-}
-
-function holdOnDocumentAssociation(onHold: () => Promise<void>) {
-  const base = createDiscoveryReadTools({ db, store }, localSourceCatalog);
-  let preparations = 0;
-  let producerCalls = 0;
-  const readTools: DiscoveryReadTools = {
-    async prepare(input) {
-      preparations += 1;
-      return base.prepare(input);
-    },
-    async prepareDocumentApplicability(input) {
-      preparations += 1;
-      producerCalls += 1;
-      await onHold();
-      return base.prepareDocumentApplicability(input);
-    },
-  };
-  return {
-    readTools,
-    get preparations() { return preparations; },
-    get producerCalls() { return producerCalls; },
-  };
+  return withAccountDocumentEvidence(submitted, alias, await agreementCitation(run, alias));
 }
 
 for (const companyId of ['company-a', 'company-b']) {
@@ -1214,7 +1185,7 @@ test.each(['pause', 'policy', 'owner'] as const)(
     const entered = barrier<void>();
     const release = barrier<void>();
     const hold = async () => { entered.resolve(); await release.promise; };
-    const reads = holdOnDocumentAssociation(fence === 'policy' ? async () => {} : hold);
+    const reads = instrumentReads(fence === 'policy' ? undefined : hold);
     let owner = await acquire(model.model, reads.readTools, fence === 'policy' ? { beforeProposalCommit: hold } : {});
     let pending: Promise<unknown> | undefined;
     try {
@@ -1237,7 +1208,7 @@ test.each(['pause', 'policy', 'owner'] as const)(
       expect((await run.state()).proposals).toEqual([]);
       expect(await toolActivity(run)).toEqual(before);
       expect(await storedStep(step!)).toMatchObject({ state: 'pending', result: null });
-      expect(reads.producerCalls).toBeGreaterThan(0);
+      expect(reads.documentPreparations).toBeGreaterThan(0);
     } finally {
       enabled = true;
       release.resolve();
@@ -1249,7 +1220,7 @@ test.each(['pause', 'policy', 'owner'] as const)(
 
 test('exact replay of an associated proposal draft performs no producer call', async () => {
   const model = scriptedModel();
-  const reads = holdOnDocumentAssociation(async () => {});
+  const reads = instrumentReads();
   const owner = await acquire(model.model, reads.readTools);
   let restarted: Owner | undefined;
   try {
@@ -1259,14 +1230,15 @@ test('exact replay of an associated proposal draft performs no producer call', a
     const [step] = await run.execute(owner, [draftCall('draft', input)], 1, task);
     const proposal = (await run.state()).proposals[0]!;
     expect(proposal.assessment.diagnosticCodes).not.toContain('PROPOSAL_EVIDENCE_APPLICABILITY_UNRESOLVED');
+    expect(reads.documentPreparations).toBeGreaterThan(0);
     const preparations = reads.preparations;
-    const producers = reads.producerCalls;
+    const documents = reads.documentPreparations;
     const activity = await toolActivity(run);
     await owner.close();
     restarted = await acquire(model.model, reads.readTools);
     expect(await restarted.executePendingStep(run.runId, task, step!)).toEqual({ ok: true, result: proposal });
     expect(reads.preparations).toBe(preparations);
-    expect(reads.producerCalls).toBe(producers);
+    expect(reads.documentPreparations).toBe(documents);
     expect(await toolActivity(run)).toEqual(activity);
   } finally {
     await restarted?.close();
@@ -1286,6 +1258,7 @@ test('a fresh associated run clears applicability without runtime writes', async
     expect(await storedStep(step!)).toMatchObject({ state: 'succeeded', result: { ok: true } });
     expect((await run.state()).proposals[0]!.assessment.diagnosticCodes)
       .not.toContain('PROPOSAL_EVIDENCE_APPLICABILITY_UNRESOLVED');
+    expect((await run.state()).proposals[0]!.state).not.toBe('compiled');
     expect(await runtimeFingerprint()).toBe(beforeRuntime);
   } finally {
     await owner.close();
@@ -1320,38 +1293,13 @@ test('unsupported document then associated revision clears only the current appl
     const task = await delegateConnector(run, owner);
     const alias = run.facts.sourceAccounts[0]!;
     const { submitted } = await submittedFor(run, alias);
-    const unresolved = await unresolvedDocumentCitation(run);
-    const agreement = await agreementCitation(run, alias);
-    const profile = submitted.profiles[0]!;
-    const blocked = {
-      ...submitted,
-      profiles: [{
-        ...profile,
-        approvedLookups: [{ id: 'alias-map', valueType: 'parent-account',
-          entries: [{ source: alias.sourceAccountId, target: 'proposed-account', evidenceRefs: [unresolved] }] }],
-        contractTerms: profile.contractTerms.map(term => ({ ...term, evidenceRefs: [unresolved] })),
-        bootstrap: { ...profile.bootstrap, customer: {
-          ...profile.bootstrap.customer, evidenceRefs: [unresolved],
-        } },
-      }],
-    };
+    const blocked = withAccountDocumentEvidence(submitted, alias, await unresolvedDocumentCitation(run));
     await run.execute(owner, [draftCall('blocked', blocked)], 1, task);
     const first = (await run.state()).proposals[0]!;
     expect(first).toMatchObject({
       state: 'compile_blocked', assessment: { diagnosticCodes: ['PROPOSAL_EVIDENCE_APPLICABILITY_UNRESOLVED'] },
     });
-    const cleared = {
-      ...submitted,
-      profiles: [{
-        ...profile,
-        approvedLookups: [{ id: 'alias-map', valueType: 'parent-account',
-          entries: [{ source: alias.sourceAccountId, target: 'proposed-account', evidenceRefs: [agreement] }] }],
-        contractTerms: profile.contractTerms.map(term => ({ ...term, evidenceRefs: [agreement] })),
-        bootstrap: { ...profile.bootstrap, customer: {
-          ...profile.bootstrap.customer, evidenceRefs: [agreement],
-        } },
-      }],
-    };
+    const cleared = withAccountDocumentEvidence(submitted, alias, await agreementCitation(run, alias));
     await run.execute(owner, [reviseCall('associated', first, cleared)], 2, task);
     const second = (await run.state()).proposals[0]!;
     expect(second.assessment.diagnosticCodes).not.toContain('PROPOSAL_EVIDENCE_APPLICABILITY_UNRESOLVED');
