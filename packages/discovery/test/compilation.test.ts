@@ -26,7 +26,7 @@ function capture(overrides: Partial<ConstructionCapture> = {}): ConstructionCapt
     id: binding.snapshotId, manifestId: binding.manifestId, sourceRef: binding.sourceRef,
     contentHash: binding.snapshotHash, evidenceIds: ['ev-a', 'ev-b'], eventIds: [],
   } as unknown as SourceSnapshot;
-  return { facts, manifest, snapshot, ...overrides };
+  return { facts, manifest, snapshot, events: [], ...overrides };
 }
 
 test('compile schemas reject forged publication fields', () => {
