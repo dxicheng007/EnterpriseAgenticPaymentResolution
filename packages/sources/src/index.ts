@@ -9,3 +9,6 @@ export { createSourceService, publishManifest } from './manifest.js';
 export { validateChangePage } from './change-feed.js';
 export { readSourceCoverage } from './source-coverage.js';
 export { readDiscoveryCapture, type ValidatedDiscoveryCapture } from './discovery-reads.js';
+export {
+  createDiscoveryReadTools, type DiscoveryReadPreparationInput, type DiscoveryReadTools, type PreparedDiscoveryRead,
+} from './discovery-tools.js';
