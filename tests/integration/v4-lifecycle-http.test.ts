@@ -705,7 +705,7 @@ test('keeps same raw accounts under different sellers distinct and never invents
   }
 });
 
-test('serializes competing delegation claims at both persisted capacity boundaries', async () => {
+test('rejects the entire delegation batch at both persisted capacity boundaries', async () => {
   const facts = await expandedCapture();
   const model = scriptedModel();
   const owner = await owned(model);
@@ -733,19 +733,19 @@ test('serializes competing delegation claims at both persisted capacity boundari
       const results = await Promise.all([
         owner.executePendingStep(runId, taskId, first.id), owner.executePendingStep(runId, taskId, second.id),
       ]);
-      expect(results).toEqual([expect.objectContaining({ ok: true }), { ok: false, code: limit }]);
-      const count = index === 0 ? 10 : 20;
-      expect(await projection(runId)).toEqual({ children: count, investigations: index === 0 ? 1 : 21,
-        specialists: count, tools: 4 });
+      expect(results).toEqual([{ ok: false, code: limit }, { ok: false, code: limit }]);
+      const count = index === 0 ? 9 : 19;
+      expect(await projection(runId)).toEqual({ children: count, investigations: index === 0 ? 1 : 20,
+        specialists: count, tools: 0 });
       const blocked = (await client.get(url)).json();
-      expect(blocked).toMatchObject({ status: 'blocked', diagnostics: [{ code: limit }] });
+      expect(blocked).toMatchObject({ status: 'blocked', diagnostics: [{ code: limit }, { code: 'DEPENDENCY_BLOCKED' }] });
       const pause = await client.post(url + '/pause',
         { schemaVersion: 2, idempotencyKey: 'limit-pause', expectedRevision: blocked.revision });
       expect(pause.statusCode).toBe(200);
       const resume = await client.post(url + '/resume',
         { schemaVersion: 2, idempotencyKey: 'limit-resume', expectedRevision: pause.json().revision });
       expect(resume.statusCode).toBe(200);
-      expect(resume.json()).toMatchObject({ status: 'blocked', diagnostics: [{ code: limit }] });
+      expect(resume.json()).toMatchObject({ status: 'blocked', diagnostics: [{ code: limit }, { code: 'DEPENDENCY_BLOCKED' }] });
     }
   } finally {
     await client.app.close();

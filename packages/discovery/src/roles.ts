@@ -1,4 +1,5 @@
 import { discoveryReadToolSchemas } from '../../contracts/src/index.js';
+import { discoveryFindingToolSchemas } from '../../contracts/src/discovery-construction-tools.js';
 import type { TaskRow } from './repository.js';
 import { delegateTaskTool } from './tasks.js';
 
@@ -13,7 +14,7 @@ const connector = new Set([
 export function toolSchemas(role: TaskRow['role'], reads = false) {
   return [
     ...(role === 'coordinator' ? [delegateTaskTool] : []),
-    ...(reads ? discoveryReadToolSchemas : []),
+    ...(reads ? [...discoveryReadToolSchemas, ...discoveryFindingToolSchemas] : []),
   ];
 }
 
