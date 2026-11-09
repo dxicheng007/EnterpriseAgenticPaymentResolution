@@ -58,6 +58,7 @@ const shared = [
   'package.json', 'package-lock.json', 'tsconfig.json',
   'packages/contracts/package.json', 'packages/evaluator/package.json',
   ...[
+    'activation-authority', 'activation-authority-hash', 'activation-bundle-v2',
     'activity', 'bootstrap-verification-hash', 'bootstrap-verification', 'canonical', 'common', 'connector',
     'discovery-helpers', 'discovery', 'evidence', 'index', 'local-demo', 'model', 'review', 'runtime',
     'source-coverage', 'source',
