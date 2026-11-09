@@ -1,5 +1,5 @@
 import {
-  canonicalJson, hashArtifact, hashPlan, hashProfile, targetRecordId,
+  CustomerProfileSchema, canonicalJson, hashArtifact, hashPlan, hashProfile, targetRecordId,
   type BootstrapManifest, type CompiledArtifact, type CustomerProfile, type FieldLineage, type FinancialKind,
   type MappingOp, type PlanOutcome, type RawSourceEvent, type SourceSnapshot, type TargetState, type VerificationCheck,
 } from '@eapr/contracts';
@@ -214,7 +214,11 @@ export function checkEvidenceSupport({
   artifact: CompiledArtifact; profiles: CustomerProfile[]; manifest: BootstrapManifest; snapshot: SourceSnapshot;
   events: RawSourceEvent[]; evidence: EvidenceInputV1 | undefined; capturedRuns: ReadonlyMap<string, CapturedEvidenceRun>;
 }): VerificationCheck {
-  if (!evidence || !profiles.length || profiles.some(profile => Object.hasOwn(profile, 'bootstrap'))) return checkResult('unavailable', 0);
+  if (!evidence || !profiles.length) return checkResult('unavailable', 0);
+  // Keep structurally valid bootstrap metadata in the exact financial subject.
+  // This check covers financial operations only.
+  if (profiles.some(profile => Object.hasOwn(profile, 'bootstrap') &&
+    !CustomerProfileSchema.safeParse(profile).success)) return checkResult('unavailable', 0);
   const mappings = artifact.normalizedPlan.mappings;
   if (mappings.some(mapping => 'amountCents' in mapping.fields && mapping.fields.amountCents.op === 'constant')) {
     return checkResult('failed', 1);
