@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import {
   changeDiscoveryStatus, createDiscoveryMonitor, readDiscoveryCapabilities,
 } from '../../../../../packages/client/src/discovery.js';
@@ -119,7 +119,7 @@ function RunMonitor({ runId, retry }: { runId: string; retry: () => void }) {
     monitor: ReturnType<typeof createDiscoveryMonitor>;
     mutating: boolean;
   }>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const controller = new AbortController();
     const { signal } = controller;
     const monitor = createDiscoveryMonitor(runId, signal, {
@@ -176,7 +176,7 @@ function RunMonitor({ runId, retry }: { runId: string; retry: () => void }) {
     {state && <>
       <RunDetails state={state} />
       {state.status !== 'completed' && state.status !== 'failed' &&
-        <button type="button" disabled={mutating || status !== 'connected' || !!failure}
+        <button type="button" disabled={mutating || status === 'resynchronizing' || !!failure}
           onClick={() => void change(state.status === 'paused' ? 'resume' : 'pause')}>
           {state.status === 'paused' ? 'Resume run' : 'Pause run'}
         </button>}

@@ -79,14 +79,13 @@ test('monitors durable scripted activity and persists pause, resume, and usage a
     const { runId } = StartDiscoveryResponseV2Schema.parse(await start.json());
     const runPath = '/api/discovery/runs/' + runId;
     const cursor = apiResponse(page, runPath + '/events/cursor');
+    const waitForStream = () => page.waitForRequest(request => new URL(request.url()).pathname === runPath + '/events');
+    const streamRequest = waitForStream();
     const stream = apiResponse(page, runPath + '/events');
     await page.getByLabel('Run ID').fill(runId);
     await page.getByRole('button', { name: 'Open run' }).click();
     expect((await cursor).status()).toBe(200);
-    const streamResponse = await stream;
-    expect(streamResponse.status()).toBe(200);
-    expect((await streamResponse.allHeaders())['content-type']).toContain('text/event-stream');
-    expect(new URL(streamResponse.url()).searchParams.get('after')).toBeTruthy();
+    expect(new URL((await streamRequest).url()).searchParams.get('after')).toBeTruthy();
     const tasks = page.getByRole('region', { name: 'Tasks' });
     const usage = page.getByRole('region', { name: 'Model usage' });
     const recent = page.getByRole('region', { name: 'Recent activity' });
@@ -100,6 +99,9 @@ test('monitors durable scripted activity and persists pause, resume, and usage a
     const pauseResponse = await paused;
     expect(pauseResponse.status()).toBe(200);
     await expectBrowserMutation(pauseResponse, origin);
+    const streamResponse = await stream;
+    expect(streamResponse.status()).toBe(200);
+    expect((await streamResponse.allHeaders())['content-type']).toContain('text/event-stream');
     await expect(runStatus).toHaveText('Run status paused');
     await expect(usage.getByText('In-flight model calls 1')).toBeVisible();
     await expect(recent.getByText('discovery.paused', { exact: true })).toHaveCount(1);
@@ -107,7 +109,9 @@ test('monitors durable scripted activity and persists pause, resume, and usage a
     await expect(usage.getByText('Unknown usage calls 1')).toBeVisible();
     await expect(usage.getByText('Cost unavailable')).toBeVisible();
 
+    const reopenedStream = waitForStream();
     await page.reload();
+    await reopenedStream;
     await expect(runStatus).toHaveText('Run status paused');
     await expect(usage.getByText('Model calls 1', { exact: true })).toBeVisible();
     await expect(usage.getByText('Unknown usage calls 1')).toBeVisible();

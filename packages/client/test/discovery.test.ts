@@ -229,3 +229,46 @@ it('surfaces mutation conflict without replaying the request', async () => {
     schemaVersion: 2, expectedRevision: 3, idempotencyKey: expect.any(String),
   });
 });
+
+it('delivers one frame at a time without queuing parsed activity', async () => {
+  const paused = Promise.withResolvers<void>();
+  const entered = Promise.withResolvers<void>();
+  const second = { ...activity, sequence: 2 };
+  const secondFrame = `event: activity\nid: C2\ndata: ${JSON.stringify(second)}\n\n`;
+  const cancel = vi.fn();
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response([frame + secondFrame], cancel, false)));
+  const controller = new AbortController();
+  const deliver = vi.fn(() => { entered.resolve(); return paused.promise; });
+  const stopped = expect(discovery.streamDiscovery(runId, 'C0', controller.signal, vi.fn(), deliver))
+    .rejects.toMatchObject({ name: 'AbortError' });
+  await entered.promise;
+  expect(deliver).toHaveBeenCalledExactlyOnceWith(activity, 'C1');
+  controller.abort();
+  expect(cancel).toHaveBeenCalledOnce();
+  paused.resolve();
+  await stopped;
+  expect(deliver).toHaveBeenCalledOnce();
+});
+
+it('retries an interrupted invalidation before reconnecting at the delivered cursor', async () => {
+  vi.useFakeTimers();
+  const active = monitor();
+  const fetch = vi.fn()
+    .mockResolvedValueOnce(Response.json({ cursor: 'C0' }))
+    .mockResolvedValueOnce(Response.json(state(1)))
+    .mockResolvedValueOnce(response([frame]))
+    .mockRejectedValueOnce(new TypeError('Network unavailable'))
+    .mockResolvedValueOnce(Response.json(state(2)))
+    .mockImplementationOnce(() => {
+      active.controller.abort();
+      return response([]);
+    });
+  vi.stubGlobal('fetch', fetch);
+  const stopped = expect(active.watch()).rejects.toMatchObject({ name: 'AbortError' });
+  await vi.advanceTimersByTimeAsync(500);
+  await stopped;
+  expect(fetch.mock.calls.map(([url]) => url)).toEqual([
+    cursorPath, base, streamPath + 'C0', base, base, streamPath + 'C1',
+  ]);
+  expect(active.callbacks.state).toHaveBeenLastCalledWith(state(2));
+});
