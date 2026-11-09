@@ -1,5 +1,7 @@
 # Existing team integration resumption — 2026-11-09
 
+Latest checkpoint: A4 and A5 are implemented and independently accepted for their bounded scope on the local integration branch; see the final checkpoint below. The following initial assessment is retained chronologically, not as the current status.
+
 This is a fetched Git/API status assessment and bounded dispatch record, not slice acceptance. The clean local main checkout remains at `cdcb26d`; the isolated integration branch `codex/platform-activation-integration` starts at fetched main `dbb3fa48e4702e6e8867dfb3906db603b38c07ce`. Preserved A4 `78f355e49925b30cffa6b380b0a28f153d40376b` applied cleanly as `8cfbdb179dcdd38e31cb97c9652040b9bd668fcc`. Original worktrees, running demo, policies and source pins are unchanged by this setup.
 
 ## Other developers
@@ -55,3 +57,19 @@ Control007 SHA-256 `f9c0883a6da0e5ae25c04c8fe566682c72e2acfcc9f22a88e2e0105a83b9
 The integrator accepts this bounded pending-intent implementation for A5 consumption, not V3/user acceptance. Release A4's `activation-review.ts`, `activation-composition.ts`, `review-repository.ts`, activation route and `scripts/dev.ts` to the single A5 writer for only the accepted delivery/composition integration. A5 uses actual implemented immutable intent and mirror ports, runtime002 and accepted A3b reads; it receives no new financial policy or migration authority. UI paths remain Experience-owned.
 
 The [corrected Discovery adapter design](platform-discovery-verification-adapter-design.md) also passed [independent design correction review](../reviews/platform-discovery-verification-adapter-fix-review.md). Producer SQL acceptance and actual-supervisor integration acceptance are distinct; no verification tool may be advertised before the latter. Its migration number and producer implementation remain separately reserved work.
+
+
+## Final A4/A5 integration checkpoint
+
+The integrator accepts A5 corrected code candidate `ffb597d032f44fa4af9e9285555136fab9ac2609` for bounded downstream consumption. GPT-6.1 Sol implemented A4/A5 and their review corrections under monitored, exclusive path/database ownership. The [initial A5 Astra review](../reviews/platform-a5-independent-review.md) identified one mirror-failure status mismatch; the [fresh correction review](../reviews/platform-a5-mirror-fix-review.md) passed after the adapter returned the original pending202 identity. The [broader integration review](../reviews/platform-integration-independent-review.md) found no additional blocker in the assigned branch scope. Root corrected the outdated implementation-status paragraph in AGENTS.md. See the [A5 implementation report](platform-a5-implementation-report.md) and [setup guide](../../../demo/worker-activation-setup.md).
+
+Root verified the exact corrected code candidate with Node 24 and the isolated PostgreSQL 55441 lease:
+
+- `npm run typecheck` passed.
+- `npm run test:unit`: 421 tests across 66 files passed.
+- Thirteen explicitly selected integration files: 76 tests passed in 72.64 seconds. These cover A5 activation/recovery/composition, A4 review preparation/intents/composition, parent storage/reads/composition, local composition, and Discovery HTTP lifecycle/compilation/replay-compare. This is focused integration evidence, not the entire integration suite.
+- `npm run test:e2e -- tests/e2e/v3-parent-read.spec.ts`: one inactive-parent browser test passed in 2.9 seconds, verifying no runtime-record writes. It does not cover the approval browser workflow or resolve the upstream session-renewal finding.
+
+Regular pulls included Experience PR8 during implementation. The final `git pull --ff-only` in the clean original main checkout returned already up to date at `c8ed64265755963ec94164b5ddd1440e9245c0c7`; that main is included in the integration branch. Discovery PRs3–7 and Experience PR8 remain the latest observed merged developer work. Git status cannot establish unpushed editing activity. No remote publication or messages to developers were performed by this session.
+
+A4 preparation/approval intents and A5 first import/receipt recovery are implemented; complete V3 and joint user acceptance remain open. Experience owns the session-renewal P2 and approval UI/imported-state browser coverage. Discovery verification adapter design is accepted, but its producer SQL, supervisor owner-fencing acceptance and tool mounting remain unimplemented. Live model construction, ongoing synchronization and later financial/sync slices remain unfinished. No live policy, provider credentials or new customer authority was installed in the preserved demo. The ordinary no-policy supervisor smoke and real issued-proof disposable composed-service imports remain distinct evidence.
