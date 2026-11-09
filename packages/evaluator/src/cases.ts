@@ -368,7 +368,7 @@ function caseKey(test: PlannedCase): string {
 }
 
 export async function runCasePlan(
-  artifact: CompiledArtifact, plan: CheckPlan[], observeCaptured?: (run: CapturedEvidenceRun) => void,
+  artifact: CompiledArtifact, plan: CheckPlan[], observeCaptured?: (run: CapturedEvidenceRun) => void, strictTransport = false,
 ) {
   if (plan.some(check => canonicalJson(check.cases.map(caseKey)) !== canonicalJson(check.requiredCases) ||
     new Set(check.requiredCases).size !== check.requiredCases.length ||
@@ -399,6 +399,7 @@ export async function runCasePlan(
       }
       plannerExecutions++;
       const output = await runVerificationSubject(artifact, test.profile, test.events, test.target);
+      if (!output.ok && strictTransport) throw new Error('Protected subject execution failed');
       if (check.id === 'baseline_reconcile' && observeCaptured) {
         observeCaptured({
           artifactHash: artifact.hash, profileHash: test.profile.hash, events: test.events,

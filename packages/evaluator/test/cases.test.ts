@@ -90,7 +90,7 @@ test('negative_mapping_rejected for an alternate B amount field or unsupported a
 
 test('changed_case_code_changes_build_hash', async () => {
   const oldPaths = [
-    './evaluator-runner.ts', './fixture-store.ts', './fixtures.ts', './jobs.ts', './launcher.ts', './protocol.ts',
+    './evaluator-runner.ts', './financial-evaluate.ts', './fixture-store.ts', './fixtures.ts', './jobs.ts', './launcher.ts', './protocol.ts',
     './reference-model.ts', './registry.ts', './runner.ts', './subject-comparison.ts', './subject-runner.ts', './verify.ts', '../../../package-lock.json',
   ];
   const root = new URL('../src/', import.meta.url);
