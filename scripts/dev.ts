@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { createServer } from 'vite';
 import { launchControl, createWorkerClient, type ControlServices } from '../apps/control/src/server.js';
+import { createParentReadClient } from '../apps/control/src/parent-read-client.js';
+import { composeWorkerParentReads } from '../apps/worker/src/parent-read-composition.js';
 import { launchWorker } from '../apps/worker/src/server.js';
 import { createControlDb } from '../packages/storage/src/control-db.js';
 import { createRuntimeDb } from '../packages/storage/src/runtime-db.js';
@@ -23,12 +25,16 @@ function shutdownSignal(): Promise<void> {
   return Promise.race([once(process, 'SIGINT'), once(process, 'SIGTERM'), once(process, 'disconnect')]).then(() => {});
 }
 
+const registryRoot = fileURLToPath(new URL('../.local/artifacts', import.meta.url));
+
 async function localFeaturePlugins(
   db: ControlServices['db'], clock: ControlServices['clock'], expectedMigrations: ReturnType<typeof migrationIdentities>,
+  parentReads: ReturnType<typeof createParentReadClient>,
 ) {
   const { safeVerificationPins } = await import('../apps/control/src/verification-composition.js');
   const { createLocalComposition } = await import('../apps/control/src/composition.js');
   const { createEvidenceStore } = await import('@eapr/evidence');
+  const { createCandidateRegistry } = await import('@eapr/evaluator/registry');
   const { IdSchema, strict } = await import('@eapr/contracts');
   const captures = z.array(strict({
     companyId: IdSchema, manifestId: IdSchema, contractFileId: IdSchema.nullable(),
@@ -42,7 +48,6 @@ async function localFeaturePlugins(
     verificationSetupDiagnostic = code;
   } else if (process.env.EAPR_VERIFICATION_PINS !== undefined) {
     try {
-      const registryRoot = fileURLToPath(new URL('../.local/artifacts', import.meta.url));
       verification = {
         pins: safeVerificationPins.parse(JSON.parse(process.env.EAPR_VERIFICATION_PINS)),
         registryRoot,
@@ -62,7 +67,8 @@ async function localFeaturePlugins(
     }
   }
   return (await createLocalComposition({ db, clock, store }, {
-    webOrigin, captures, verification, verificationSetupDiagnostic,
+    webOrigin, captures, verification, verificationSetupDiagnostic, parentReads,
+    registry: createCandidateRegistry(db, registryRoot),
   })).featurePlugins;
 }
 
@@ -76,11 +82,16 @@ async function serve(role: 'worker' | 'control') {
     : createControlDb({ connectionString: required('CONTROL_DATABASE_URL') });
   try {
     const expectedMigrations = migrationIdentities(readMigrationCatalog()[role === 'worker' ? 'runtime' : 'control']);
+    const workerOrigin = 'http://127.0.0.1:' + workerPort;
     const app = role === 'worker'
-      ? await launchWorker({ db: pool, clock, serviceToken, expectedMigrations }, workerPort)
+      ? await launchWorker({
+          db: pool, clock, serviceToken, expectedMigrations, featurePlugins: [composeWorkerParentReads(registryRoot)],
+        }, workerPort)
       : await launchControl({
-          db: pool, clock, expectedMigrations, featurePlugins: await localFeaturePlugins(pool, clock, expectedMigrations),
-          workerClient: createWorkerClient('http://127.0.0.1:' + workerPort, serviceToken),
+          db: pool, clock, expectedMigrations,
+          featurePlugins: await localFeaturePlugins(pool, clock, expectedMigrations,
+            createParentReadClient(workerOrigin, serviceToken, registryRoot)),
+          workerClient: createWorkerClient(workerOrigin, serviceToken),
         }, localPort('EAPR_CONTROL_PORT', 3001));
     try {
       process.send?.('ready');

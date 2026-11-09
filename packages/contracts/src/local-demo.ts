@@ -13,7 +13,7 @@ export const LocalSessionResponseSchema = strict({
 
 export const DemoCandidatesResponseSchema = strict({
   mode: z.literal('development-fixture'),
-  targetMode: z.literal('empty-fixture'),
+  targetMode: z.enum(['empty-fixture', 'persisted-parent']),
   verificationAvailable: z.boolean(),
   candidates: z.array(strict({
     id: IdSchema, label: z.string(), companyId: IdSchema, sourceRef: IdSchema,

@@ -26,6 +26,16 @@ import { loadDemo } from '../../scripts/load-demo.js';
 import { migrationIdentities, readMigrationCatalog } from '../../scripts/migrate.js';
 import { createTestSystem, testNamespace } from '../fixtures/harness.js';
 
+const fixtureTarget: import('@eapr/compiler/preview-adapters').TargetReader = {
+  // Explicit version-zero fixture for this isolated verification composition test.
+  async readTarget(scope, asOf) {
+    return {
+      scope, asOf, version: 0, invoices: [], payments: [], credits: [], allocations: [], reversals: [],
+      customers: [], accounts: [], billingConfigurations: [],
+    };
+  },
+};
+
 const webOrigin = 'http://127.0.0.1:5176';
 
 test('local reviewer verifies both registered metadata-bearing subjects with financial provenance', async () => {
@@ -75,7 +85,7 @@ test('local reviewer verifies both registered metadata-bearing subjects with fin
         }));
         const verification = { pins, registryRoot, roots, expectedMigrations: migrationIdentities(readMigrationCatalog().control) };
         const local = (override?: Partial<LocalVerificationOptions>) =>
-          createLocalComposition(dependencies, { webOrigin, captures, verification: { ...verification, ...override } });
+          createLocalComposition(dependencies, { webOrigin, captures, fixtureTarget, verification: { ...verification, ...override } });
         restart = async override => {
           const app = Fastify();
           for (const plugin of (await local(override)).featurePlugins) app.register(plugin, services);

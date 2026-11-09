@@ -30,7 +30,7 @@ test('previews both captured schemas and leaves real runtime state unchanged', a
     expect('authorization' in catalogHeaders).toBe(false);
     expect(Boolean(catalogHeaders.cookie)).toBe(true);
     const catalog = DemoCandidatesResponseSchema.parse(await catalogResponse.json());
-    expect(catalog).toMatchObject({ targetMode: 'empty-fixture', verificationAvailable: false });
+    expect(catalog).toMatchObject({ targetMode: 'persisted-parent', verificationAvailable: false });
     expect(catalog.candidates.map(candidate => candidate.companyId)).toEqual(['company-a', 'company-b']);
     const [a, b] = catalog.candidates;
     const selection = page.getByLabel('Development candidate');
@@ -40,7 +40,7 @@ test('previews both captured schemas and leaves real runtime state unchanged', a
     const coverageRegion = page.getByRole('region', { name: 'Captured source coverage' });
     const coverageARequest = readCoverage(a.companyId);
     await selection.selectOption(a.id);
-    await expect(page.getByText('Development fixture · empty target', { exact: true })).toBeVisible();
+    await expect(page.getByText('Development fixture · parent records', { exact: true })).toBeVisible();
     const coverageAResponse = await coverageARequest;
     expect(coverageAResponse.status()).toBe(200);
     const coverageA = SourceCoverageResponseSchema.parse(await coverageAResponse.json());
@@ -71,8 +71,8 @@ test('previews both captured schemas and leaves real runtime state unchanged', a
     await expect(owedA).toBeVisible();
     await expect(owedA).toHaveText('$800.00');
     await expect(balanceA.getByText(`Unpaid invoice amount as of ${a.request.asOf}`, { exact: false })).toBeVisible();
-    await expect(balanceA.getByText('Empty demo target before import', { exact: true })).toBeVisible();
-    await expect(balanceA.getByText(/The demo target starts empty/)).toBeVisible();
+    await expect(balanceA.getByText('Target balance before proposed import', { exact: true })).toBeVisible();
+    await expect(balanceA.getByText(/The demo target starts empty/)).toHaveCount(0);
     await expect(page.getByText('Preview only. No records have been imported.', { exact: true })).toBeVisible();
     await balanceA.screenshot({ path: test.info().outputPath('preview-company-a-balance.png') });
     await expect(page.getByText('Parent writes: 0', { exact: true })).toBeVisible();

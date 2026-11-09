@@ -99,8 +99,18 @@ test('loads both generated captures once and previews their cited candidate scop
         expect(await readState()).toEqual(before);
         await unlink(symlinked);
         await writeFile(symlinked, originalBatch);
-        const first = await createLocalComposition(dependencies, { webOrigin: origin, captures: loaded.captures });
-        const restarted = await createLocalComposition(dependencies, { webOrigin: origin, captures: loaded.captures });
+        const fixtureTarget: import('@eapr/compiler/preview-adapters').TargetReader = {
+  // Explicit version-zero fixture for this isolated source composition test.
+  async readTarget(scope, asOf) {
+    return {
+      scope, asOf, version: 0, invoices: [], payments: [], credits: [], allocations: [], reversals: [],
+      customers: [], accounts: [], billingConfigurations: [],
+    };
+  },
+};
+        const options = { webOrigin: origin, captures: loaded.captures, fixtureTarget };
+        const first = await createLocalComposition(dependencies, options);
+        const restarted = await createLocalComposition(dependencies, options);
         const inProcess = Fastify();
         for (const plugin of first.featurePlugins) inProcess.register(plugin, services);
         inProcess.get('/operator-probe', async request => {

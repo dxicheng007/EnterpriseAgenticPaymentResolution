@@ -1,4 +1,5 @@
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyPluginAsync, type FastifyReply, type FastifyRequest } from 'fastify';
+import { ParentReadError, sendParentReadError } from '../../worker/src/routes/parent.js';
 import type { Pool } from 'pg';
 import { ApiErrorSchema, ServiceHealthSchema, type Diagnostic, type HealthResponse, type ServiceHealth } from '../../../packages/contracts/src/index.js';
 import type { Clock } from '../../../packages/storage/src/control-db.js';
@@ -53,6 +54,13 @@ export function buildControl({ db, workerClient, clock, expectedMigrations, feat
           return reply.code(400).header('Cache-Control', 'no-store').send(ApiErrorSchema.parse({
             code: 'SOURCE_METADATA_INVALID', message: 'Source request is invalid', diagnostics: [], correlationId: request.id,
           }));
+        }
+        const parentPath = /^(?:https?:\/\/[^/?#]+)?\/api\/parent\/[^/?#]+(?:\?|$)/;
+        const activationPath = /^(?:https?:\/\/[^/?#]+)?\/api\/accounts\/[^/?#]+\/activation(?:\?|$)/;
+        if (request.method === 'GET' &&
+            ((parentPath.test(request.url) && control.hasRoute({ method: 'GET', url: '/api/parent/:accountId' })) ||
+             (activationPath.test(request.url) && control.hasRoute({ method: 'GET', url: '/api/accounts/:accountId/activation' })))) {
+          return sendParentReadError(new ParentReadError(400), request, reply);
         }
         const statusCode = error.code === 'FST_ERR_BAD_URL' ? 400 : 414;
         return reply.code(statusCode).send({
