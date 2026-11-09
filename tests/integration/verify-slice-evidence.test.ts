@@ -193,8 +193,14 @@ test('CLI records a failed preflight and starts no commands when registered file
   });
 });
 
-test('CLI keeps full V2 verification unavailable', () => {
-  const result = runVerifier('V2', process.cwd());
+test('CLI routes V2 to its fail-closed preflight', () => {
+  expect(spawnSync('git', ['init', '-q'], { cwd: output }).status).toBe(0);
+  expect(spawnSync('git', [
+    '-c', 'user.name=Verifier Test', '-c', 'user.email=verifier@example.invalid',
+    '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', 'Initialize verifier fixture',
+  ], { cwd: output }).status).toBe(0);
+  const result = runVerifier('V2', output);
   expect(result.status).toBe(1);
-  expect(result.stderr).toContain('V2 verification is unavailable');
+  expect(result.stderr).toContain('required-test-files-missing');
+  expect(result.stdout).toContain('V2 verification failed');
 });
