@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./bootstrap": "./src/bootstrap.ts",
     "./state": "./src/state.ts"
   },
   "dependencies": {
