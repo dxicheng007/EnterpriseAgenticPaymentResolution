@@ -211,6 +211,7 @@ export async function inspectBaseline(
   const files: StoredSourceFile[] = [];
   const eventIds: Id[] = [];
   const validatedEvents:RawSourceEvent[] = [];
+  const verifiedApiCitations: {eventId:Id;evidence:EvidenceRef;extraction:Extraction}[] = [];
   function missing(id:Id) {
     missingMembers.push(id);
     diagnostics.push(issue('MANIFEST_MEMBER_MISSING','A pinned source member is missing',id));
@@ -316,12 +317,14 @@ export async function inspectBaseline(
             throw new SourceError(409,'SOURCE_HASH_CONFLICT','API original does not match its pinned event content');
           }
         }
-        citations.push(citeEvidence({snapshotId,sourceId:row.api_source_id,contentHash:row.api_original_hash,
-          extraction:row.api_extraction,locator:{kind:'json',pointer:''}}));
+        const evidence = citeEvidence({snapshotId,sourceId:row.api_source_id,contentHash:row.api_original_hash,
+          extraction:row.api_extraction,locator:{kind:'json',pointer:''}});
+        citations.push(evidence);
+        if (source) verifiedApiCitations.push({eventId:row.event_id,evidence,extraction:row.api_extraction});
       }
     }
   }
-  return {diagnostics,missingMembers:[...new Set(missingMembers)].sort(),citations,eventIds:[...new Set(eventIds)].sort(),files,validatedEvents};
+  return {diagnostics,missingMembers:[...new Set(missingMembers)].sort(),citations,eventIds:[...new Set(eventIds)].sort(),files,validatedEvents,verifiedApiCitations};
 }
 
 async function loadManifestById(db:Pool,manifestId:Id) {

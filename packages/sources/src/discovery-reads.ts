@@ -88,11 +88,19 @@ function sourceAccounts(events:readonly RawSourceEvent[]):SourceAccount[] {
   return [...entries.keys()].sort().map(key=>entries.get(key)!);
 }
 
+type CaptureDependencies = {db:Pool;store:Pick<EvidenceStore,'get'>};
+type CaptureSelector = {companyId:Id;manifestId:Id};
+
 export async function readDiscoveryCapture(
-  {db,store}:{db:Pool;store:Pick<EvidenceStore,'get'>},
-  catalog:ReadonlyMap<Id,SourceDefinition>,
-  input:{companyId:Id;manifestId:Id},
+  dependencies:CaptureDependencies, catalog:ReadonlyMap<Id,SourceDefinition>, input:CaptureSelector,
 ):Promise<ValidatedDiscoveryCapture> {
+  return (await readDiscoveryCaptureContents(dependencies,catalog,input)).facts;
+}
+
+// Retain the exact content proved by the original reads for source-owned tools.
+export async function readDiscoveryCaptureContents(
+  {db,store}:CaptureDependencies, catalog:ReadonlyMap<Id,SourceDefinition>, input:CaptureSelector,
+) {
   const company = IdSchema.safeParse(input?.companyId);
   const selected = IdSchema.safeParse(input?.manifestId);
   if (!company.success || !selected.success) {
@@ -139,7 +147,8 @@ export async function readDiscoveryCapture(
       throw new SourceError(409,code,'Pinned source members failed validation',inspected.diagnostics);
     }
 
-    const citations = [...inspected.citations,...documentCitations(snapshotId,inspected.files)];
+    const fileCitations = documentCitations(snapshotId,inspected.files);
+    const citations = [...inspected.citations,...fileCitations];
     const expected = new Map(citations.map(citation=>[citation.id,citation]));
     const evidenceIds = [...expected.keys()].sort();
     const equalIds = (actual:Id[], sorted:Id[]) => canonicalJson(actual.toSorted()) === canonicalJson(sorted);
@@ -158,13 +167,17 @@ export async function readDiscoveryCapture(
     }
     const currentDossier = await readDossierProof(query,companyId,manifestId,snapshotId);
     if (!equalIds(currentDossier.evidenceIds,evidenceIds)) throw conflict();
-    return {
+    const facts:ValidatedDiscoveryCapture = {
       binding:DiscoveryBindingSchema.parse({
         companyId,sourceRef:manifest.sourceRef,manifestId,manifestHash:manifest.hash,
         snapshotId,snapshotHash:snapshot.contentHash,
       }),
       sourceAccounts:sourceAccounts(inspected.validatedEvents),
       evidenceIds:IdSchema.array().parse(evidenceIds),
+    };
+    return {
+      facts, manifest, events:inspected.validatedEvents, apiCitations:inspected.verifiedApiCitations,
+      fileCitations, files:inspected.files,
     };
   } catch (error) {
     if (error instanceof SourceError) throw error;
