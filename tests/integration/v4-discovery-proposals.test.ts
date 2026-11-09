@@ -78,12 +78,12 @@ const captureAccess = {
 function instrumentReads(onFirstBlob?: (invocation: number) => Promise<void>, afterPrepare?: (invocation: number) => Promise<void>) {
   let preparations = 0;
   let blobReads = 0;
-  function openAdapter(invocation: number) {
+  function openAdapter(invocation: number, holdFirstBlob = false) {
     let first = true;
     return createDiscoveryReadTools({ db, store: {
       async get(hash) {
         blobReads++;
-        if (first) {
+        if (holdFirstBlob && first) {
           first = false;
           await onFirstBlob?.(invocation);
         }
@@ -100,7 +100,7 @@ function instrumentReads(onFirstBlob?: (invocation: number) => Promise<void>, af
     },
     async prepareDocumentApplicability(input) {
       const invocation = ++preparations;
-      const prepared = await openAdapter(invocation).prepareDocumentApplicability(input);
+      const prepared = await openAdapter(invocation, true).prepareDocumentApplicability(input);
       await afterPrepare?.(invocation);
       return prepared;
     },
@@ -237,6 +237,70 @@ async function unresolvedDocumentCitation(run: Awaited<ReturnType<typeof createR
   const id = partition.unresolvedEvidenceIds[0];
   if (!id) throw new Error('Expected unresolved file citation');
   return id;
+}
+
+function withAccountDocumentEvidence(
+  submitted: Awaited<ReturnType<typeof submittedFor>>['submitted'],
+  alias: Extract<DiscoverySubject, { kind: 'source_account' }>,
+  evidenceId: string,
+) {
+  const profile = submitted.profiles[0]!;
+  return {
+    ...submitted,
+    profiles: [{
+      ...profile,
+      approvedLookups: [{ id: 'alias-map', valueType: 'parent-account',
+        entries: [{ source: alias.sourceAccountId, target: 'proposed-account', evidenceRefs: [evidenceId] }] }],
+      contractTerms: profile.contractTerms.map(term => ({ ...term, evidenceRefs: [evidenceId] })),
+      bootstrap: { ...profile.bootstrap, customer: {
+        ...profile.bootstrap.customer, evidenceRefs: [evidenceId],
+      } },
+    }],
+  };
+}
+
+async function agreementDraft(
+  run: Awaited<ReturnType<typeof createRun>>,
+  alias = run.facts.sourceAccounts[0]!,
+) {
+  const { submitted } = await submittedFor(run, alias);
+  const agreement = await agreementCitation(run, alias);
+  const profile = submitted.profiles[0]!;
+  return {
+    ...submitted,
+    profiles: [{
+      ...profile,
+      approvedLookups: [{ id: 'alias-map', valueType: 'parent-account',
+        entries: [{ source: alias.sourceAccountId, target: 'proposed-account', evidenceRefs: [agreement] }] }],
+      contractTerms: profile.contractTerms.map(term => ({ ...term, evidenceRefs: [agreement] })),
+      bootstrap: { ...profile.bootstrap, customer: {
+        ...profile.bootstrap.customer, evidenceRefs: [agreement],
+      } },
+    }],
+  };
+}
+
+function holdOnDocumentAssociation(onHold: () => Promise<void>) {
+  const base = createDiscoveryReadTools({ db, store }, localSourceCatalog);
+  let preparations = 0;
+  let producerCalls = 0;
+  const readTools: DiscoveryReadTools = {
+    async prepare(input) {
+      preparations += 1;
+      return base.prepare(input);
+    },
+    async prepareDocumentApplicability(input) {
+      preparations += 1;
+      producerCalls += 1;
+      await onHold();
+      return base.prepareDocumentApplicability(input);
+    },
+  };
+  return {
+    readTools,
+    get preparations() { return preparations; },
+    get producerCalls() { return producerCalls; },
+  };
 }
 
 for (const companyId of ['company-a', 'company-b']) {
@@ -1139,6 +1203,169 @@ test('retained-only and spec-only document refs stay readability-only for applic
     expect(await storedStep(step!)).toMatchObject({ state: 'succeeded', result: { ok: true } });
     expect((await run.state()).proposals[0]!.assessment.diagnosticCodes)
       .not.toContain('PROPOSAL_EVIDENCE_APPLICABILITY_UNRESOLVED');
+  } finally {
+    await owner.close();
+  }
+});
+
+test.each(['pause', 'policy', 'owner'] as const)(
+  'proposal document association is fenced by %s before commit', async fence => {
+    const model = scriptedModel();
+    const entered = barrier<void>();
+    const release = barrier<void>();
+    const hold = async () => { entered.resolve(); await release.promise; };
+    const reads = holdOnDocumentAssociation(fence === 'policy' ? async () => {} : hold);
+    let owner = await acquire(model.model, reads.readTools, fence === 'policy' ? { beforeProposalCommit: hold } : {});
+    let pending: Promise<unknown> | undefined;
+    try {
+      const run = await createRun('association-fence-' + fence, model);
+      const task = await delegateConnector(run, owner);
+      const input = await agreementDraft(run);
+      const [step] = await run.accept(owner, [draftCall('draft', input)], 1, task);
+      const before = await toolActivity(run);
+      pending = owner.executePendingStep(run.runId, task, step!);
+      await entered.promise;
+      if (fence === 'pause') await run.action('pause', 'pause-during-association');
+      if (fence === 'policy') enabled = false;
+      if (fence === 'owner') {
+        await owner.close();
+        owner = await acquire(model.model, reads.readTools);
+      }
+      release.resolve();
+      expect(await pending).toBeUndefined();
+      enabled = true;
+      expect((await run.state()).proposals).toEqual([]);
+      expect(await toolActivity(run)).toEqual(before);
+      expect(await storedStep(step!)).toMatchObject({ state: 'pending', result: null });
+      expect(reads.producerCalls).toBeGreaterThan(0);
+    } finally {
+      enabled = true;
+      release.resolve();
+      await pending;
+      await owner.close();
+    }
+  },
+);
+
+test('exact replay of an associated proposal draft performs no producer call', async () => {
+  const model = scriptedModel();
+  const reads = holdOnDocumentAssociation(async () => {});
+  const owner = await acquire(model.model, reads.readTools);
+  let restarted: Owner | undefined;
+  try {
+    const run = await createRun('association-replay', model);
+    const task = await delegateConnector(run, owner);
+    const input = await agreementDraft(run);
+    const [step] = await run.execute(owner, [draftCall('draft', input)], 1, task);
+    const proposal = (await run.state()).proposals[0]!;
+    expect(proposal.assessment.diagnosticCodes).not.toContain('PROPOSAL_EVIDENCE_APPLICABILITY_UNRESOLVED');
+    const preparations = reads.preparations;
+    const producers = reads.producerCalls;
+    const activity = await toolActivity(run);
+    await owner.close();
+    restarted = await acquire(model.model, reads.readTools);
+    expect(await restarted.executePendingStep(run.runId, task, step!)).toEqual({ ok: true, result: proposal });
+    expect(reads.preparations).toBe(preparations);
+    expect(reads.producerCalls).toBe(producers);
+    expect(await toolActivity(run)).toEqual(activity);
+  } finally {
+    await restarted?.close();
+    await owner.close();
+  }
+});
+
+test('a fresh associated run clears applicability without runtime writes', async () => {
+  const model = scriptedModel();
+  const owner = await acquire(model.model, instrumentReads().readTools);
+  try {
+    const beforeRuntime = await runtimeFingerprint();
+    const run = await createRun('association-fresh-run', model);
+    const task = await delegateConnector(run, owner);
+    const input = await agreementDraft(run);
+    const [step] = await run.execute(owner, [draftCall('draft', input)], 1, task);
+    expect(await storedStep(step!)).toMatchObject({ state: 'succeeded', result: { ok: true } });
+    expect((await run.state()).proposals[0]!.assessment.diagnosticCodes)
+      .not.toContain('PROPOSAL_EVIDENCE_APPLICABILITY_UNRESOLVED');
+    expect(await runtimeFingerprint()).toBe(beforeRuntime);
+  } finally {
+    await owner.close();
+  }
+});
+
+test('stale expectedRevision rejects after a successful associated draft', async () => {
+  const model = scriptedModel();
+  const owner = await acquire(model.model, instrumentReads().readTools);
+  try {
+    const run = await createRun('association-stale-revision', model);
+    const task = await delegateConnector(run, owner);
+    const input = await agreementDraft(run);
+    await run.execute(owner, [draftCall('draft', input)], 1, task);
+    const proposal = (await run.state()).proposals[0]!;
+    const [step] = await run.execute(owner, [{
+      id: 'stale', name: 'reviseConnector',
+      arguments: { ...input, proposalId: proposal.proposalId, expectedRevision: 99 },
+    }], 2, task);
+    expect(await storedStep(step!)).toMatchObject({ state: 'failed', result: { ok: false, code: 'DISCOVERY_CONFLICT' } });
+    expect((await run.state()).proposals[0]).toMatchObject({ proposalId: proposal.proposalId, revision: 1 });
+  } finally {
+    await owner.close();
+  }
+});
+
+test('unsupported document then associated revision clears only the current applicability diagnostic', async () => {
+  const model = scriptedModel();
+  const owner = await acquire(model.model, instrumentReads().readTools);
+  try {
+    const run = await createRun('association-sticky-diagnostic', model);
+    const task = await delegateConnector(run, owner);
+    const alias = run.facts.sourceAccounts[0]!;
+    const { submitted } = await submittedFor(run, alias);
+    const unresolved = await unresolvedDocumentCitation(run);
+    const agreement = await agreementCitation(run, alias);
+    const profile = submitted.profiles[0]!;
+    const blocked = {
+      ...submitted,
+      profiles: [{
+        ...profile,
+        approvedLookups: [{ id: 'alias-map', valueType: 'parent-account',
+          entries: [{ source: alias.sourceAccountId, target: 'proposed-account', evidenceRefs: [unresolved] }] }],
+        contractTerms: profile.contractTerms.map(term => ({ ...term, evidenceRefs: [unresolved] })),
+        bootstrap: { ...profile.bootstrap, customer: {
+          ...profile.bootstrap.customer, evidenceRefs: [unresolved],
+        } },
+      }],
+    };
+    await run.execute(owner, [draftCall('blocked', blocked)], 1, task);
+    const first = (await run.state()).proposals[0]!;
+    expect(first).toMatchObject({
+      state: 'compile_blocked', assessment: { diagnosticCodes: ['PROPOSAL_EVIDENCE_APPLICABILITY_UNRESOLVED'] },
+    });
+    const cleared = {
+      ...submitted,
+      profiles: [{
+        ...profile,
+        approvedLookups: [{ id: 'alias-map', valueType: 'parent-account',
+          entries: [{ source: alias.sourceAccountId, target: 'proposed-account', evidenceRefs: [agreement] }] }],
+        contractTerms: profile.contractTerms.map(term => ({ ...term, evidenceRefs: [agreement] })),
+        bootstrap: { ...profile.bootstrap, customer: {
+          ...profile.bootstrap.customer, evidenceRefs: [agreement],
+        } },
+      }],
+    };
+    await run.execute(owner, [reviseCall('associated', first, cleared)], 2, task);
+    const second = (await run.state()).proposals[0]!;
+    expect(second.assessment.diagnosticCodes).not.toContain('PROPOSAL_EVIDENCE_APPLICABILITY_UNRESOLVED');
+    expect(second.revision).toBe(2);
+    const { rows: assessments } = await db.query<{ proposal_revision: string; codes: string[] }>(
+      `SELECT proposal_revision::text, payload->'diagnosticCodes' AS codes
+       FROM discovery_proposal_assessments WHERE run_id=$1 ORDER BY proposal_revision`,
+      [run.runId]);
+    expect(assessments).toHaveLength(2);
+    expect(assessments[0]).toMatchObject({
+      proposal_revision: '1', codes: ['PROPOSAL_EVIDENCE_APPLICABILITY_UNRESOLVED'],
+    });
+    expect(assessments[1]!.proposal_revision).toBe('2');
+    expect(assessments[1]!.codes).not.toContain('PROPOSAL_EVIDENCE_APPLICABILITY_UNRESOLVED');
   } finally {
     await owner.close();
   }
