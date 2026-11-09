@@ -4,6 +4,7 @@
   "type": "module",
   "exports": {
     "./compile": "./src/compile.ts",
+    "./plan-bootstrap": "./src/plan-bootstrap.ts",
     "./plan-batch": "./src/plan-batch.ts",
     "./operations": "./src/operations.ts",
     "./preview-adapters": "./src/preview-adapters.ts"
