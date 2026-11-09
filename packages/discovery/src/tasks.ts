@@ -1,7 +1,7 @@
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { DiscoverySubjectSchema, IdSchema, VersionSchema, strict, type DiscoveryBinding, type DiscoverySubject } from '../../contracts/src/index.js';
-import { safeCounter } from './budgets.js';
+import { budgets, safeCounter } from './budgets.js';
 import { coversGrant, discoveryError, insertSpecialist, type RunRow } from './repository.js';
 
 export type CaptureFacts = {
@@ -65,6 +65,29 @@ export async function validateDelegation(connection: PoolClient, run: RunRow, fa
     'SELECT id FROM discovery_tasks WHERE run_id=$1 AND id=ANY($2)', [run.id, dependencyIds]);
   if (rowCount !== dependencyIds.length) throw discoveryError(409);
   return parsed.data;
+}
+
+// The caller holds the run lock. Project ordered requests without reserving any rows.
+export async function projectedDelegationLimit(
+  client: PoolClient, runId: string, subjects: readonly DiscoverySubject[],
+) {
+  const { rows } = await client.query<{
+    seller_entity_id: string | null; source_account_id: string | null; specialist_count: number;
+  }>('SELECT seller_entity_id,source_account_id,specialist_count FROM discovery_investigations WHERE run_id=$1', [runId]);
+  const key = (seller: string | null, account: string | null) => JSON.stringify([seller, account]);
+  const specialists = new Map(rows.map(row => [key(row.seller_entity_id, row.source_account_id), row.specialist_count]));
+  let accountCount = rows.filter(row => row.seller_entity_id !== null).length;
+  for (const subject of subjects) {
+    const account = subject.kind === 'source_account' ? subject : undefined;
+    const scope = key(account?.sellerEntityId ?? null, account?.sourceAccountId ?? null);
+    const count = specialists.get(scope);
+    if (count === undefined && account) {
+      if (accountCount >= budgets.accountInvestigations) return 'INVESTIGATION_LIMIT' as const;
+      accountCount++;
+    }
+    if (count !== undefined && count >= budgets.specialists) return 'SPECIALIST_LIMIT' as const;
+    specialists.set(scope, (count ?? 0) + 1);
+  }
 }
 
 export async function executeDelegation(connection: PoolClient, run: RunRow, input: z.infer<typeof delegateTaskInput>) {

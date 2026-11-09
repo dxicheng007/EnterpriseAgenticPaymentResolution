@@ -16,7 +16,7 @@ import { budgets, safeCounter } from './budgets.js';
 import type { ModelClient } from './model.js';
 import { captureFailure, parseReadResult, prepareRead, type DiscoveryReadTools } from './read-tools.js';
 import { unavailableToolCode, toolSchemas } from './roles.js';
-import { delegateTaskInput, executeDelegation, validateDelegation, type CaptureAccess, type CaptureFacts } from './tasks.js';
+import { delegateTaskInput, executeDelegation, projectedDelegationLimit, validateDelegation, type CaptureAccess, type CaptureFacts } from './tasks.js';
 import {
   coversGrant, discoveryError, insertSpecialist, lockRun, lockTask, markBlocker, publishDiscovery, runnable,
   type RepositoryOptions, type RunRow, type TaskRow,
@@ -703,9 +703,14 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
               if (step.id === item.id) read = result;
             }
           }
-          if (delegationFacts) for (const delegate of delegates) {
-            const validated = await validateDelegation(connection, lockedRun, delegationFacts, delegate.arguments);
-            if (delegate.id === step.id) input = validated;
+          if (delegationFacts && delegates.length) {
+            const subjects = [];
+            for (const delegate of delegates) {
+              const validated = await validateDelegation(connection, lockedRun, delegationFacts, delegate.arguments);
+              subjects.push(validated.subject);
+              if (delegate.id === step.id) input = validated;
+            }
+            failure = await projectedDelegationLimit(connection, lockedRun.id, subjects);
           }
         } catch (error) {
           const code = error instanceof Error && 'code' in error && error.code;
@@ -716,10 +721,14 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
       if (!await permitsStep(connection, current)) return;
       if (failure) {
         const limit = failure === 'FINDING_IDENTITY_LIMIT' || failure === 'FINDING_REVISION_LIMIT';
-        const codeFor = (item: Step) =>
-          (capture && readTools && (DiscoveryReadToolNameSchema.safeParse(item.name).success || findingTool(item.name))) ||
-          delegates.some(delegate => delegate.id === item.id) ?
-            (limit ? 'DISCOVERY_CONFLICT' : failure) : unavailableToolCode(task.role, item.name);
+        const delegationLimit = failure === 'INVESTIGATION_LIMIT' || failure === 'SPECIALIST_LIMIT';
+        const codeFor = (item: Step) => {
+          if (delegates.some(delegate => delegate.id === item.id)) return limit ? 'DISCOVERY_CONFLICT' : failure;
+          if (capture && readTools && (DiscoveryReadToolNameSchema.safeParse(item.name).success || findingTool(item.name))) {
+            return limit || delegationLimit ? 'DISCOVERY_CONFLICT' : failure;
+          }
+          return unavailableToolCode(task.role, item.name);
+        };
         for (const item of remaining) {
           await connection.query(`UPDATE discovery_tool_steps SET state='failed',result=$2,generation=$3
             WHERE id=$1 AND state IN ('pending','interrupted')`, [item.id, { ok: false, code: codeFor(item) }, generation]);

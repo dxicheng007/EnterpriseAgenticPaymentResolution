@@ -559,7 +559,10 @@ test('007 binds proposal and compile edges to their exact run, revision, assessm
   }
 });
 
-test('rejects a citation for the same source account ID under another captured seller', async () => {
+let expandedCapture: ReturnType<typeof buildExpandedCapture> | undefined;
+const getExpandedCapture = () => expandedCapture ??= buildExpandedCapture();
+
+async function buildExpandedCapture() {
   const { companyId, sourceRef } = companyA;
   const { rows: [head] } = await db.query<{ manifest: BootstrapManifest }>(
     'SELECT manifest FROM source_manifests WHERE source_ref=$1 ORDER BY epoch DESC LIMIT 1', [sourceRef]);
@@ -571,10 +574,11 @@ test('rejects a citation for the same source account ID under another captured s
   const instant = clock().toISOString();
   const date = instant.slice(0, 10);
   const sequence = original.filter(event => event.streamId === 'a-finance').length + 1;
-  const sellers = ['seller-collision-one', 'seller-collision-two'];
+  const sellers = Array.from({ length: 22 }, (_, index) => 'seller-collision-' + index);
   const sourceAccountId = 'shared-collision-account';
   const extra = sellers.map((sellerEntityId, index) => {
-    const base = eventA({ kind: 'invoice', recordId: 'collision-invoice-' + index, sourceAccountId,
+    const base = eventA({ kind: 'invoice', recordId: 'collision-invoice-' + index,
+      sourceAccountId: index < 2 ? sourceAccountId : 'expanded-account-' + index,
       effectiveDate: date, fields: { amount: '1.00', due_date: date } }, sequence + index, instant);
     const event = { ...base, rawIdentity: { ...base.rawIdentity, sellerEntityId } };
     return { ...event, contentHash: hashEvent(event) };
@@ -589,19 +593,23 @@ test('rejects a citation for the same source account ID under another captured s
         snapshotHash: streamContentHash(sourceRef, streamId, resumeAfter, members) };
     }),
     semanticVersions: { ...manifest.semanticVersions, ...Object.fromEntries(extra.map(event =>
-      [event.rawIdentity.sellerEntityId + '/' + sourceAccountId, event.semanticVersion])) },
+      [event.rawIdentity.sellerEntityId + '/' + event.rawIdentity.sourceAccountId, event.semanticVersion])) },
   };
   const prepared = await Promise.all(extra.map(event =>
     prepareApiRecord(companyA, store, event, Buffer.from(JSON.stringify(event.payload)))));
   const dependencies = { db, store, clock };
   await publishManifest(dependencies, localSourceCatalog, { ...draft, hash: hashManifest(draft) }, prepared);
   expect((await captureBaseline(dependencies, id)).ok).toBe(true);
+  return { companyId, sourceRef, manifestId: id, sellers, sourceAccountId };
+}
 
+test('rejects a citation for the same source account ID under another captured seller', async () => {
+  const { companyId, sourceRef, manifestId, sellers, sourceAccountId } = await getExpandedCapture();
   const model = scriptedModel();
   const { readTools } = instrumentReads();
   const owner = await acquire(model.model, readTools, {});
   try {
-    const run = await createRun('seller-collision', model, { companyId, manifestId: id });
+    const run = await createRun('seller-collision', model, { companyId, manifestId });
     const subject = { kind: 'source_account' as const, sellerEntityId: sellers[0]!, sourceAccountId };
     const child = await addSpecialist(owner, run.runId, subject);
     const query = await readTools.prepare({ name: 'querySnapshot', binding: run.facts.binding,
@@ -613,6 +621,73 @@ test('rejects a citation for the same source account ID under another captured s
     })], 0, child);
     expect(await storedStep(step!)).toMatchObject({ result: { ok: false, code: 'DISCOVERY_FORBIDDEN' } });
     expect((await run.state()).findings).toEqual([]);
+  } finally {
+    await owner.close();
+  }
+});
+
+test.each([
+  { code: 'SPECIALIST_LIMIT', recovered: false, seeded: 10 },
+  { code: 'SPECIALIST_LIMIT', recovered: true, seeded: 9 },
+  { code: 'INVESTIGATION_LIMIT', recovered: true, seeded: 20 },
+  { code: 'INVESTIGATION_LIMIT', recovered: false, seeded: 19 },
+])('mixed batch rejects $code at $seeded before effects, recovered=$recovered', async ({ code, recovered, seeded }) => {
+  const model = scriptedModel();
+  const { readTools } = instrumentReads();
+  let owner = await acquire(model.model, readTools, {});
+  try {
+    const accountLimit = code === 'INVESTIGATION_LIMIT';
+    const selection = accountLimit ? await getExpandedCapture() : undefined;
+    const run = await createRun('mixed-capacity-' + seeded, model, selection);
+    const source = { kind: 'source' } as const;
+    const accounts = run.facts.sourceAccounts;
+    const seed = accountLimit ? accounts.slice(0, seeded) : Array<DiscoverySubject>(seeded).fill(source);
+    expect(seed).toHaveLength(seeded);
+    for (const subject of seed) await addSpecialist(owner, run.runId, subject);
+    const before = await run.state();
+    const requested = seeded % 2 === 0 ? 1 : 2;
+    const subjects = accountLimit ? accounts.slice(seeded, seeded + requested) : Array<DiscoverySubject>(requested).fill(source);
+    expect(subjects).toHaveLength(requested);
+    const ids = await run.accept(owner, [
+      publish('before-capacity'), describe,
+      ...subjects.map((subject, ordinal) => ({ ...delegate, id: 'capacity-' + ordinal, arguments: { ...delegate.arguments, subject } })),
+    ]);
+    if (recovered) {
+      await owner.close();
+      owner = await acquire(model.model, readTools, {});
+    }
+    for (const step of ids) await owner.executePendingStep(run.runId, run.taskId, step);
+    const after = await run.state();
+    expect(after.findings).toEqual([]);
+    expect(after.tasks.map(task => task.id)).toEqual(before.tasks.map(task => task.id));
+    for (const [ordinal, step] of ids.entries()) expect(await storedStep(step)).toMatchObject({
+      state: 'failed', result: { ok: false, code: ordinal < 2 ? 'DISCOVERY_CONFLICT' : code },
+    });
+    expect(after.diagnostics).toMatchObject([{ code }]);
+    expect(await findingActivity(run.runId)).toEqual([]);
+  } finally {
+    await owner.close();
+  }
+});
+
+test('two delegations for the same new account share the final investigation slot', async () => {
+  const model = scriptedModel();
+  const owner = await acquire(model.model, instrumentReads().readTools, {});
+  try {
+    const run = await createRun('shared-final-slot', model, await getExpandedCapture());
+    const accounts = run.facts.sourceAccounts;
+    expect(accounts.length).toBeGreaterThanOrEqual(20);
+    for (const subject of accounts.slice(0, 19)) await addSpecialist(owner, run.runId, subject);
+    const subject = accounts[19]!;
+    const ids = await run.execute(owner, ['first', 'second'].map(id => ({
+      ...delegate, id, arguments: { ...delegate.arguments, subject },
+    })));
+    const result = await Promise.all(ids.map(storedStep));
+    expect(result).toMatchObject([{ state: 'succeeded' }, { state: 'succeeded' }]);
+    const tasks = (await run.state()).tasks.filter(task => task.subject.kind === 'source_account' &&
+      task.subject.sellerEntityId === subject.sellerEntityId && task.subject.sourceAccountId === subject.sourceAccountId);
+    expect(tasks).toHaveLength(2);
+    expect(tasks[0]!.investigationId).toBe(tasks[1]!.investigationId);
   } finally {
     await owner.close();
   }
