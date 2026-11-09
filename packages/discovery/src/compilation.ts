@@ -2,7 +2,7 @@ import type { PoolClient } from 'pg';
 import {
   DiscoveryProposalV2Schema, ProposalResultSchema, hashCanonical,
   type BootstrapManifest, type Diagnostic, type DiscoveryBinding, type DiscoveryProposalV2,
-  type Hash, type Id, type ProposalResult, type SourceSnapshot,
+  type Hash, type Id, type ProposalResult, type RawSourceEvent, type SourceSnapshot,
 } from '../../contracts/src/index.js';
 import {
   CompileConnectorInputSchema, CompileConnectorResultSchema, type CompileConnectorInput,
@@ -13,11 +13,12 @@ import { assessProposal } from './assessments.js';
 import { discoveryError, type RunRow, type TaskRow } from './repository.js';
 import type { CaptureFacts } from './tasks.js';
 
-/** Trusted pinned capture for compile/register. Detached; never model-authored. */
+/** Trusted pinned capture for compile/register/replay. Detached; never model-authored. */
 export type ConstructionCapture = {
   facts: CaptureFacts;
   manifest: BootstrapManifest;
   snapshot: SourceSnapshot;
+  events: RawSourceEvent[];
 };
 
 export type ConstructionCaptureReader = (
@@ -25,6 +26,7 @@ export type ConstructionCaptureReader = (
 ) => Promise<ConstructionCapture>;
 
 export type CompileRegisterCandidate = CandidateRegistry['registerCandidate'];
+export type ReplayGetArtifact = CandidateRegistry['getArtifact'];
 
 export type CompileSourcePayload = {
   proposalId: Id;
@@ -63,14 +65,15 @@ const equalIds = (left: readonly Id[], right: readonly Id[]) =>
   left.length === right.length && hashCanonical([...left].sort()) === hashCanonical([...right].sort());
 
 export function assertConstructionCapture(capture: ConstructionCapture): void {
-  const { facts, manifest, snapshot } = capture;
+  const { facts, manifest, snapshot, events } = capture;
   const { binding } = facts;
   if (snapshot.id !== binding.snapshotId ||
       snapshot.manifestId !== binding.manifestId || snapshot.manifestId !== manifest.id ||
       snapshot.sourceRef !== binding.sourceRef || snapshot.sourceRef !== manifest.sourceRef ||
       snapshot.contentHash !== binding.snapshotHash ||
       manifest.hash !== binding.manifestHash ||
-      !equalIds(snapshot.evidenceIds, facts.evidenceIds)) {
+      !equalIds(snapshot.evidenceIds, facts.evidenceIds) ||
+      !equalIds(events.map(event => event.id), snapshot.eventIds)) {
     throw discoveryError(409);
   }
 }

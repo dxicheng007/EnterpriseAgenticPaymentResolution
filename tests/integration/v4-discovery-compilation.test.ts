@@ -90,7 +90,9 @@ async function constructionCapture(
 ): Promise<ConstructionCapture> {
   const contents = await readDiscoveryCaptureContents({ db, store }, localSourceCatalog, selection);
   const snapshot = await readSnapshot(db, contents.facts.binding.snapshotId);
-  const capture = { facts: contents.facts, manifest: contents.manifest, snapshot };
+  const capture = {
+    facts: contents.facts, manifest: contents.manifest, snapshot, events: contents.events,
+  };
   assertConstructionCapture(capture);
   return capture;
 }

@@ -28,7 +28,7 @@ export const localSourceCatalog: ReadonlyMap<Id, SourceDefinition> = new Map(
 export async function createLocalComposition(dependencies: UploadDependencies, options: {
   webOrigin: string;
   captures: DemoCapture[];
-  registry?: Pick<ReturnType<typeof createCandidateRegistry>, 'getCandidate' | 'registerCandidate'>;
+  registry?: Pick<ReturnType<typeof createCandidateRegistry>, 'getCandidate' | 'registerCandidate' | 'getArtifact'>;
   parentReads?: ParentReadClient;
   fixtureTarget?: TargetReader;
   verification?: LocalVerificationOptions;
@@ -223,6 +223,7 @@ export async function createLocalComposition(dependencies: UploadDependencies, o
       composeDiscovery({
         catalog: localSourceCatalog, store, reviewer, authorizeReviewer: session.authorizeReviewer,
         registerCandidate: registry?.registerCandidate.bind(registry),
+        getArtifact: registry?.getArtifact.bind(registry),
       }),
       createSourcePlugin({ catalog: localSourceCatalog, authorizeSource, store }),
       createPreviewPlugin({

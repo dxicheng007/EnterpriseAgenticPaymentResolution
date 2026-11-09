@@ -93,3 +93,80 @@ test('compileConnector accepts only proposal identity and exact revision', async
     ok: false, code: 'TOOL_UNAVAILABLE',
   });
 });
+
+test('sandbox replay and compare schemas accept only exact refs and sandbox literals', async () => {
+  const {
+    RunSandboxReplayInputSchema, RunSandboxReplayResultSchema, RunSandboxReplaySuccessSchema,
+    CompareArtifactsInputSchema, CompareArtifactsSuccessSchema, CompareArtifactsResultSchema,
+    discoveryReplayToolSchemas, discoveryCompareToolSchemas,
+  } = await import('../src/discovery-construction-tools.js');
+  const replayInput = { proposalId: 'proposal', revision: 1 };
+  expect(RunSandboxReplayInputSchema.parse(replayInput)).toEqual(replayInput);
+  for (const invalid of [
+    { ...replayInput, target: 'empty' },
+    { ...replayInput, events: [] },
+    { ...replayInput, revision: 0 },
+    { proposalId: 'proposal' },
+    { revision: 1 },
+  ]) expect(RunSandboxReplayInputSchema.safeParse(invalid).success).toBe(false);
+
+  const outcome = { plans: [], holds: [] };
+  const success = {
+    ok: true as const,
+    proposalId: 'proposal', revision: 1,
+    artifactHash: 'a'.repeat(64), profileHash: 'b'.repeat(64),
+    snapshotId: 'snapshot', manifestId: 'manifest',
+    targetMode: 'empty-sandbox' as const, parentWrites: 0 as const, outcome,
+  };
+  expect(RunSandboxReplaySuccessSchema.parse(success)).toEqual(success);
+  expect(RunSandboxReplayResultSchema.parse(success)).toEqual(success);
+  for (const invalid of [
+    { ...success, targetMode: 'empty-fixture' },
+    { ...success, parentWrites: 1 },
+    { ...success, outcome: undefined },
+  ]) expect(RunSandboxReplaySuccessSchema.safeParse(invalid).success).toBe(false);
+  expect(RunSandboxReplayResultSchema.parse({ ok: false, code: 'TOOL_UNAVAILABLE' })).toEqual({
+    ok: false, code: 'TOOL_UNAVAILABLE',
+  });
+
+  const compareInput = {
+    left: { proposalId: 'proposal', revision: 1 },
+    right: { proposalId: 'proposal', revision: 2 },
+  };
+  expect(CompareArtifactsInputSchema.parse(compareInput)).toEqual(compareInput);
+  for (const invalid of [
+    { ...compareInput, note: 'x' },
+    { left: compareInput.left },
+    { left: { proposalId: 'proposal', revision: 0 }, right: compareInput.right },
+  ]) expect(CompareArtifactsInputSchema.safeParse(invalid).success).toBe(false);
+
+  const side = {
+    proposalId: 'proposal', revision: 1, payloadHash: 'c'.repeat(64),
+    profileHashes: ['d'.repeat(64)], specId: 'spec', specVersion: 1,
+  };
+  const compareSuccess = {
+    ok: true as const, left: side, right: { ...side, revision: 2, payloadHash: 'e'.repeat(64) },
+    identical: false,
+    diffs: [{ category: 'hash' as const, path: '/payloadHash', change: 'changed' as const,
+      leftDigest: 'c'.repeat(64), rightDigest: 'e'.repeat(64) }],
+  };
+  expect(CompareArtifactsSuccessSchema.parse(compareSuccess)).toEqual(compareSuccess);
+  expect(CompareArtifactsSuccessSchema.safeParse({ ...compareSuccess, identical: true }).success).toBe(false);
+  expect(CompareArtifactsSuccessSchema.parse({
+    ...compareSuccess, identical: true, diffs: [],
+  })).toMatchObject({ identical: true, diffs: [] });
+  expect(CompareArtifactsResultSchema.parse({ ok: false, code: 'DISCOVERY_CONFLICT' })).toEqual({
+    ok: false, code: 'DISCOVERY_CONFLICT',
+  });
+  expect(CompareArtifactsSuccessSchema.safeParse({
+    ...compareSuccess,
+    diffs: Array.from({ length: 501 }, (_, index) => ({
+      category: 'field', path: '/spec/field/' + index, change: 'changed',
+    })),
+  }).success).toBe(false);
+
+  expect(discoveryReplayToolSchemas).toHaveLength(1);
+  expect(discoveryReplayToolSchemas[0]).toMatchObject({ name: 'runSandboxReplay' });
+  expect(discoveryCompareToolSchemas).toHaveLength(1);
+  expect(discoveryCompareToolSchemas[0]).toMatchObject({ name: 'compareArtifacts' });
+});

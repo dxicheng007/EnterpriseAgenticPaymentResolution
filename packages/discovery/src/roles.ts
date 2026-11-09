@@ -1,6 +1,7 @@
 import { discoveryReadToolSchemas } from '../../contracts/src/index.js';
 import {
-  discoveryCompileToolSchemas, discoveryFindingToolSchemas, discoveryProposalToolSchemas,
+  discoveryCompileToolSchemas, discoveryCompareToolSchemas, discoveryFindingToolSchemas,
+  discoveryProposalToolSchemas, discoveryReplayToolSchemas,
 } from '../../contracts/src/discovery-construction-tools.js';
 import type { TaskRow } from './repository.js';
 import { delegateTaskTool } from './tasks.js';
@@ -13,12 +14,13 @@ const connector = new Set([
   'draftConnector', 'reviseConnector', 'compileConnector', 'runSandboxReplay', 'compareArtifacts', 'requestVerification', 'readVerification',
 ]);
 
-export function toolSchemas(role: TaskRow['role'], reads = false, compile = false) {
+export function toolSchemas(role: TaskRow['role'], reads = false, compile = false, sandbox = false) {
   return [
     ...(role === 'coordinator' ? [delegateTaskTool] : []),
     ...(reads ? [...discoveryReadToolSchemas, ...discoveryFindingToolSchemas] : []),
     ...(reads && role === 'connector' ? discoveryProposalToolSchemas : []),
     ...(reads && compile && role === 'connector' ? discoveryCompileToolSchemas : []),
+    ...(reads && sandbox && role === 'connector' ? [...discoveryReplayToolSchemas, ...discoveryCompareToolSchemas] : []),
   ];
 }
 

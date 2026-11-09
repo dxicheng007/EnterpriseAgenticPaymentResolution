@@ -8,6 +8,7 @@ import type { EvidenceStore } from '@eapr/evidence';
 import { createDiscoveryReadTools, readDiscoveryCapture, streamContentHash, type SourceDefinition, type UploadDependencies } from '@eapr/sources';
 import {
   assertConstructionCapture, type CompileRegisterCandidate, type ConstructionCapture,
+  type ReplayGetArtifact,
 } from '../../../packages/discovery/src/compilation.js';
 import type { ModelClient } from '../../../packages/discovery/src/model.js';
 import { discoveryError } from '../../../packages/discovery/src/repository.js';
@@ -123,6 +124,7 @@ async function readConstructionCapture(
     facts: contents.facts,
     manifest: contents.manifest,
     snapshot,
+    events: contents.events,
   };
   assertConstructionCapture(capture);
   return capture;
@@ -135,8 +137,9 @@ export function composeDiscovery(options: {
   authorizeReviewer: ReturnType<typeof createLocalSessionService>['authorizeReviewer'];
   modelClient?: ModelClient;
   registerCandidate?: CompileRegisterCandidate;
+  getArtifact?: ReplayGetArtifact;
 }): FastifyPluginAsync<Omit<UploadDependencies, 'store'>> {
-  const { catalog, store, reviewer, authorizeReviewer, modelClient, registerCandidate } = options;
+  const { catalog, store, reviewer, authorizeReviewer, modelClient, registerCandidate, getArtifact } = options;
   return async (app, { db, clock }) => {
     const service = await createDiscoveryService({
       db, clock, modelClient,
@@ -144,8 +147,9 @@ export function composeDiscovery(options: {
       readCapture: selection => readDiscoveryCapture({ db, store }, catalog, selection),
       recheckCapture: recheckDiscoveryCapture,
       readTools: createDiscoveryReadTools({ db, store }, catalog),
-      ...(registerCandidate ? {
-        registerCandidate,
+      ...(registerCandidate || getArtifact ? {
+        ...(registerCandidate ? { registerCandidate } : {}),
+        ...(getArtifact ? { getArtifact } : {}),
         constructionCapture: selection => readConstructionCapture({ db, store }, catalog, selection),
       } : {}),
       resolveAuthority(reviewerId, { companyId, sourceRef }) {

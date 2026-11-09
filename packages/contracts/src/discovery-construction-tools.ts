@@ -1,10 +1,11 @@
 import { z } from 'zod';
-import { IdSchema, NonnegativeIntegerSchema, VersionSchema, strict } from './common.js';
+import { HashSchema, IdSchema, NonnegativeIntegerSchema, VersionSchema, strict } from './common.js';
 import { canonicalJson } from './canonical.js';
 import { ConnectorSpecSchema, CustomerProfileSchema } from './connector.js';
 import { CustomerProfileDraftSchema, DiscoveryFindingV2Schema, DiscoveryProposalV2Schema, ProposalResultSchema } from './discovery.js';
 import { DiscoveryReadToolFailureSchema } from './discovery-tools.js';
 import { FindingSchema } from './model.js';
+import { PlanOutcomeSchema } from './runtime.js';
 
 const fitsToolBytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength <= 65_536;
 
@@ -136,4 +137,87 @@ export const discoveryProposalToolSchemas = [
 export const discoveryCompileToolSchemas = [
   { name: 'compileConnector', description: 'Compile the exact current proposal revision and register a candidate when assessment is clear.',
     inputSchema: z.toJSONSchema(CompileConnectorInputSchema, { io: 'input', reused: 'ref', unrepresentable: 'any' }) },
+];
+
+export const RunSandboxReplayInputSchema = strict({
+  proposalId: IdSchema, revision: VersionSchema,
+}).refine(fitsProposalBytes, 'Invalid canonical input or input exceeds 65,536 UTF-8 bytes');
+
+export const RunSandboxReplaySuccessSchema = strict({
+  ok: z.literal(true),
+  proposalId: IdSchema,
+  revision: VersionSchema,
+  artifactHash: HashSchema,
+  profileHash: HashSchema,
+  snapshotId: IdSchema,
+  manifestId: IdSchema,
+  targetMode: z.literal('empty-sandbox'),
+  parentWrites: z.literal(0),
+  outcome: PlanOutcomeSchema,
+});
+
+export const RunSandboxReplayResultSchema = z.union([
+  RunSandboxReplaySuccessSchema,
+  DiscoveryReadToolFailureSchema,
+]).refine(fitsProposalBytes, 'Tool result exceeds 65,536 UTF-8 bytes');
+
+export type RunSandboxReplayInput = z.infer<typeof RunSandboxReplayInputSchema>;
+export type RunSandboxReplayResult = z.infer<typeof RunSandboxReplayResultSchema>;
+
+const ProposalRevisionRefSchema = strict({
+  proposalId: IdSchema, revision: VersionSchema,
+});
+
+export const CompareArtifactsInputSchema = strict({
+  left: ProposalRevisionRefSchema,
+  right: ProposalRevisionRefSchema,
+}).refine(fitsProposalBytes, 'Invalid canonical input or input exceeds 65,536 UTF-8 bytes');
+
+export const ArtifactCompareDiffSchema = strict({
+  category: z.enum(['field', 'rule', 'profile', 'hash', 'scope']),
+  path: z.string().min(1).max(512),
+  change: z.enum(['added', 'removed', 'changed']),
+  leftDigest: HashSchema.optional(),
+  rightDigest: HashSchema.optional(),
+});
+
+const CompareSideSchema = strict({
+  proposalId: IdSchema,
+  revision: VersionSchema,
+  payloadHash: HashSchema,
+  profileHashes: z.array(HashSchema).length(1),
+  artifactHash: HashSchema.optional(),
+  specId: IdSchema,
+  specVersion: VersionSchema,
+});
+
+export const CompareArtifactsSuccessSchema = strict({
+  ok: z.literal(true),
+  left: CompareSideSchema,
+  right: CompareSideSchema,
+  identical: z.boolean(),
+  diffs: z.array(ArtifactCompareDiffSchema).max(500),
+}).refine(value => value.identical === (value.diffs.length === 0), {
+  path: ['identical'], message: 'identical must equal diffs.length === 0',
+});
+
+export const CompareArtifactsResultSchema = z.union([
+  CompareArtifactsSuccessSchema,
+  DiscoveryReadToolFailureSchema,
+]).refine(fitsProposalBytes, 'Tool result exceeds 65,536 UTF-8 bytes');
+
+export type CompareArtifactsInput = z.infer<typeof CompareArtifactsInputSchema>;
+export type CompareArtifactsResult = z.infer<typeof CompareArtifactsResultSchema>;
+export type ArtifactCompareDiff = z.infer<typeof ArtifactCompareDiffSchema>;
+
+export const discoveryReplayToolSchemas = [
+  { name: 'runSandboxReplay',
+    description: 'Replay the exact compiled proposal revision against the pinned capture on an isolated empty sandbox target. parentWrites is always 0.',
+    inputSchema: z.toJSONSchema(RunSandboxReplayInputSchema, { io: 'input', reused: 'ref', unrepresentable: 'any' }) },
+];
+
+export const discoveryCompareToolSchemas = [
+  { name: 'compareArtifacts',
+    description: 'Compare two same-run proposal revisions by deterministic field, rule, profile, hash, and scope digests.',
+    inputSchema: z.toJSONSchema(CompareArtifactsInputSchema, { io: 'input', reused: 'ref', unrepresentable: 'any' }) },
 ];

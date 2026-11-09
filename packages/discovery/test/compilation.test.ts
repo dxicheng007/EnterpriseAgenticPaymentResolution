@@ -26,7 +26,7 @@ function capture(overrides: Partial<ConstructionCapture> = {}): ConstructionCapt
     id: binding.snapshotId, manifestId: binding.manifestId, sourceRef: binding.sourceRef,
     contentHash: binding.snapshotHash, evidenceIds: ['ev-a', 'ev-b'], eventIds: [],
   } as unknown as SourceSnapshot;
-  return { facts, manifest, snapshot, ...overrides };
+  return { facts, manifest, snapshot, events: [], ...overrides };
 }
 
 test('compile schemas reject forged publication fields', () => {
@@ -90,6 +90,18 @@ test('compile descriptors advertise only when compile dependencies are present',
     toolSchemas(role, reads, compile).map(tool => tool.name).filter(name => name.endsWith('Connector'));
   expect(names('connector', true)).toEqual(['draftConnector', 'reviseConnector']);
   expect(names('connector', true, true)).toEqual(['draftConnector', 'reviseConnector', 'compileConnector']);
+  expect(names('connector', false, true)).toEqual([]);
+  for (const role of ['coordinator', 'identity', 'contract', 'receivables'] as const) {
+    expect(names(role, true, true)).toEqual([]);
+  }
+});
+
+test('sandbox descriptors advertise only when sandbox dependencies are present', () => {
+  const names = (role: Parameters<typeof toolSchemas>[0], reads: boolean, sandbox = false) =>
+    toolSchemas(role, reads, false, sandbox).map(tool => tool.name)
+      .filter(name => name === 'runSandboxReplay' || name === 'compareArtifacts');
+  expect(names('connector', true)).toEqual([]);
+  expect(names('connector', true, true)).toEqual(['runSandboxReplay', 'compareArtifacts']);
   expect(names('connector', false, true)).toEqual([]);
   for (const role of ['coordinator', 'identity', 'contract', 'receivables'] as const) {
     expect(names(role, true, true)).toEqual([]);

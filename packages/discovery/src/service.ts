@@ -1,6 +1,8 @@
 import { DiscoveryCapabilitiesResponseV2Schema, hashCanonical, type DiscoveryBinding, type DiscoveryActionRequestV2,
   type StartDiscoveryRequestV2 } from '../../contracts/src/index.js';
-import type { CompileRegisterCandidate, ConstructionCaptureReader } from './compilation.js';
+import type {
+  CompileRegisterCandidate, ConstructionCaptureReader, ReplayGetArtifact,
+} from './compilation.js';
 import type { DiscoveryReadTools } from './read-tools.js';
 import type { ModelClient } from './model.js';
 import { coversGrant, createDiscoveryRepository, discoveryError, type Grants, type RepositoryOptions } from './repository.js';
@@ -17,6 +19,7 @@ type Options = RepositoryOptions & CaptureAccess & {
   readTools?: DiscoveryReadTools;
   constructionCapture?: ConstructionCaptureReader;
   registerCandidate?: CompileRegisterCandidate;
+  getArtifact?: ReplayGetArtifact;
   sourceRefForCompany: (companyId: string) => string | undefined;
 };
 
@@ -27,6 +30,7 @@ export async function createDiscoveryService(options: Options) {
     ...options, model: modelClient!, capture: options,
     constructionCapture: options.constructionCapture,
     registerCandidate: options.registerCandidate,
+    getArtifact: options.getArtifact,
   });
   let owner = modelClient && await acquireDiscoverySupervisor(supervisorOptions());
   let closed = false;
