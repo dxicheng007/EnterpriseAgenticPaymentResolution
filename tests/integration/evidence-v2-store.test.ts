@@ -226,10 +226,16 @@ function checkCheckerNegatives(
   })).toMatchObject({ status: 'unavailable', cases: 0 });
 
   const mutations: [string, (profile: CustomerProfile) => void][] = [
-    ['buyer mismatch', value => { value.parentCustomerId = 'different-buyer'; }],
+    ['buyer mismatch', value => {
+      value.parentCustomerId = 'different-buyer';
+      if (value.bootstrap) value.bootstrap.customer.id = value.parentCustomerId;
+    }],
     ['canonical account mismatch', value => { value.scope.accountId = 'different-account'; }],
     ['approved account lookup mismatch', value => { value.approvedLookups[0].entries[0].target = 'different-account'; }],
-    ['omitted active term', value => { value.contractTerms = []; }],
+    ['omitted active term', value => {
+      value.contractTerms = [];
+      if (value.bootstrap) value.bootstrap.billingConfigurationIds = [];
+    }],
     ['unsupported fee', value => { value.contractTerms[0].fixedMonthlyFeeCents += 100; }],
     ['wrong active interval', value => { value.contractTerms[0].validFrom = '2025-01-01'; }],
     ['wrong invoice anchor', value => { value.contractTerms[0].anchorDay = 2; }],
@@ -323,7 +329,7 @@ function checkAmendmentAndSameName(
   const binding = evidence.demoBindings.find(item => item.identityFactId === identity.id)!;
   const references = (factId: string) => [...new Set(evidence.resolvedSupport.filter(item => item.factId === factId).map(item => item.evidenceId))];
   const reviewed = {
-    ...profile, sourceAccountIds: [identity.sourceAccountId], parentCustomerId: binding.parentCustomerId,
+    ...profile, bootstrap: undefined, sourceAccountIds: [identity.sourceAccountId], parentCustomerId: binding.parentCustomerId,
     scope: { ...profile.scope, accountId: binding.accountId },
     semanticVersion: input.manifest.semanticVersions[identity.sellerEntityId + '/' + identity.sourceAccountId],
     approvedLookups: [{
