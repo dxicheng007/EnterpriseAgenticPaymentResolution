@@ -1,0 +1,35 @@
+# Spec compliance: approved
+
+Exact reviewed candidate: `41b412bc7166059ae28dfb478f87d204e0ab5ffb`; base: `fbd6f0fe3ce6bf3fda9a128c7d6aebf4d1549970`. Code candidate: `dbd28dc0923551d06c7fe4ce684e280aacb349c3`; the second commit adds only the builder report. Reviewer session: `/root/astra_v2_gate_verify`, independent of builder `/root/sol_v2_verifier` and supervising lead `/root`.
+
+Reviewed the supplied exact diff, B gate brief, C3 artifact contract, repository/scripts/tests instructions, task-reviewer instructions and verification-playbook evidence requirements. The initial large diff display was truncated; its omitted implementation was read in bounded diff chunks. No source, index, HEAD, branch or builder report edits were made. No subagents, gates, database or application services were launched by this reviewer.
+
+## Strengths and specification checks
+
+- `scripts/verify-v2.ts:11`: independently compared the exported static map to the brief's JSON appendix; all 20 files and 94 literal names match. Required commands add precisely one typecheck.
+- `scripts/verify-v2.ts:192`, `scripts/verify-v2.ts:237`, `scripts/verify-v2.ts:472`: source identity, content-derived dirty keys, bounded complete metadata and explicit pending review/acceptance are recorded without raw environment. The exact clean packet names the code commit, not the subsequent report-only SHA.
+- `scripts/verify-v2.ts:326`, `scripts/verify-v2-evidence.ts:249`, `scripts/verify-v2-vitest-reporter.ts:12`: stock report normalization plus the strict sidecar require the same literal file/names and ordinary single successful execution. Expected failure, retry, repeat, flaky, multiple attempts, unhandled errors and abnormal completion cannot satisfy this path. The added reporter and branch-local V0/V1 imports are the explicitly authorized scope exceptions; no dependency or global test-configuration change is included.
+- `scripts/verify-v2-evidence.ts:184`, `scripts/verify-v2-evidence.ts:230`: strict observed A/B results, command-root screenshot origins, uniqueness, bounded PNG parsing, symlink refusal, trace/video rejection and exact command/assertion completeness form a fail-closed conjunction. The unchanged V1 normalizer was inspected specifically for the concrete risk of silently accepting extra/nested browser cases or failed expected statuses; its literal coverage and single execution checks cover that boundary.
+- `scripts/verify-v2.ts:283`, `scripts/verify-v2.ts:444`: bounded process-group supervision and owned scratch cleanup preserve failed evidence without publishing raw streams. Playwright configuration was inspected specifically to confirm `EAPR_TRACE_DIR` controls the command-owned output root; authenticated trace disabling remains explicit.
+
+## Independent verification
+
+Scoped probe command: `/opt/homebrew/opt/node@24/bin/node --import /Users/devincheng/.codex/worktrees/acquisition-sources/EnterpriseAgenticPaymentResolution/node_modules/tsx/dist/loader.mjs /tmp/v2-astra-review/probe.mjs` — final exit 0.
+
+- Inspected existing clean code-candidate packets under source-worktree `.evidence/dbd28dc0923551d06c7fe4ce684e280aacb349c3/`: V0 `2026-11-09T00-06-40-051Z-62269` (4 commands/20 assertions), V1 `2026-11-09T00-06-45-704Z-62733` (6/13), V2 `2026-11-09T00-04-36-709Z-59004` (21/94). All recorded commands pass. V0 correctly retains its existing manifest/health-trace format; V1 retains its existing five-file packet format.
+- V2 packet has exactly 15 files: four JSON documents, review stub and ten PNGs. Independently matched all screenshot hashes, package-lock hash, both contract hashes and every migration catalog hash. V1/V2 retained files are mode 0600. V2 has no diagnostics, has two public terminal observations, and its strict browser record parses with all thirteen checks per subject, evidence-support count four and public balances 80000/0. No V2 scratch directories remain. A bounded sensitive-field/path scan found no private fixture IDs, producer truth hash fields, session/CSRF tokens or private scratch paths in retained JSON; this is supplemental to allowlisted serialization review, not a claim that regex alone proves privacy.
+- Visually opened both actual-v2 screenshots: each is restricted to Independent verification, shows completed job/report/manifest identity, thirteen passed rows, complete coverage and eligible-for-review. All ten screenshot bytes were independently hash-checked; the other eight were not independently visually re-reviewed.
+- Real isolated Vitest fixtures using the candidate reporter: ordinary case exits 0 and guard accepts; `repeats: 1` exits 0 with two attempts and guard rejects; unhandled rejected promise exits 1 and guard rejects. Guard does not contain the injected private error sentinel. Additional mutations of completed status, attempt count, flaky status, assertion identity and duplicate names all reject.
+- Executed the exact supervisor text with a shortened 1000 ms deadline and controlled temporary npm executable spawning a sleeping descendant: it reports timeout, exits within the bounded outer deadline, and the descendant no longer exists. The initial 200 ms probe was too short for reliable shell startup and was discarded rather than counted as cleanup evidence.
+- `npm run test:integration -- tests/integration/verify-v2-evidence.test.ts -t 'v2_cli_'` — exit 0, two selected tests passed; four intentionally filtered tests skipped. This focused check validates missing/malformed preflight, no launched test commands, nonzero/malformed child report, private sentinel exclusion, failed packet retention and preservation of unrelated scratch sentinel. Initial sandbox invocation could not write Vite cache; scoped escalation reran successfully. This is partial independent verification, not a new full gate run.
+- Early reviewer-script failures were probe issues (assuming newer V0/V1 packet shape, overly broad regex matching the reporter filename, `/tmp` versus canonical `/private/tmp` identity); corrected before the final successful run. They are not candidate defects.
+
+## Issues
+
+No critical, important or minor actionable defect found in the assigned diff. No product semantics were broadened. No independent full-gate rerun was performed merely to duplicate builder evidence.
+
+## Quality verdict: approved
+
+The dedicated runner, evidence parser and public reporter guard keep responsibilities clear, and the exact allowlists prevent unsafe child data from flowing into retained packets. Existing V0/V1 implementations are preserved apart from the authorized import timing change, supported by the actual unchanged-gate packets.
+
+This verdict applies to `41b412bc7166059ae28dfb478f87d204e0ab5ffb`. Full machine evidence is specifically tied to its code parent `dbd28dc0923551d06c7fe4ce684e280aacb349c3`; the coordinating agent must record combined V2 on the integrated candidate separately. Joint G2 acceptance remains pending. Persisted parent reads, parent configuration execution, runtime restart/write proofs, live discovery, final holdout, approval, activation, import and synchronization remain outside this review's claims.

@@ -2,6 +2,8 @@
 
 This checkpoint publishes completed local work, preserves separately committed candidates, and records remaining work. It is not acceptance of the complete demo. Machine checks, independent Astra review, and joint user acceptance remain distinct.
 
+**Latest:** the combined V2 gate passed on `e34a0f6` (21 commands, 94 assertions, ten safe screenshots). Guided preview is live; terminology is being revised after further user feedback. Discovery activity reads are accepted. Durable agent lifecycle and separate bootstrap prerequisites remain in progress. See [the full V2 checkpoint](#full-v2-checkpoint-and-current-feedback).
+
 ## Published checkpoint (historical)
 
 The table and capability list below describe the first publication. Later accepted work is recorded under Continued build update and Latest integrated checkpoint.
@@ -99,3 +101,17 @@ At combined integration `15dd830cf638626d18af92c11859d57d11ff777c`, typecheck an
 The source cards link actual citations and retain each original hold. They explain which accounts have no profile in the selected candidate. Live agent construction is explicitly pending; the cards are evidence-derived observations, not simulated agent output. See the [builder report](handoffs/c-guided-preview-ui-report.md).
 
 The [accepted discovery architecture](handoffs/v4-orchestration-contract-proposal.md), [architecture fix review](reviews/v4-orchestration-contract-fix-review.md), [contract handoff](handoffs/b-v4-contracts.md) and [builder report](handoffs/b-v4-contracts-report.md) accompany the executable [v3 discovery-shapes freeze](../../superpowers/plans/2026-11-08-contract-freeze-v3-discovery-shapes.md). The next [activity read primitive](handoffs/b-v4-activity-read.md) is assigned separately; schema acceptance does not establish durable orchestration, SSE or a functioning monitor. Separate bootstrap verification architecture is being specified before activation consumers may claim readiness.
+
+## Full V2 checkpoint and current feedback
+
+The executable [V2 gate](handoffs/b-v2-verifier-report.md) passed fresh [independent review](reviews/b-v2-verifier-independent-review.md) and was integrated. The [discovery activity reader](handoffs/b-v4-activity-read-report.md) also passed [independent PostgreSQL review](reviews/b-v4-activity-independent-review.md).
+
+The first combined V2 run on `a356b11` failed because the actual-v2 browser test still expected the old empty-target label. The gate retained failed evidence and withheld screenshots. [Investigation](handoffs/v2-combined-failure-investigation.md) reproduced the failure before preview/evaluator execution. The original UI implementer repaired the label, projected-balance locator and artifact disclosure assertions in `b1b5605`; [fresh scoped review](reviews/c3-guided-compatibility-fix-review.md) found all assertions preserved. No financial or gate checks were weakened.
+
+The full combined command then passed on exact clean `e34a0f629a1fee90e738c317b2e243044f83a7a1`: **21 commands, 94 named assertions, ten validated PNGs, zero gate diagnostics**. Packet identity: `.evidence/e34a0f629a1fee90e738c317b2e243044f83a7a1/V2/2026-11-09T00-21-58-120Z-71889/`. Root independently checked its exact 15-file inventory, mode 0600 files and screenshot hashes; the safe packet was copied to user-facing outputs. This is a synthetic development/empty-target V2 machine pass, not bootstrap execution, live-agent construction, persisted parent import or automatic sync.
+
+The user still found “unsupported rows” and “projected balance” unclear. Root explained that A's 19 outside-profile events belong to two other documented accounts, while B additionally has a genuinely unresolved payment. A's $800 is remaining receivable at cutover after allocated payments/credits, not money moved or an invoice created; before $0 is the empty demo parent. The [terminology handoff](handoffs/preview-terminology-handoff.md) specifies conservative presentation groups and a server-backed “Amount still owed after proposed import” label. Implementation and joint clarity acceptance are pending at this checkpoint.
+
+The separate bootstrap [proposal](handoffs/v3-bootstrap-verification-proposal.md), [handoffs](handoffs/v3-bootstrap-handoffs.md), [initial review](reviews/v3-bootstrap-architecture-independent-review.md) and [fix review](reviews/v3-bootstrap-architecture-fix-review.md) freeze prerequisite direction, not activation readiness. The [S0 contract brief](handoffs/b-bootstrap-contracts.md) is assigned; its implementation requires its own review. Current exact-subject financial evidence remains insufficient for bootstrap until the separate checker/registry and financial bridge exist.
+
+The durable discovery [lifecycle handoff](handoffs/v4-lifecycle-handoffs.md) passed [architecture fix review](reviews/v4-lifecycle-fix-review.md). L1 repository/supervisor implementation is assigned; production remains unconfigured, and scripted clients are test-only. The [read-only source validator](handoffs/b-discovery-capture-read.md) is a separate L2 prerequisite. Root reserved control 004 for discovery and control 005 for the later bootstrap registry; no out-of-order migration insertion is permitted. Source validator, HTTP composition, real tools, monitor and provider execution retain their own gates.
