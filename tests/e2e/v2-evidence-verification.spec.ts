@@ -140,7 +140,7 @@ test(title, async ({ page }, testInfo) => {
     const privateFixtureIds: string[] = [];
     for (const [index, candidate] of catalog.candidates.entries()) {
       await page.getByLabel('Development candidate').selectOption(candidate.id);
-      await expect(page.getByText('Empty development fixture', { exact: true })).toBeVisible();
+      await expect(page.getByText('Development fixture · empty target', { exact: true })).toBeVisible();
       await expect(region).toHaveCount(0);
       await expect(previewRegion).toHaveCount(0);
       await expect(prompt).toBeVisible();
@@ -154,7 +154,9 @@ test(title, async ({ page }, testInfo) => {
       const previewBalanceCents = index === 0 ? 80_000 : 0;
       expect(preview.diffs).toEqual([expect.objectContaining({ scope: candidate.scope, afterBalanceCents: previewBalanceCents })]);
       const balance = previewRegion.getByRole('region', { name: 'Balance diff for ' + candidate.scope.accountId });
-      await expect(balance.getByText(index === 0 ? '$800.00' : '$0.00', { exact: true }).last()).toBeVisible();
+      const projected = balance.locator('dt:text-is("Projected balance") + dd');
+      await expect(projected).toBeVisible();
+      await expect(projected).toHaveText(index === 0 ? '$800.00' : '$0.00');
       expect(preview.parentWrites).toBe(0);
       await expect(previewRegion.getByText('Parent writes: 0', { exact: true })).toBeVisible();
       const { artifact } = preview;
@@ -162,8 +164,10 @@ test(title, async ({ page }, testInfo) => {
       const profileHashes = candidate.request.profiles.map(profile => profile.hash).sort();
       expect(isDeepStrictEqual(artifact.requiredProfileHashes, profileHashes) && hashArtifact(artifact) === artifact.hash &&
         candidate.request.profiles.every(profile => hashProfile(profile) === profile.hash)).toBe(true);
-      await expect(previewRegion.getByText(artifact.hash, { exact: true })).toBeVisible();
-      for (const hash of profileHashes) await expect(previewRegion.getByText(hash, { exact: true })).toBeVisible();
+      const artifactDetails = previewRegion.locator('details:has(> summary:text-is("Artifact details"))');
+      await artifactDetails.locator('summary').click();
+      await expect(artifactDetails.getByText(artifact.hash, { exact: true })).toBeVisible();
+      for (const hash of profileHashes) await expect(artifactDetails.getByText(hash, { exact: true })).toBeVisible();
       const manifest = await readManifest(system.db.control, candidate.companyId, candidate.snapshotId.slice('snapshot:'.length));
       expect(candidate.snapshotId).toBe('snapshot:' + manifest.id);
       expect(candidate.request.snapshotId).toBe(candidate.snapshotId);
