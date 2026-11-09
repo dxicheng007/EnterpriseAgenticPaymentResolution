@@ -43,7 +43,7 @@ test('exposes different parameters of the same transform even when the target va
       }],
     },
   };
-  const html = renderToStaticMarkup(createElement(PreviewResult, { result, evidenceRefs: [] }));
+  const html = renderToStaticMarkup(createElement(PreviewResult, { result, evidenceRefs: [], asOf: baselineManifestA.asOf }));
   expect(html).toContain('&quot;mode&quot;: &quot;trim&quot;');
   expect(html).toContain('&quot;mode&quot;: &quot;lower&quot;');
   expect(html).toContain('<code>/name</code> → <code>normalize_text</code> → <code>/displayName</code>');
@@ -63,15 +63,15 @@ test('renders mirrored blocked rows and their diagnostics once without changing 
     diagnostics: [structuredClone(diagnostic), { ...diagnostic, code: 'COMPILE', message: 'Compilation failed' }],
   };
   const original = structuredClone(result);
-  const html = renderToStaticMarkup(createElement(PreviewResult, { result, evidenceRefs: [] }));
+  const html = renderToStaticMarkup(createElement(PreviewResult, { result, evidenceRefs: [], asOf: baselineManifestA.asOf }));
   expect(html.match(/Source events evt:unmapped/g)).toHaveLength(1);
   expect(html.match(/Blocker · UNKNOWN_ACCOUNT/g)).toHaveLength(1);
-  expect(html).toContain('Records not mapped by the preview profiles');
+  expect(html).toContain('Records not mapped by these profiles. Source-account ownership has not been established for this explanation.');
   expect(html).toContain('Source account has no approved identity');
   expect(html).toContain('Sources source-one');
   expect(html).toContain('Fields /account');
   expect(html).toContain('Dependencies dep:1');
-  expect(html).toContain('Additional diagnostics');
+  expect(html).toContain('Preview-wide and additional issues');
   expect(html).toContain('Compilation failed');
   expect(result).toEqual(original);
 });
@@ -105,20 +105,28 @@ test('preserves unmatched occurrences and groups holds by the complete submitted
     ],
     diagnostics: [],
   };
-  const props = { result, evidenceRefs: [] };
+  const props = { result, evidenceRefs: [], asOf: baselineManifestA.asOf };
   const html = renderToStaticMarkup(createElement(PreviewResult, { ...props, profileScopes: [profileA.scope] }));
-  expect(html).toContain('Unsupported rows (14)');
+  expect(html).toContain('Technical hold details');
+  expect(html).toContain('Returned as 4 hold entries and 12 unsupported rows.');
   expect(html).toContain('2 matching entries shown once.');
-  expect(html).toContain('Selected customer issues (9)');
-  expect(html).toContain('Other or unresolved scope issues (5)');
+  expect(html).toContain('Issues affecting this customer');
+  expect(html).toContain('9 hold entries affecting 2 distinct source events');
+  expect(html).toContain('Records needing investigation');
+  expect(html).toContain('5 hold entries affecting 4 distinct source events');
   expect(html).toContain('Blocker · SEMANTIC_VERSION');
   expect(html).toContain('Blocker · IDENTITY_SCOPE');
   expect(html).toContain('Warning · UNKNOWN_ACCOUNT');
   expect(html).toContain('Different detail');
-  expect(html).not.toContain('Records not mapped by the preview profiles');
+  expect(html).not.toContain('Other accounts needing connectors');
   const withoutProfiles = renderToStaticMarkup(createElement(PreviewResult, props));
-  expect(withoutProfiles).not.toContain('Selected customer issues');
-  expect(withoutProfiles).toContain('Other or unresolved scope issues (14)');
+  expect(withoutProfiles).not.toContain('Issues affecting');
+  expect(withoutProfiles).toContain('14 hold entries affecting 4 distinct source events');
+  const multipleProfiles = renderToStaticMarkup(createElement(PreviewResult, {
+    ...props, profileScopes: [profileA.scope, { ...profileA.scope, accountId: 'other' }],
+  }));
+  expect(multipleProfiles).toContain('Records not included in this preview');
+  expect(multipleProfiles).toContain('Issues affecting the selected customers');
 });
 
 test('preserves extra global diagnostic occurrences and distinct diagnostic details', () => {
@@ -130,8 +138,33 @@ test('preserves extra global diagnostic occurrences and distinct diagnostic deta
     outcome: { plans: [], holds: [hold] }, unsupportedRows: [hold],
     diagnostics: [diagnostic, diagnostic, { ...diagnostic, fieldPaths: ['/different'] }],
   };
-  const html = renderToStaticMarkup(createElement(PreviewResult, { result, evidenceRefs: [] }));
+  const html = renderToStaticMarkup(createElement(PreviewResult, { result, evidenceRefs: [], asOf: baselineManifestA.asOf }));
   expect(html.match(/Blocker · UNKNOWN_ACCOUNT/g)).toHaveLength(3);
-  expect(html).toContain('Additional diagnostics');
+  expect(html).toContain('Preview-wide and additional issues');
   expect(html).toContain('Fields /different');
+});
+
+test.each([80_000, 51_209])('explains the returned receivable at the supplied cutover for %i cents', afterBalanceCents => {
+  const asOf = '2026-12-09T00:00:00.000Z';
+  const result: PreviewResponse = {
+    artifact: null, outcome: { plans: [], holds: [] }, unsupportedRows: [], diagnostics: [], parentWrites: 0,
+    diffs: [{ scope: profileA.scope, beforeVersion: 7, beforeBalanceCents: 0, afterBalanceCents, operations: [], lineage: [] }],
+  };
+  const props = { result, evidenceRefs: [], asOf };
+  const html = renderToStaticMarkup(createElement(PreviewResult, { ...props, targetMode: 'empty-fixture' }));
+  expect(html).toContain('Amount still owed after proposed import');
+  expect(html).toContain(formatUsdCents(afterBalanceCents));
+  expect(html).toContain(`Unpaid invoice amount as of ${asOf}, after applying payments and credits allocated to those invoices. Unallocated payments and credits do not reduce this amount.`);
+  expect(html).toContain('Empty demo target before import');
+  expect(html).toContain('The demo target starts empty. Its starting balance does not describe the acquired customer');
+  expect(html).toContain('Target version 7');
+  expect(html).toContain('Preview only. No records have been imported.');
+  expect(html).toContain('Parent writes: 0');
+  const nonempty = renderToStaticMarkup(createElement(PreviewResult, {
+    ...props, result: { ...result, diffs: [{ ...result.diffs[0]!, beforeBalanceCents: 4_321 }] },
+  }));
+  expect(nonempty).toContain('Target balance before proposed import');
+  expect(nonempty).toContain('$43.21');
+  expect(nonempty).not.toContain('Empty demo target');
+  expect(nonempty).not.toContain('The demo target starts empty.');
 });

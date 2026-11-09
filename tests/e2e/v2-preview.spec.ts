@@ -49,7 +49,7 @@ test('previews both captured schemas and leaves real runtime state unchanged', a
     await expect(coverageRegion.getByText('30 captured events', { exact: true })).toBeVisible();
     await expect(coverageRegion.getByText('11 selected-profile events', { exact: true })).toBeVisible();
     await expect(coverageRegion.getByText('19 outside-profile events', { exact: true })).toBeVisible();
-    await expect(coverageRegion.getByText(/18 financial · 1 semantic/)).toBeVisible();
+    await expect(coverageRegion.getByText(/18 financial events · 1 source-change event/)).toBeVisible();
     const candidateA = page.getByRole('heading', { name: a.label, exact: true }).locator('..');
     await expect(candidateA.getByText(a.scope.sellerEntityId, { exact: true })).toBeVisible();
     await expect(candidateA.getByText(a.scope.accountId, { exact: true })).toBeVisible();
@@ -67,25 +67,35 @@ test('previews both captured schemas and leaves real runtime state unchanged', a
     expect(resultA.diffs).toEqual([expect.objectContaining({ scope: a.scope, afterBalanceCents: 80000 })]);
     expect(resultA.parentWrites).toBe(0);
     const balanceA = page.getByRole('region', { name: 'Balance diff for ' + a.scope.accountId });
-    await expect(balanceA.getByText('$800.00')).toBeVisible();
+    const owedA = balanceA.locator('dt:text-is("Amount still owed after proposed import") + dd > span');
+    await expect(owedA).toBeVisible();
+    await expect(owedA).toHaveText('$800.00');
+    await expect(balanceA.getByText(`Unpaid invoice amount as of ${a.request.asOf}`, { exact: false })).toBeVisible();
+    await expect(balanceA.getByText('Empty demo target before import', { exact: true })).toBeVisible();
+    await expect(balanceA.getByText(/The demo target starts empty/)).toBeVisible();
+    await expect(page.getByText('Preview only. No records have been imported.', { exact: true })).toBeVisible();
     await balanceA.screenshot({ path: test.info().outputPath('preview-company-a-balance.png') });
     await expect(page.getByText('Parent writes: 0', { exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: '11 proposed imports of existing records' })).toBeVisible();
     expect(resultA.outcome.holds).toHaveLength(19);
     await page.getByText('Artifact details', { exact: true }).click();
     await expect(page.getByText(resultA.artifact!.hash, { exact: true })).toBeVisible();
-    const unsupported = page.getByRole('heading', { name: /Unsupported rows \([1-9]/ }).locator('..');
-    const unmappedHeading = unsupported.getByRole('heading', { name: /Records not mapped by the preview profiles/ });
-    await expect(unmappedHeading).toHaveCount(1);
-    await expect(unsupported.getByText(/19 hold entries/)).toBeVisible();
+    const excluded = page.getByRole('heading', { name: "Records not included in this customer's preview", exact: true }).locator('..');
+    const otherAccounts = excluded.getByRole('heading', { name: 'Other accounts needing connectors', exact: true }).locator('..');
+    const investigation = excluded.getByRole('heading', { name: 'Records needing investigation', exact: true }).locator('..');
+    await expect(otherAccounts.getByText('19 hold entries affecting 19 distinct source events', { exact: true })).toBeVisible();
+    await expect(investigation).toHaveCount(0);
+    await expect(excluded.getByText(/Others need investigation/)).toHaveCount(0);
+    await excluded.getByText('Technical hold details', { exact: true }).click();
+    await expect(excluded.getByText(/19 matching entries shown once/)).toBeVisible();
     const unscopedA = resultA.unsupportedRows.find(row => !row.scope && row.code === 'UNKNOWN_ACCOUNT');
     expect(unscopedA).toBeDefined();
-    const aHoldDetails = unmappedHeading.locator('..').locator('details').filter({
+    const aHoldDetails = otherAccounts.locator('details').filter({
       hasText: 'Source events ' + unscopedA!.eventIds.join(', '),
     });
     await aHoldDetails.locator('summary').click();
     await expect(aHoldDetails.getByText('Source events ' + unscopedA!.eventIds.join(', '), { exact: true })).toBeVisible();
-    await unsupported.screenshot({ path: test.info().outputPath('preview-company-a-scope.png') });
+    await excluded.screenshot({ path: test.info().outputPath('preview-company-a-scope.png') });
     const invoice = page.locator('summary').filter({ hasText: 'insert_invoice' }).first();
     await invoice.click();
     const invoiceDetails = invoice.locator('..');
@@ -111,8 +121,9 @@ test('previews both captured schemas and leaves real runtime state unchanged', a
     expect(otherA).toHaveLength(2);
     expect(otherA[0]!.displayName).toBe(otherA[1]!.displayName);
     const related = coverageRegion.getByRole('article', { name: 'Evidence citation' });
-    for (const account of otherA) {
+    for (const [index, account] of otherA.entries()) {
       const row = coverageRegion.getByRole('article', { name: 'Source account ' + account.sourceAccountId });
+      await expect(row.getByText(`${[10, 9][index]} captured events`, { exact: true })).toBeVisible();
       await expect(row.getByText(account.sourceBuyerId, { exact: true })).toBeVisible();
       await expect(row.getByText('No profile in this candidate. Separate construction and verification needed.')).toBeVisible();
       await row.getByRole('button', { name: /^Identity citation/ }).first().click();
@@ -160,15 +171,20 @@ test('previews both captured schemas and leaves real runtime state unchanged', a
     const held = resultB.unsupportedRows.flatMap(row => row.eventIds).find(id => id.startsWith('evt:pay-b:unresolved-'));
     expect(Boolean(held)).toBe(true);
     const balanceB = page.getByRole('region', { name: 'Balance diff for ' + b.scope.accountId });
-    await expect(balanceB.getByText('$0.00').last()).toBeVisible();
+    const owedB = balanceB.locator('dt:text-is("Amount still owed after proposed import") + dd > span');
+    await expect(owedB).toBeVisible();
+    await expect(owedB).toHaveText('$0.00');
     await balanceB.screenshot({ path: test.info().outputPath('preview-company-b-balance.png') });
     expect(resultB.parentWrites).toBe(0);
-    const remittanceRow = unsupported.locator('details').filter({ hasText: 'Source events ' + held });
+    await expect(otherAccounts.getByText('18 hold entries affecting 18 distinct source events', { exact: true })).toBeVisible();
+    await expect(investigation.getByText('1 hold entry affecting 1 distinct source event', { exact: true })).toBeVisible();
+    await expect(otherAccounts.locator('details').filter({ hasText: 'Source events ' + held })).toHaveCount(0);
+    const remittanceRow = investigation.locator('details').filter({ hasText: 'Source events ' + held });
     await remittanceRow.locator('summary').click();
     await expect(remittanceRow.getByText('Source events ' + held, { exact: true })).toBeVisible();
     await expect(remittanceRow.getByText('Blocker · UNKNOWN_ACCOUNT', { exact: true })).toBeVisible();
     await expect(remittanceRow.getByText('Source account has no approved identity', { exact: true })).toBeVisible();
-    await remittanceRow.screenshot({ path: test.info().outputPath('preview-company-b-hold.png') });
+    await investigation.screenshot({ path: test.info().outputPath('preview-company-b-hold.png') });
 
     // Hold a real A response in transit while switching to B. Supply a deliberately
     // misbound B response once to exercise rejection of an otherwise valid wire shape.
@@ -211,13 +227,20 @@ test('previews both captured schemas and leaves real runtime state unchanged', a
     const fallbackPreview = apiResponse(page, '/api/connectors/preview', 'POST');
     await run.click();
     expect((await fallbackPreview).status()).toBe(200);
-    await expect(balanceB.getByText('$0.00').last()).toBeVisible();
-    await expect(unsupported.getByText('Records not mapped by these profiles.', { exact: true })).toBeVisible();
+    await expect(owedB).toBeVisible();
+    await expect(owedB).toHaveText('$0.00');
+    await expect(investigation.getByText(
+      'Records not mapped by these profiles. Source-account ownership has not been established for this explanation.',
+      { exact: true },
+    )).toBeVisible();
+    await expect(otherAccounts).toHaveCount(0);
     const recovery = readCoverage(b.companyId);
     await coverageRegion.getByRole('button', { name: 'Retry source coverage' }).click();
     expect((await recovery).status()).toBe(200);
     await expect(coverageRegion.getByText('28 captured events', { exact: true })).toBeVisible();
-    await expect(balanceB.getByText('$0.00').last()).toBeVisible();
+    await expect(otherAccounts.getByText('18 hold entries affecting 18 distinct source events', { exact: true })).toBeVisible();
+    await expect(owedB).toBeVisible();
+    await expect(owedB).toHaveText('$0.00');
 
     const missingCsrf = await page.evaluate(async body => {
       const response = await fetch('/api/connectors/preview', {

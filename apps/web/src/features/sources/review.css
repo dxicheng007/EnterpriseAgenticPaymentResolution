@@ -103,3 +103,5 @@
 .coverage-profiles, .preview-holds { padding-inline-start: 1.25rem; }
 .coverage-unresolved { margin-top: 1rem; }
 .balance-diff dd:first-of-type { font-size: 1.55rem; }
+
+.preview-balance-note { margin: .35rem 0 .75rem; font-size: 1rem; font-weight: normal; }

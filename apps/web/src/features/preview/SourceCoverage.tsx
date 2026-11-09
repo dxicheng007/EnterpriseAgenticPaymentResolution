@@ -8,8 +8,12 @@ import type { SourceCoverageSummary } from './source-coverage-values.js';
 function KindCounts({ counts }: { counts: Partial<Record<EventKind, number>> }) {
   return <ul className="coverage-kinds" aria-label="Event kinds">{EventKindSchema.options
     .filter(kind => counts[kind])
-    .map(kind => <li key={kind}>{kind === 'semantic_change' ? 'semantic change' : kind} {counts[kind]}</li>)}
+    .map(kind => <li key={kind}>{kind === 'semantic_change' ? 'source-change event' : kind} {counts[kind]}</li>)}
   </ul>;
+}
+
+function eventCounts(financial: number, sourceChanges: number): string {
+  return `${financial} financial ${financial === 1 ? 'event' : 'events'} · ${sourceChanges} source-change ${sourceChanges === 1 ? 'event' : 'events'}`;
 }
 
 function ProfileMembership({ profiles }: { profiles: SourceCoverageSummary['accounts'][number]['profiles'] }) {
@@ -44,12 +48,13 @@ export function SourceCoverage({ response, summary, failure, retry }: {
       <dl className="coverage-totals">
         <div><dt>{summary.totalEvents} captured events</dt><dd>Complete captured snapshot</dd></div>
         <div><dt>{summary.selected.eventIds.length} selected-profile events</dt>
-          <dd>{summary.selected.financialEventIds.length} financial · {summary.selected.semanticEventIds.length} semantic</dd></div>
+          <dd>{eventCounts(summary.selected.financialEventIds.length, summary.selected.semanticEventIds.length)}</dd></div>
         <div><dt>{summary.outside.eventIds.length} outside-profile events</dt>
-          <dd>{summary.outside.financialEventIds.length} financial · {summary.outside.semanticEventIds.length} semantic</dd>
+          <dd>{eventCounts(summary.outside.financialEventIds.length, summary.outside.semanticEventIds.length)}</dd>
           <dd>{summary.documentedOutsideCount} documented · {unresolvedOutside} unresolved</dd></div>
       </dl>
       <p>Counts show raw source event membership. Proposed imports and hold entries are counted separately in the preview.</p>
+      <p>Source-change events describe changes such as contract amendments; they are not amounts of money.</p>
       <h3>Documented source accounts</h3>
       <p>Buyer IDs and names are observations from captured source evidence. Parent identity requires explicit per-customer review.</p>
       {!summary.accounts.length && <p>The supported evidence read established no documented source accounts.</p>}

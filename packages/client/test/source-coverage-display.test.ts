@@ -7,6 +7,7 @@ import type { PreviewResponse } from '../../contracts/src/runtime.js';
 import type { SourceCoverageResponse, SourceCoverageEvent } from '../../contracts/src/source-coverage.js';
 import { profileA, profileB } from '../../../tests/fixtures/index.js';
 import { SourceCoverage } from '../../../apps/web/src/features/preview/SourceCoverage.js';
+import { partitionPreviewHolds, previewIssues } from '../../../apps/web/src/features/preview/preview-values.js';
 import { PreviewResult } from '../../../apps/web/src/features/preview/PreviewResult.js';
 import { summarizeSourceCoverage } from '../../../apps/web/src/features/preview/source-coverage-values.js';
 
@@ -51,6 +52,11 @@ test('keeps same-name accounts distinct and reconciles selected and outside fina
   expect(summary.accounts[0]?.profiles).toEqual([{ id: profileA.id, hash: profileA.hash }]);
   expect(summary.accounts[1]?.profiles).toEqual([]);
   expect(summary.accounts[1]?.kindCounts).toEqual({ invoice: 9, semantic_change: 1 });
+  const html = renderToStaticMarkup(createElement(SourceCoverage, { response: coverage, summary, retry() {} }));
+  expect(html).toContain('18 financial events · 1 source-change event');
+  expect(html).toContain('Source-change events describe changes such as contract amendments');
+  expect(html).toContain('they are not amounts of money.');
+  expect(html).not.toContain('payment 1');
 });
 
 test('keeps profile membership separate from documented identity, including conflicts on the same raw key', () => {
@@ -107,15 +113,19 @@ test('references every documented group from one raw hold and preserves other bl
     diagnostics: [...grouped.diagnostics, ...held('SOURCE_EPOCH_CONFLICT', []).diagnostics],
   };
   const before = structuredClone(result);
-  const props = { result, evidenceRefs: [], profileScopes: [profileA.scope] };
+  const props = { result, evidenceRefs: [], asOf: '2026-11-08T00:00:00.000Z', profileScopes: [profileA.scope] };
   const markup = renderToStaticMarkup(createElement(PreviewResult, { ...props, coverage: summary }));
-  expect(markup).toContain('Unsupported rows (4)');
+  expect(markup).toContain('Records not included in this customer&#x27;s preview');
+  expect(markup).toContain('Technical hold details');
   expect(markup).toContain('1 matching entry shown once.');
   expect(markup.match(/Northstar/g)).toHaveLength(2);
   expect(markup.match(/Source events event-1-0, event-2-0/g)).toHaveLength(1);
   expect(markup.match(/Blocker · UNKNOWN_ACCOUNT/g)).toHaveLength(2);
-  expect(markup).toContain('Selected customer issues (1)');
-  expect(markup).toContain('Other or unresolved scope issues (2)');
+  expect(markup).toContain('Issues affecting this customer');
+  expect(markup).toContain('Other accounts needing connectors');
+  expect(markup).toContain('1 hold entry affecting 2 distinct source events');
+  expect(markup).toContain('Records needing investigation');
+  expect(markup).toContain('2 hold entries affecting 2 distinct source events');
   expect(markup).toContain('Blocker · SEMANTIC_VERSION');
   expect(markup).toContain('Blocker · IDENTITY_SCOPE');
   expect(markup).toContain('Blocker · SOURCE_EPOCH_CONFLICT');
@@ -125,4 +135,60 @@ test('references every documented group from one raw hold and preserves other bl
   expect(fallback).toContain('Records not mapped by these profiles.');
   expect(fallback).not.toContain('Northstar');
   expect(fallback).toContain('Original UNKNOWN_ACCOUNT');
+});
+
+test('partitions the original holds once and only qualifies fully cited outside-account memberships', () => {
+  const base = example(profileA, [2, 4, 3], 'payment');
+  const conflict = { ...profileA, id: 'conflict-profile', sourceAccountIds: ['third'] };
+  const coverage = summarizeSourceCoverage(base, [profileA, conflict, { ...conflict, id: 'another-profile' }]);
+  const other = held('UNKNOWN_ACCOUNT', ['event-1-0', 'event-1-1', 'event-1-1']);
+  const overlapping = held('UNKNOWN_ACCOUNT', ['event-1-1', 'event-1-2']);
+  const mixed = held('UNKNOWN_ACCOUNT', ['event-1-0', 'event-unresolved']);
+  const selectedRaw = held('UNKNOWN_ACCOUNT', ['event-1-0', 'event-0-0']);
+  const missing = held('UNKNOWN_ACCOUNT', ['event-1-0', 'event-missing']);
+  const empty = held('UNKNOWN_ACCOUNT', []);
+  const competing = held('UNKNOWN_ACCOUNT', ['event-1-0', 'event-2-0']);
+  const scoped = held('UNKNOWN_ACCOUNT', ['event-1-0'], { ...profileA.scope, accountId: 'different' });
+  const selected = held('UNKNOWN_ACCOUNT', ['event-0-0'], profileA.scope);
+  const semantic = held('SEMANTIC_VERSION', ['event-1-0']);
+  const broader = held('UNKNOWN_ACCOUNT', ['event-1-0']);
+  broader.diagnostics[0]!.sourceIds = ['event-1-0', 'event-1-1'];
+  const differentCode = held('UNKNOWN_ACCOUNT', ['event-1-0']);
+  differentCode.diagnostics.push(...held('IDENTITY_SCOPE', ['event-1-0']).diagnostics);
+  const aliasOnly = held('IDENTITY_SCOPE', ['event-1-3']);
+  const additional = held('SOURCE_EPOCH_CONFLICT', []).diagnostics;
+  const result: PreviewResponse = {
+    artifact: null, parentWrites: 0, diffs: [],
+    outcome: { plans: [], holds: [other, overlapping, mixed, selectedRaw, missing, empty, competing,
+      scoped, selected, semantic, broader, differentCode] },
+    unsupportedRows: [structuredClone(other), aliasOnly],
+    diagnostics: additional,
+  };
+  const before = structuredClone(result);
+  const issues = previewIssues(result, [profileA.scope]);
+  const groups = partitionPreviewHolds(issues, coverage);
+  expect(groups.selected).toBe(issues.selected);
+  expect(groups.selected[0]).toBe(selected);
+  expect(groups.otherAccounts).toHaveLength(2);
+  expect(groups.otherAccounts[0]).toBe(other);
+  expect(groups.otherAccounts[1]).toBe(overlapping);
+  const remaining = [mixed, selectedRaw, missing, empty, competing, scoped, semantic, broader, differentCode, aliasOnly];
+  expect(groups.investigation).toHaveLength(remaining.length);
+  for (const hold of remaining) expect(groups.investigation.filter(item => item === hold)).toHaveLength(1);
+  expect(issues.additional).toEqual(additional);
+  expect(result).toEqual(before);
+  expect(partitionPreviewHolds(issues).otherAccounts).toEqual([]);
+  const duplicate = { ...coverage, accounts: [...coverage.accounts, coverage.accounts[1]!] };
+  expect(partitionPreviewHolds(issues, duplicate).otherAccounts).toEqual([]);
+  const uncited = { ...coverage, accounts: coverage.accounts.map(row => ({
+    ...row, account: { ...row.account, identityEvidenceRefs: [] },
+  })) };
+  expect(partitionPreviewHolds(issues, uncited).otherAccounts).toEqual([]);
+  const markup = renderToStaticMarkup(createElement(PreviewResult, {
+    result, evidenceRefs: [], asOf: base.snapshot.capturedAt, profileScopes: [profileA.scope], coverage,
+  }));
+  expect(markup).toContain('2 hold entries affecting 3 distinct source events');
+  expect(markup.match(/Source events event-1-0, event-unresolved/g)).toHaveLength(1);
+  expect(markup).toContain('Blocker · IDENTITY_SCOPE');
+  expect(markup).toContain('Blocker · SOURCE_EPOCH_CONFLICT');
 });
