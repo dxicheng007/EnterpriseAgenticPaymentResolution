@@ -8,11 +8,15 @@ import {
 } from '../../contracts/src/index.js';
 import {
   PublishFindingInputSchema, PublishFindingResultSchema, ReadFindingInputSchema, ReadFindingResultSchema,
-  type PublishFindingResult, type ReadFindingResult, type ReadFindingInput,
+  DraftConnectorInputSchema, DraftConnectorResultSchema, ReviseConnectorInputSchema, ReviseConnectorResultSchema,
+  type DraftConnectorResult, type PublishFindingResult, type ReadFindingResult, type ReadFindingInput,
 } from '../../contracts/src/discovery-construction-tools.js';
 import { prepareFindingEvidence, type PreparedFindingEvidence } from './construction-evidence.js';
 import { publishFinding, readFinding, validateFindingPublication } from './findings.js';
 import { budgets, safeCounter } from './budgets.js';
+import { nextRevision, readCurrentProposalAssessments, reassessProposals, refreshProposalAssessments } from './assessments.js';
+import { prepareProposalEvidence, type PreparedProposalEvidence, type ProposalInput } from './proposal-evidence.js';
+import { publishProposal, readProposalHistory, validateProposalPublication } from './proposals.js';
 import type { ModelClient } from './model.js';
 import { captureFailure, parseReadResult, prepareRead, type DiscoveryReadTools } from './read-tools.js';
 import { unavailableToolCode, toolSchemas } from './roles.js';
@@ -32,7 +36,7 @@ type Dispatch = {
   id: string; run_id: string; task_id: string; generation: string; task_revision: string;
   state: 'reserved' | 'returned' | 'interrupted'; result_hash: string | null; accepted: ModelResultV2 | null;
 };
-type ToolResult = DiscoveryReadToolResult | PublishFindingResult | ReadFindingResult | { ok: true; taskId: string; investigationId: string; revision: number } |
+type ToolResult = DraftConnectorResult | DiscoveryReadToolResult | PublishFindingResult | ReadFindingResult | { ok: true; taskId: string; investigationId: string; revision: number } |
   { ok: false; code: string };
 type Step = {
   id: string; dispatch_id: string; native_id: string; name: string; generation: string; state: 'pending' | 'running' | 'failed' | 'succeeded' | 'interrupted'; arguments: ModelResultV2['toolCalls'][number]['arguments'];
@@ -45,6 +49,11 @@ const failedTool = z.strictObject({ ok: z.literal(false), code: IdSchema });
 const findingResults = { publishFinding: PublishFindingResultSchema, readFinding: ReadFindingResultSchema };
 function findingTool(name: string): name is keyof typeof findingResults {
   return name === 'publishFinding' || name === 'readFinding';
+}
+
+const proposalResults = { draftConnector: DraftConnectorResultSchema, reviseConnector: ReviseConnectorResultSchema };
+function proposalTool(name: string): name is keyof typeof proposalResults {
+  return name === 'draftConnector' || name === 'reviseConnector';
 }
 
 const terminal = (step: Step) => step.state === 'failed' || step.state === 'succeeded';
@@ -61,6 +70,7 @@ type Options = RepositoryOptions & {
     afterReservationCommit?: () => Promise<void>;
     beforeDelegationCommit?: () => Promise<void>;
     beforeFindingCommit?: () => Promise<void>;
+    beforeProposalCommit?: () => Promise<void>;
     beforeReadResultCommit?: () => Promise<void>;
   };
 };
@@ -228,6 +238,10 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
   }
 
   function replayResult(task: TaskRow, step: Step) {
+    if (proposalTool(step.name) && task.role === 'connector') {
+      const parsed = proposalResults[step.name].safeParse(step.result);
+      return parsed.success && parsed.data.ok === (step.state === 'succeeded') ? parsed.data : undefined;
+    }
     if (findingTool(step.name)) {
       const parsed = findingResults[step.name].safeParse(step.result);
       return parsed.success && parsed.data.ok === (step.state === 'succeeded') ? parsed.data : undefined;
@@ -434,16 +448,29 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
     const run = await lockRun(connection, runId);
     const task = await lockTask(connection, run.id, taskId);
     if (!task) return;
-    const { rows: [step] } = await connection.query<Step & { attempt: number; task_revision: string }>(`SELECT s.*,d.attempt,d.task_revision
+    const { rows: [step] } = await connection.query<Step & Pick<Dispatch, 'accepted' | 'result_hash' | 'task_revision'> & { attempt: number }>(`SELECT s.*,d.attempt,d.task_revision,d.accepted,d.result_hash
       FROM discovery_tool_steps s
       JOIN discovery_dispatches d ON d.run_id=s.run_id AND d.task_id=s.task_id AND d.id=s.dispatch_id
       WHERE s.run_id=$1 AND s.task_id=$2 AND s.id=$3 AND s.generation<=$4 AND d.generation<=$4 AND d.state='returned' AND d.accepted IS NOT NULL
       FOR UPDATE OF s`, [runId, taskId, stepId, generation]);
     if (!step) return;
-    if (terminal(step)) return { replay: step, run, task } as const;
-    if (task.status !== 'running' || step.attempt !== task.attempt || run.model_id !== modelId || run.mode !== mode) return;
+    const replay = terminal(step);
+    if (replay && !proposalTool(step.name)) return { replay: step, run, task } as const;
+    if (!replay && (task.status !== 'running' || step.attempt !== task.attempt || run.model_id !== modelId || run.mode !== mode)) return;
     const { rows: batch } = await connection.query<Step>(
       'SELECT * FROM discovery_tool_steps WHERE dispatch_id=$1 ORDER BY ordinal', [step.dispatch_id]);
+    if (batch.some(item => proposalTool(item.name))) {
+      const accepted = ModelResultV2Schema.safeParse(step.accepted);
+      if (!accepted.success || accepted.data.dispatchId !== step.dispatch_id ||
+          hashCanonical(accepted.data) !== step.result_hash || accepted.data.toolCalls.length !== batch.length ||
+          batch.some((item, index) => {
+            const call = accepted.data.toolCalls[index]!;
+            return item.id !== createToolStepId({ dispatchId: step.dispatch_id, providerToolCallId: call.id }) ||
+              item.native_id !== call.id || item.name !== call.name ||
+              hashCanonical(item.arguments) !== hashCanonical(call.arguments);
+          })) return;
+    }
+    if (replay) return { replay: step, run, task } as const;
     // Model acceptance and terminal resolutions advance task revision once each.
     // Claims and owner loss only advance the run revision (the in-flight counter lives there).
     if (batch.find(item => !terminal(item))?.id !== step.id ||
@@ -528,7 +555,11 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
     }
     const readName = DiscoveryReadToolNameSchema.safeParse(step.name);
     await publishDiscovery(connection, clock, run.id, 'tool.result', {
-      ...(readName.success ? { toolName: readName.data } : findingTool(step.name) ? { toolName: step.name } : {}),
+      ...(readName.success ? { toolName: readName.data } :
+        findingTool(step.name) || proposalTool(step.name) ? { toolName: step.name } : {}),
+      ...(result.ok && 'result' in result ? {
+        proposalId: result.result.proposalId, proposalRevision: result.result.revision,
+      } : {}),
       dispatchId: step.dispatch_id, toolStepId: step.id, toolStatus: status,
       ...(!result.ok ? { diagnosticCodes: [result.code] } : {}),
     }, task);
@@ -595,8 +626,15 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
     const initial = await transact(async connection => {
       const selected = await loadStep(connection, runId, taskId, stepId);
       if (!selected || (selected.replay && !permits(selected.run, selected.task))) return;
-      if (selected.context && !await permitsStep(connection, selected.context)) return;
-      return selected;
+      if (!selected.context) return selected;
+      if (!await permitsStep(connection, selected.context) || !claimable(selected.context)) return;
+      const { run, task, batch } = selected.context;
+      const revisionIds = capture && readTools && task.role === 'connector' ? batch.flatMap(item => {
+        if (terminal(item) || item.name !== 'reviseConnector') return [];
+        const parsed = ReviseConnectorInputSchema.safeParse(item.arguments);
+        return parsed.success ? [parsed.data.proposalId] : [];
+      }) : [];
+      return { ...selected, proposalHistory: await readProposalHistory(connection, run.id, revisionIds) };
     });
     if (initial?.replay) return permits(initial.run, initial.task) ? replayResult(initial.task, initial.replay) : undefined;
     const context = initial?.context;
@@ -643,6 +681,35 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
       }
     }
 
+    const proposalPublications = new Map<string, { input: ProposalInput; prepared: PreparedProposalEvidence }>();
+    for (const item of remaining) {
+      if (failure || revokedDuringPreparation || !proposalTool(item.name)) continue;
+      if (task.role !== 'connector') {
+        failure = 'TOOL_FORBIDDEN';
+        continue;
+      }
+      if (!capture || !readTools) continue;
+      const schema = item.name === 'draftConnector' ? DraftConnectorInputSchema : ReviseConnectorInputSchema;
+      const parsed = schema.safeParse(item.arguments);
+      if (!parsed.success || !postgresJsonCompatible(parsed.data)) {
+        failure = 'DISCOVERY_INVALID';
+        continue;
+      }
+      if (!valid) return;
+      if (!permits(run, task)) {
+        if (!abandonedRead(context.step)) return;
+        revokedDuringPreparation = true;
+        break;
+      }
+      const history = 'proposalId' in parsed.data ? initial.proposalHistory.get(parsed.data.proposalId) : undefined;
+      const prepared = await prepareProposalEvidence({
+        binding: run.binding, sourceRead: task.grants.sourceRead, input: parsed.data,
+        ...(history ? { retainedEvidenceIds: history.evidenceIds } : {}),
+      }, readTools);
+      if ('code' in prepared) failure = prepared.code;
+      else proposalPublications.set(item.id, { input: parsed.data, prepared });
+    }
+
     const preflightFacts: CaptureFacts[] = [];
     let delegationFacts: CaptureFacts | undefined;
     if (!failure && !revokedDuringPreparation && capture && (delegates.length || findingReads.size)) {
@@ -668,7 +735,7 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
       else if (!result.ok) failure = result.code;
     }
 
-    const authorityRevoked = Symbol('finding authority revoked before commit');
+    const authorityRevoked = Symbol('construction authority revoked before commit');
     const applied = await transact(async connection => {
       const selected = await loadStep(connection, runId, taskId, stepId);
       if (selected?.replay) return {
@@ -679,23 +746,55 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
           hashCanonical(current.run.binding) !== hashCanonical(run.binding) ||
           hashCanonical(current.run.grants) !== hashCanonical(run.grants) ||
           hashCanonical(current.task.grants) !== hashCanonical(task.grants) ||
+          hashCanonical(current.batch) !== hashCanonical(batch) ||
           !await permitsStep(connection, current, revokedDuringPreparation) || !claimable(current)) return;
       const { run: lockedRun, task: lockedTask, step } = current;
       let input: Awaited<ReturnType<typeof validateDelegation>> | undefined;
       let read: ReadFindingResult | undefined;
       const publications: Awaited<ReturnType<typeof validateFindingPublication>>[] = [];
       let publication: (typeof publications)[number] | undefined;
+      const proposalPlans: Awaited<ReturnType<typeof validateProposalPublication>>[] = [];
+      let proposalPlan: (typeof proposalPlans)[number] | undefined;
+      let observedRunRevision: number | undefined;
+      let projectedAssessments: Awaited<ReturnType<typeof readCurrentProposalAssessments>>['current'] | undefined;
       if (!failure) {
         try {
+          if (findingPublications.size || proposalPublications.size) observedRunRevision = nextRevision(lockedRun.revision);
+          let projectedRunRevision = safeCounter(lockedRun.revision);
           for (const facts of preflightFacts) await recheck(connection, lockedRun, facts);
           for (const item of remaining) {
+            if (observedRunRevision !== undefined) {
+              // A source-read claim and resolution each increment the run, while SQL-only tools increment once.
+              projectedRunRevision = nextRevision(projectedRunRevision);
+              if (calls.has(item.id)) projectedRunRevision = nextRevision(projectedRunRevision);
+            }
             const finding = findingPublications.get(item.id);
             const context = { run: lockedRun, task: lockedTask, step: item };
             if (finding) {
               await recheck(connection, lockedRun, finding.prepared.facts);
               const plan = await validateFindingPublication(connection, context, finding.input, finding.prepared, publications);
               publications.push(plan);
+              if (!projectedAssessments) {
+                ({ current: projectedAssessments } = await readCurrentProposalAssessments(connection, lockedRun.id));
+                for (const proposal of proposalPlans) projectedAssessments.set(proposal.payload.id, proposal);
+              }
+              await reassessProposals(connection, projectedAssessments, {
+                runId: lockedRun.id, runDiagnostics: lockedRun.diagnostics,
+                observedRunRevision: projectedRunRevision, projectedFindings: publications,
+              });
               if (step.id === item.id) publication = plan;
+            }
+            const proposal = proposalPublications.get(item.id);
+            if (proposal) {
+              await recheck(connection, lockedRun, proposal.prepared.facts);
+              const history = 'proposalId' in proposal.input ? initial.proposalHistory.get(proposal.input.proposalId) : undefined;
+              const plan = await validateProposalPublication(
+                connection, context, proposal.input, proposal.prepared, proposalPlans,
+                { findings: publications, history, observedRunRevision: projectedRunRevision },
+              );
+              proposalPlans.push(plan);
+              projectedAssessments?.set(plan.payload.id, plan);
+              if (step.id === item.id) proposalPlan = plan;
             }
             const requested = findingReads.get(item.id);
             if (requested) {
@@ -704,6 +803,8 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
             }
           }
           if (delegationFacts && delegates.length) {
+            // Only coordinators can delegate and only connectors can publish proposals. Each role's
+            // projection counts all durable investigations, including those created by the other role.
             const subjects = [];
             for (const delegate of delegates) {
               const validated = await validateDelegation(connection, lockedRun, delegationFacts, delegate.arguments);
@@ -714,7 +815,7 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
           }
         } catch (error) {
           const code = error instanceof Error && 'code' in error && error.code;
-          failure = code === 'FINDING_IDENTITY_LIMIT' || code === 'FINDING_REVISION_LIMIT' || code === 'TOOL_RESULT_LIMIT' ?
+          failure = code === 'FINDING_IDENTITY_LIMIT' || code === 'FINDING_REVISION_LIMIT' || code === 'TOOL_RESULT_LIMIT' || code === 'INVESTIGATION_LIMIT' ?
             code : validationFailure(error);
         }
       }
@@ -724,7 +825,11 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
         const delegationLimit = failure === 'INVESTIGATION_LIMIT' || failure === 'SPECIALIST_LIMIT';
         const codeFor = (item: Step) => {
           if (delegates.some(delegate => delegate.id === item.id)) return limit ? 'DISCOVERY_CONFLICT' : failure;
-          if (capture && readTools && (DiscoveryReadToolNameSchema.safeParse(item.name).success || findingTool(item.name))) {
+          if (proposalTool(item.name) && (task.role !== 'connector' || !capture || !readTools)) {
+            return unavailableToolCode(task.role, item.name);
+          }
+          if (capture && readTools && (DiscoveryReadToolNameSchema.safeParse(item.name).success ||
+              findingTool(item.name) || proposalTool(item.name))) {
             return limit || delegationLimit ? 'DISCOVERY_CONFLICT' : failure;
           }
           return unavailableToolCode(task.role, item.name);
@@ -748,6 +853,18 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
         const claim: ReadClaim = { ...current, call, revision: lockedTask.revision };
         return { claim };
       }
+      if (proposalPlan) {
+        const proposal = await publishProposal(connection, current, proposalPlan, observedRunRevision!);
+        const result = { ok: true as const, result: proposal };
+        await publishDiscovery(connection, clock, lockedRun.id, 'tool.called', {
+          dispatchId: step.dispatch_id, toolStepId: step.id, toolName: step.name,
+          proposalId: proposal.proposalId, proposalRevision: proposal.revision,
+        }, lockedTask);
+        await resolveStep(connection, current, result);
+        await testHooks?.beforeProposalCommit?.();
+        if (!permits(lockedRun, lockedTask)) throw authorityRevoked;
+        return { result };
+      }
       if (publication || read) {
         const result = publication ? await publishFinding(connection, current, publication) : read!;
         await publishDiscovery(connection, clock, lockedRun.id, 'tool.called', {
@@ -757,6 +874,9 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
           findingId: publication.finding.id, findingRevision: publication.finding.revision,
           toolStepId: step.id, diagnosticCodes: publication.blockers.map(blocker => blocker.code),
         }, lockedTask);
+        if (publication) {
+          await refreshProposalAssessments(connection, { runId: lockedRun.id, observedRunRevision: observedRunRevision! });
+        }
         await resolveStep(connection, current, result);
         if (publication) await testHooks?.beforeFindingCommit?.();
         if (!permits(lockedRun, lockedTask)) throw authorityRevoked;
@@ -778,7 +898,7 @@ export async function acquireDiscoverySupervisor({ db, clock, model, resolveAuth
       if (error !== authorityRevoked) throw error;
     });
     if (!applied?.claim || !readTools) {
-      return findingTool(context.step.name) && !permits(run, task) ? undefined : applied?.result;
+      return (findingTool(context.step.name) || proposalTool(context.step.name)) && !permits(run, task) ? undefined : applied?.result;
     }
     const { claim } = applied;
     try {

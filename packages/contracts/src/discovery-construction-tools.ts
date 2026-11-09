@@ -1,7 +1,10 @@
 import { z } from 'zod';
 import { IdSchema, NonnegativeIntegerSchema, VersionSchema, strict } from './common.js';
-import { DiscoveryFindingV2Schema } from './discovery.js';
+import { canonicalJson } from './canonical.js';
+import { ConnectorSpecSchema, CustomerProfileSchema } from './connector.js';
+import { CustomerProfileDraftSchema, DiscoveryFindingV2Schema, DiscoveryProposalV2Schema, ProposalResultSchema } from './discovery.js';
 import { DiscoveryReadToolFailureSchema } from './discovery-tools.js';
+import { FindingSchema } from './model.js';
 
 const fitsToolBytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength <= 65_536;
 
@@ -63,4 +66,58 @@ export const discoveryFindingToolSchemas = [
     inputSchema: { type: 'object', additionalProperties: false, required: Object.keys(fields),
       properties: { findingId, ...fields } } },
   { name: 'readFinding', description: 'Read an authorized exact finding revision.', inputSchema: ref },
+];
+
+const fitsProposalBytes = (value: unknown) => {
+  try {
+    return new TextEncoder().encode(canonicalJson(value)).byteLength <= 65_536;
+  } catch {
+    return false;
+  }
+};
+
+const proposalFields = {
+  spec: ConnectorSpecSchema, profiles: z.array(CustomerProfileDraftSchema).length(1),
+  findingRefs: DiscoveryProposalV2Schema.out.shape.findingRefs,
+};
+
+export const DraftConnectorInputSchema = strict({
+  expectedRevision: z.literal(0), ...proposalFields,
+}).refine(fitsProposalBytes, 'Invalid canonical input or input exceeds 65,536 UTF-8 bytes');
+
+export const ReviseConnectorInputSchema = strict({
+  proposalId: IdSchema, expectedRevision: VersionSchema, ...proposalFields,
+}).refine(fitsProposalBytes, 'Invalid canonical input or input exceeds 65,536 UTF-8 bytes');
+
+export const DraftConnectorResultSchema = z.union([
+  strict({ ok: z.literal(true), result: ProposalResultSchema }), DiscoveryReadToolFailureSchema,
+]).refine(fitsProposalBytes, 'Tool result exceeds 65,536 UTF-8 bytes');
+export const ReviseConnectorResultSchema = DraftConnectorResultSchema;
+
+export type DraftConnectorInput = z.infer<typeof DraftConnectorInputSchema>;
+export type ReviseConnectorInput = z.infer<typeof ReviseConnectorInputSchema>;
+export type DraftConnectorResult = z.infer<typeof DraftConnectorResultSchema>;
+export type ReviseConnectorResult = z.infer<typeof ReviseConnectorResultSchema>;
+
+// The runtime draft parser retains the full profile refinements. Its preprocessing
+// is opaque to JSON Schema conversion, so derive the wire shape from the same fields.
+const { hash: _profileHash, ...profileFields } = CustomerProfileSchema.out.shape;
+const descriptorFields = {
+  ...proposalFields,
+  profiles: z.array(z.strictObject({
+    ...profileFields,
+    findings: z.array(FindingSchema.out.extend({
+      origin: z.literal('agent'), reviewDisposition: z.literal('pending'),
+    })),
+  })).length(1),
+};
+const proposalDescriptor = (shape: z.ZodRawShape) => z.toJSONSchema(z.strictObject({
+  ...shape, ...descriptorFields,
+}), { io: 'input', reused: 'ref', unrepresentable: 'any' });
+
+export const discoveryProposalToolSchemas = [
+  { name: 'draftConnector', description: 'Submit a connector specification and one proposed customer profile.',
+    inputSchema: proposalDescriptor({ expectedRevision: z.literal(0) }) },
+  { name: 'reviseConnector', description: 'Submit a new exact revision of an existing proposal for the same customer.',
+    inputSchema: proposalDescriptor({ proposalId: IdSchema, expectedRevision: VersionSchema }) },
 ];
