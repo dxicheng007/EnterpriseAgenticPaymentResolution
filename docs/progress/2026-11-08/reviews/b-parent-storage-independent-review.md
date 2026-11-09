@@ -1,0 +1,32 @@
+# A3a parent storage — exact-candidate independent review
+
+Reviewed candidate `bb8c070930c14364af1a98695ad904fec5b3c238`, base `700d1353b9d18d6425b79e710636d68690424b79`, in `/Users/devincheng/.codex/worktrees/acquisition-sources/EnterpriseAgenticPaymentResolution`. Reviewer session: `/root/astra_parent_storage_verify`; supervising coordinator: `/root`. Builder evidence is recorded separately in `b-parent-storage-report.md`.
+
+**Specification verdict: aligned for bounded A3a. Quality verdict: reviewed, no blocking findings. Verification verdict: partial storage evidence only. Joint acceptance: pending.**
+
+The handoff SHA-256 independently matches `0f095fc7524df2b40dc811007ef39da8db049e666861e51a379a9aa59ba3d3b8`. This review applies to the exact nine-file candidate, including the root-authorized minimal parent dependency lockfile entry. It does not approve A3b or A5.
+
+## Review basis and findings
+
+Read the repository, packages, parent, database and tests instructions; PRD thesis, process boundaries, database/transaction rules and acceptance criteria; execution/verification conventions and ownership; F1/F3/F5; activation-shapes and additive authority freezes; the accepted authority proposal's persistence/first-import sections; the A3a handoff and its independent architecture review. Inspected the candidate diff and the complete changed storage modules, migration and tests, following named seams into existing parent bootstrap projection, finance validation and storage transaction/activity helpers.
+
+No blocking correctness or scope deviation was found. In particular:
+
+- Runtime002 retains canonical text and byte digests separately from domain hashes. Scoped snapshot keys, snapshot version uniqueness, current-pointer full-scope/version foreign keys, immutable triggers and restricted grants preserve recorded history. The SQL JSON projection handles PostgreSQL-incompatible escaped text without replacing the stored canonical bytes; repository decoding still verifies original bytes and strict schemas.
+- Account mapping is globally unique, while customer/metadata association remains scoped. Financial uniqueness excludes account aliases, event IDs and source versions. Delivery uniqueness retains the separate source/event key. Economic outcomes retain original record and import/receipt ownership; selected delivery outcomes and complete ordinal lineage remain auditable.
+- Immutable-table locking uses transaction advisory locks, avoiding the incompatible UPDATE privilege requirement identified in architecture review. Scope/request locks precede the current pointer and sorted physical identity locks. SQL uniqueness remains the final guard. Existing metadata/delivery rows are compared, not assumed equal after an ignored conflict.
+- Import validation checks canonical request/reviewer/plan equality, domain and proof bindings, exact recorded/planner target relationship, projected approved state, one version increment, nonempty distinct financial effects, delivery membership and checked balances. Existing finance/projection helpers retain the original payment/allocation records and enforce supported reversal relationships.
+- Receipt target IDs follow the coordinator's explicit ruling: ordered financial-operation record IDs only. Metadata remains in the full plan, lineage and approved snapshot. Exact successful replay compares canonical request and bundle bytes in addition to hashes and returns the original stored fact.
+- Reads return absence without seeding state, constrain selectors to full scope, and load preserved historical snapshots. Evaluation time changes the ParentView envelope and balance while retaining recorded time/version/hash. No HTTP authority, scope-index substitute, policy installer, generic writer, sync state machine or runtime model dependency was added.
+
+## Nonblocking caller-contract note
+
+The opaque scope/identity lock tokens are bound to a `PoolClient` through WeakMaps (`activation-store.ts` and `persistence.ts`), not to a PostgreSQL transaction identifier. They therefore do not themselves detect reuse after commit/rollback on the same pooled client. Safe use requires the documented caller contract: open the transaction first, acquire all locks and recompute/revalidate inside every `withTransaction` callback attempt, and propagate a rejected import so the callback rolls back. The integration helper follows this contract. The builder report's phrase “in the current callback” should be understood as this caller obligation, not independent runtime enforcement. This is nonblocking for the assigned internal persistence primitive; A5 review must verify its actual caller obeys it.
+
+## Verification and limits
+
+Reviewer commands checked exact HEAD, candidate cleanliness, the nine-file diff/stat, handoff SHA-256 and `git diff 700d135..bb8c070 --check`; all returned the expected identity/clean results. No source, index, branch or commit was changed. Only this report was written. No database lease was consumed and no subagents were dispatched.
+
+The builder reports exact-candidate `npm run typecheck`, 43 parent/compiler/finance unit tests and 27 real PostgreSQL parent-storage integration tests passing. I inspected those tests rather than duplicating the suites, as directed. They cover app-role permissions and barriers, same/different keys, cross-scope global economics, canonical recovery, selected outcomes/lineage, nonempty baseline preservation, historical reads, delivery conflicts, reversal behavior, rollback at every logical write including activity, a real serialization retry and bounded retry exhaustion. This review does not independently rerun or independently certify those machine results. The reported lack of a huge full-aggregate overflow fixture is an explicit limit; the checked finance implementation and included finance unit tests cover the arithmetic seam.
+
+These synthetic direct-repository fixtures intentionally include unready reports and do not prove reviewer authority or A5 eligibility validation. A3b still requires the real A2 scope-index publisher/loader and authenticated composed reads. A5 still owns installed policy, provenance, semantics, eligibility, full planner recomputation under locks, authenticated retry/error precedence and the transaction caller. No full slice gate, live activation, sync, AI-off proof, financial-authority proof or joint user acceptance is claimed.
