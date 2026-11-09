@@ -3,6 +3,8 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./financial-attestation-registry": "./src/financial-attestation-registry.ts",
+    "./financial-attestation-jobs": "./src/financial-attestation-jobs.ts",
     "./financial-attestation-launcher": "./src/financial-attestation-launcher.ts",
     "./financial-attestation-verify": "./src/financial-attestation-verify.ts",
     "./bootstrap-jobs": "./src/bootstrap-jobs.ts",

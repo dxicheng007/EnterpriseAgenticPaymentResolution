@@ -13,7 +13,7 @@ export const financialBuildSources = Object.freeze([
   ].map(name => 'packages/contracts/src/' + name + '.ts'),
   ...[
     'financial-attestation-protocol', 'financial-attestation-runner', 'financial-attestation-evaluator',
-    'financial-attestation-launcher', 'financial-attestation-verify', 'financial-attestation-build', 'financial-evaluate',
+    'financial-attestation-jobs', 'financial-attestation-registry', 'financial-attestation-launcher', 'financial-attestation-verify', 'financial-attestation-build', 'financial-evaluate',
     'capture-boundary', 'cases', 'case-recipes', 'evidence-support', 'evidence-fixtures', 'fixture-store', 'fixtures',
     'reference-model', 'subject-comparison', 'subject-runner', 'runner', 'transport', 'protocol', 'verify',
     'launcher', 'evaluator-runner', 'jobs', 'registry',
