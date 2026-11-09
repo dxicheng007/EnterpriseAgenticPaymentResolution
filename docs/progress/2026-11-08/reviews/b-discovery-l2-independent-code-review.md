@@ -1,0 +1,29 @@
+# Spec Compliance
+
+- ✅ Spec compliant for assigned L2 scope. Reviewed base `2a2f292fb58f12a3192ca8a0f2ce892631d0a93b` → exact head `ef06e0264a0ae662635a2eb8112def93a5f17a7b` against `b-discovery-l2.md` (accepted SHA-256 `4bcb2d01450ef7f91809e7a13b5150591552b08abc5da03a3c267a9a547c33b9`), lifecycle handoff/state protocol, accepted orchestration §§2–5, and executable discovery freeze. All eight changed paths fit the assigned inventory, including the expressly authorized supervisor amendment.
+- ✅ Authentication precedes body parsing; strict requests and query rejection, no-store, v2 responses, CSRF delegation and original safe SourceError fields are present (`apps/control/src/routes/discovery.ts:29`, `:40`, `:57`; integration coverage `tests/integration/v4-lifecycle-http.test.ts:161`, `:235`). No extra discovery HTTP surface is mounted.
+- ✅ The mounted service requires capture read/recheck dependencies, holds per-start facts in a local closure, and delegates exact replay to the existing repository (`packages/discovery/src/service.ts:13`, `:89`). The composition recheck uses the passed transaction client, pins manifest/aggregate/event/citation identities and hashes, compares captured tuples, and locks the mutable dossier FOR SHARE (`apps/control/src/discovery-composition.ts:20`, `:45`, `:55`, `:92`). Blob validation occurs before the owner transaction (`packages/discovery/src/supervisor.ts:362`).
+- ✅ Whole pending-batch schema, captured-tuple and same-run dependency validation precedes the first effect; rejected batches create no child/count/tool activity effects. Each successful effect and saved result executes inside the private owned transaction with current authority, ordered step, attempt, generation and revision checks (`packages/discovery/src/supervisor.ts:383`, `:397`, `:409`, `:438`; `packages/discovery/src/tasks.ts:45`, `:70`). Separate later-invalid dependency and membership tests exercise this boundary (`tests/integration/v4-lifecycle-http.test.ts:324`).
+- ✅ Default composition has no model, owner or pump; configured composition schedules persisted work, preserves closed role policy and historical results, and closes its timer/active pump/owner (`packages/discovery/src/service.ts:20`, `:25`, `:64`, `:115`; `packages/discovery/src/roles.ts:12`; `apps/control/src/composition.ts:166`). Findings/proposals/verification remain deferred; the real configured composition test retains CONSTRUCTION_UNAVAILABLE (`tests/integration/v4-lifecycle-http.test.ts:749`).
+
+# Strengths
+
+- Capture facts, persisted grant ceilings and current authority remain separate. The coordinator can delegate only explicit source scope or a captured exact seller/account tuple, while child grants retain existing parent account permissions (`packages/discovery/src/tasks.ts:49`; `packages/discovery/src/supervisor.ts:386`).
+- Real PostgreSQL/session tests inspect persistent child counts, investigation reuse, saved results, activity, dossier lock ordering, privileged corruption rejection, capacity boundaries, and unchanged runtime storage. Pause-first, delegation-first and rollback/replacement cases use explicit barriers (`tests/integration/v4-lifecycle-http.test.ts:362`, `:427`, `:518`, `:543`, `:611`, `:704`).
+- The two additional L1 proofs are concrete: repeated native call IDs across different dispatches/tasks retain distinct transcript/result linkage, and a byte-oversized otherwise structured response preserves trustworthy usage without partial steps (`tests/integration/v4-lifecycle-http.test.ts:362`, `:484`).
+
+# Issues
+
+- Critical: none identified.
+- Important: none identified.
+- Minor: none requiring a change for this task.
+
+# Assessment
+
+**Task quality: Approved.** The mounted boundary and atomic delegation implementation satisfy the narrow L2 requirements without adding provider, construction, financial or activation behavior.
+
+**Review checks and limits:** Read the complete supplied diff once in sequential chunks. No git commands, source/index/HEAD edits, subagents, or test-suite reruns. The only written file is this requested review report. The builder reports exact-head typecheck, one discovery unit test, 47 integration tests across the five required files, and clean diff checks; those are builder machine evidence, not new independent executions.
+
+**Named outside-diff check:** The new poller catches scheduler promises and replaces invalid owners; I checked unchanged supervisor ownership/transaction/dispatch/reconciliation/close code (`packages/discovery/src/supervisor.ts:72–185`, `:195–215`, `:244–354`, `:478`) to determine whether a failed result persistence could leave an apparently healthy owner with permanently stranded reserved work or permit an ordinary-pool completion. Post-reservation failure invalidates the owner; replacement reconciles conservatively on the dedicated connection. I also checked `insertSpecialist` (`packages/discovery/src/repository.ts:247`) for the concrete cross-module risk that the new dispatcher could widen grants or increment capacity outside its owned transaction; it uses the supplied client, narrows tuple grants and preserves same-run dependencies/capacity. No unresolved doubt justified a focused runtime probe.
+
+⚠️ Existing repository start/action internals, source original-byte verification, migrations/application-role immutability, full L1 timeout/semaphore behavior and the shared contract implementations are unchanged dependencies, not newly independently exercised by this review. Relevant new call sites and test assertions were reviewed; the accepted dependency reviews and reported regression run remain their machine evidence. Full V4, live providers, findings/proposals, protected verification publishers, monitor, activation/sync and joint user acceptance remain unclaimed and pending their own scope.

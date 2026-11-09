@@ -2,7 +2,7 @@
 
 This checkpoint publishes completed local work, preserves separately committed candidates, and records remaining work. It is not acceptance of the complete demo. Machine checks, independent Astra review, and joint user acceptance remain distinct.
 
-**Latest:** reviewed integration `8962292` clarifies other-account records, investigation records, and the amount still owed after proposed import. Latest combined typecheck and 260 unit tests pass, along with seven affected PostgreSQL integrations. Earlier scoped V0/V1/V2 gates and their exact commits remain recorded below. Separate bootstrap result schemas and the pure import planner are accepted. The full combined V2 gate also passes on `8962292`: 21 commands, 94 assertions and ten safe screenshots. The unmounted discovery lifecycle, read-only source validation, independent bootstrap expectations and exact-subject financial bridge are accepted. Discovery HTTP integration and candidate metadata are in progress. The user accepted the two record-category labels; broader joint acceptance remains pending. See [the terminology checkpoint](#terminology-and-bootstrap-contract-checkpoint).
+**Latest:** reviewed integration `cbeb7f9` adds agreement-backed development profile metadata while preserving the accepted record-category and balance labels. Latest combined typecheck and 260 unit tests pass, along with seven affected PostgreSQL integrations. Earlier scoped V0/V1/V2 gates and their exact commits remain recorded below. Separate bootstrap result schemas and the pure import planner are accepted. The full combined V2 gate passes on `cbeb7f9`: 21 commands, 94 assertions and ten safe screenshots. The unmounted discovery lifecycle, read-only source validation, independent bootstrap expectations and exact-subject financial bridge are accepted. Authenticated discovery lifecycle and delegation are integrated with model execution unconfigured; the protected bootstrap runner is in progress. The user accepted the two record-category labels; broader joint acceptance remains pending. See [the terminology checkpoint](#terminology-and-bootstrap-contract-checkpoint).
 
 ## Published checkpoint (historical)
 
@@ -169,3 +169,21 @@ The protected oracle derives expected metadata, financial effects and lineage fr
 The [L2 discovery handoff](handoffs/b-discovery-l2.md) passed [scoped architecture fix review](reviews/b-discovery-l2-fix-review.md), correcting source error passthrough and requiring all delegation dependencies/memberships to be checked before the first batch effect. Implementation is assigned separately; accepted architecture is not an implemented API.
 
 Reproducibility note: S2's report digests belong to its exact candidate. The combined `2a2f292` run produced different sidecar digests with the same capture hashes because discovery workspace entries changed `package-lock.json`. The generator includes that lockfile in its build identity, which flows through protected producer/evidence hashes into the sidecar. This is an expected build-bound difference, not changed captured financial content.
+
+
+## Agreement-backed development profiles
+
+S4a candidate `7308e6c` passed [fresh Astra review](reviews/b-bootstrap-candidate-metadata-independent-review.md) and was integrated at `cbeb7f9`. The [builder report](handoffs/b-bootstrap-candidate-metadata-report.md) preserves the initial 113/116 integration run, the test-fixture correction and two timing failures. The corrected exact head passed all 116 integration tests with original time limits. Root combined typecheck and 260 unit tests passed.
+
+Version 2 profiles preserve the designated agreement's parsed legal name and citation and use stable configuration IDs. Historical version 1 profiles remain separately registered; unchanged spec bytes retain their version. Actual new subjects receive fresh financial reports; metadata does not grant approval or bootstrap readiness.
+
+The complete V2 gate passed on exact clean `cbeb7f9b1ff18048691a3c6a270186a521ab2b2a`: **21 commands, 94 assertions, ten PNGs, no diagnostics**. Packet `.evidence/cbeb7f9b1ff18048691a3c6a270186a521ab2b2a/V2/2026-11-09T01-57-34-433Z-7239/` has fifteen mode-0600 files and independently checked screenshot hashes. Safe copies are in user-facing outputs. This remains a development-fixture, zero-parent-write preview gate.
+
+The [bootstrap runner handoff](handoffs/b-bootstrap-runner.md) passed [architecture review](reviews/b-bootstrap-runner-independent-review.md) and implementation is assigned. Root subsequently authorized a narrow internal `transport.ts` extraction and matching financial launcher build-manifest entry, keeping the generic transport private while preserving existing financial protocol semantics. The implementation still requires its own review and real subprocess checks.
+
+
+## Authenticated discovery lifecycle integration
+
+L2 `ef06e02` passed [fresh Astra code review](reviews/b-discovery-l2-independent-code-review.md) and was integrated at `d867b43`. Its [report](handoffs/b-discovery-l2-report.md) records exact boundaries and the isolated clone used for implementation. Root typecheck, all 260 unit tests, and all 47 affected PostgreSQL tests passed on the combined integration with agreement-backed profile metadata.
+
+The localhost session now protects capability/start/state/pause/resume routes. With no ModelClient configured, startup creates no supervisor or scheduling loop and new discovery remains unavailable. Injected test clients exercise real durable scheduling and atomic delegation; they are not live-agent evidence. Pinned source validation, mandatory transactional recheck, whole-batch dependency/member preflight and per-effect current authority remain separate checks. Findings/proposals, source read tools, provider execution and the monitor are still pending.
