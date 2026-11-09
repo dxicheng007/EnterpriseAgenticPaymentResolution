@@ -41,6 +41,13 @@ async function localFeaturePlugins(
   })).parse(JSON.parse(required('EAPR_DEMO_CAPTURES')));
   const store = await createEvidenceStore(required('EAPR_DEMO_EVIDENCE_ROOT'));
   const webOrigin = 'http://127.0.0.1:' + localPort('EAPR_WEB_PORT', 5173);
+  const evidencePinRoot = fileURLToPath(new URL('../.local/protected-evaluator', import.meta.url));
+  const servedRoots = [
+    resolve(required('EAPR_DEMO_EVIDENCE_ROOT')),
+    fileURLToPath(new URL('../.local/demo/visible', import.meta.url)),
+    fileURLToPath(new URL('../apps/web', import.meta.url)),
+    registryRoot,
+  ];
   let verificationSetupDiagnostic: 'VERIFICATION_FIXTURE_SETUP_REQUIRED' | 'VERIFICATION_FIXTURE_CONFLICT' | undefined;
   let verification;
   const code = process.env.EAPR_VERIFICATION_SETUP_CODE;
@@ -51,15 +58,7 @@ async function localFeaturePlugins(
       verification = {
         pins: safeVerificationPins.parse(JSON.parse(process.env.EAPR_VERIFICATION_PINS)),
         registryRoot,
-        roots: {
-          evidencePinRoot: fileURLToPath(new URL('../.local/protected-evaluator', import.meta.url)),
-          servedRoots: [
-            resolve(required('EAPR_DEMO_EVIDENCE_ROOT')),
-            fileURLToPath(new URL('../.local/demo/visible', import.meta.url)),
-            fileURLToPath(new URL('../apps/web', import.meta.url)),
-            registryRoot,
-          ],
-        },
+        roots: { evidencePinRoot, servedRoots },
         expectedMigrations,
       };
     } catch {
@@ -68,6 +67,16 @@ async function localFeaturePlugins(
   }
   return (await createLocalComposition({ db, clock, store }, {
     webOrigin, captures, verification, verificationSetupDiagnostic, parentReads,
+    sourceReadToken: required('EAPR_SOURCE_READ_TOKEN'),
+    activationReview: {
+      registryRoot,
+      policyPath: fileURLToPath(new URL('../.local/activation-policy/current.json', import.meta.url)),
+      selectionPath: process.env.EAPR_REVIEW_SELECTION_FILE,
+      bootstrapRoots: {
+        evidencePinRoot, servedRoots,
+        sidecarRoot: fileURLToPath(new URL('../.local/protected-bootstrap', import.meta.url)),
+      },
+    },
     registry: createCandidateRegistry(db, registryRoot),
   })).featurePlugins;
 }
@@ -153,6 +162,7 @@ async function runLocal() {
     await controlDb.end();
   }
 
+  const sourceReadToken = randomBytes(32).toString('hex');
   const serviceToken = randomBytes(32).toString('hex');
   const controlPort = localPort('EAPR_CONTROL_PORT', 3001);
   const workerPort = localPort('EAPR_WORKER_PORT', 3002);
@@ -179,6 +189,7 @@ async function runLocal() {
     await start('worker', { ...workerAccess, RUNTIME_DATABASE_URL: db.runtime.appUrl });
     await start('control', {
       ...workerAccess, ...verificationEnv, CONTROL_DATABASE_URL: db.control.appUrl, EAPR_CONTROL_PORT: String(controlPort),
+      EAPR_SOURCE_READ_TOKEN: sourceReadToken, EAPR_REVIEW_SELECTION_FILE: process.env.EAPR_REVIEW_SELECTION_FILE,
       EAPR_WEB_PORT: String(webPort), EAPR_DEMO_EVIDENCE_ROOT: evidenceRoot, EAPR_DEMO_CAPTURES: JSON.stringify(captures),
     });
     // Vite installs its own process signal handler. Keep it outside the supervising process.

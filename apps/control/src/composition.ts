@@ -8,6 +8,8 @@ import {
   companyA, companyB, createSourceService, readDossier, readEvidence, readManifest,
   SourceError, type EvidenceAuthorization, type SourceDefinition, type UploadDependencies,
 } from '@eapr/sources';
+import { composeActivationReview, type LocalActivationOptions } from './activation-composition.js';
+import { composeSourceSemantics } from './source-semantics-composition.js';
 import { composeDiscovery } from './discovery-composition.js';
 import { buildDemoCandidate, type DemoCapture } from './demo-candidates.js';
 import { createLocalSessionService, LocalSessionError } from './local-session.js';
@@ -32,6 +34,8 @@ export async function createLocalComposition(dependencies: UploadDependencies, o
   parentReads?: ParentReadClient;
   fixtureTarget?: TargetReader;
   verification?: LocalVerificationOptions;
+  sourceReadToken?: string;
+  activationReview?: LocalActivationOptions;
   verificationSetupDiagnostic?: VerificationSetupCode;
 }) {
   const { db, store } = dependencies;
@@ -215,6 +219,16 @@ export async function createLocalComposition(dependencies: UploadDependencies, o
     });
   };
 
+  const semantics = options.sourceReadToken ? composeSourceSemantics(dependencies, {
+    catalog: localSourceCatalog,
+    capability: { token: options.sourceReadToken, sourceRefs: reviewer.allowedSourceRefs },
+  }) : undefined;
+  const activation = options.activationReview && registry && options.parentReads && semantics
+    ? await composeActivationReview({ dependencies, catalog: localSourceCatalog, service }, {
+      ...options.activationReview, candidates: registry, parent: options.parentReads,
+      observe: semantics.readCurrentSemantics, authorize: session.authorizeReviewer,
+    }) : [];
+
   return {
     authorizeReviewer: session.authorizeReviewer,
     authorizeSource,
@@ -231,6 +245,8 @@ export async function createLocalComposition(dependencies: UploadDependencies, o
         registerCandidate: registry?.registerCandidate.bind(registry),
       }),
       candidatePlugin,
+      ...(semantics ? [semantics.plugin] : []),
+      ...activation,
       ...(options.parentReads ? [createParentProxyPlugin(options.parentReads, session.authorizeReviewer)] : []),
       ...(verification ? [verification.plugin] : []),
     ],
