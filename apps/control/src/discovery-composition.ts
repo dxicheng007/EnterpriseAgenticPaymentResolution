@@ -1,16 +1,20 @@
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
-import type { PoolClient } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import {
   BootstrapManifestSchema, EvidenceRefSchema, RawSourceEventSchema, SourceDossierSchema, SourceSnapshotSchema,
   hashCanonical, hashEvent, hashManifest, type Id, type RawSourceEvent,
 } from '@eapr/contracts';
 import type { EvidenceStore } from '@eapr/evidence';
 import { createDiscoveryReadTools, readDiscoveryCapture, streamContentHash, type SourceDefinition, type UploadDependencies } from '@eapr/sources';
+import {
+  assertConstructionCapture, type CompileRegisterCandidate, type ConstructionCapture,
+} from '../../../packages/discovery/src/compilation.js';
 import type { ModelClient } from '../../../packages/discovery/src/model.js';
 import { discoveryError } from '../../../packages/discovery/src/repository.js';
 import { createDiscoveryService } from '../../../packages/discovery/src/service.js';
 import type { CaptureFacts } from '../../../packages/discovery/src/tasks.js';
-import { aggregateHash } from '../../../packages/sources/src/dossier.js';
+import { readDiscoveryCaptureContents } from '../../../packages/sources/src/discovery-reads.js';
+import { aggregateHash, readSnapshot } from '../../../packages/sources/src/dossier.js';
 import type { createLocalSessionService } from './local-session.js';
 import { mountDiscovery } from './routes/discovery.js';
 import { mountDiscoveryEvents } from './routes/events.js';
@@ -108,14 +112,31 @@ export async function recheckDiscoveryCapture(client: PoolClient, facts: Capture
   }
 }
 
+async function readConstructionCapture(
+  dependencies: { db: Pool; store: Pick<EvidenceStore, 'get'> },
+  catalog: ReadonlyMap<Id, SourceDefinition>,
+  selection: { companyId: Id; manifestId: Id },
+): Promise<ConstructionCapture> {
+  const contents = await readDiscoveryCaptureContents(dependencies, catalog, selection);
+  const snapshot = await readSnapshot(dependencies.db, contents.facts.binding.snapshotId);
+  const capture = {
+    facts: contents.facts,
+    manifest: contents.manifest,
+    snapshot,
+  };
+  assertConstructionCapture(capture);
+  return capture;
+}
+
 export function composeDiscovery(options: {
   catalog: ReadonlyMap<Id, SourceDefinition>;
   store: Pick<EvidenceStore, 'get'>;
   reviewer: { reviewerId: Id; allowedSourceRefs: Id[]; allowedAccountIds: Id[] };
   authorizeReviewer: ReturnType<typeof createLocalSessionService>['authorizeReviewer'];
   modelClient?: ModelClient;
+  registerCandidate?: CompileRegisterCandidate;
 }): FastifyPluginAsync<Omit<UploadDependencies, 'store'>> {
-  const { catalog, store, reviewer, authorizeReviewer, modelClient } = options;
+  const { catalog, store, reviewer, authorizeReviewer, modelClient, registerCandidate } = options;
   return async (app, { db, clock }) => {
     const service = await createDiscoveryService({
       db, clock, modelClient,
@@ -123,6 +144,10 @@ export function composeDiscovery(options: {
       readCapture: selection => readDiscoveryCapture({ db, store }, catalog, selection),
       recheckCapture: recheckDiscoveryCapture,
       readTools: createDiscoveryReadTools({ db, store }, catalog),
+      ...(registerCandidate ? {
+        registerCandidate,
+        constructionCapture: selection => readConstructionCapture({ db, store }, catalog, selection),
+      } : {}),
       resolveAuthority(reviewerId, { companyId, sourceRef }) {
         if (reviewerId !== reviewer.reviewerId || catalog.get(companyId)?.sourceRef !== sourceRef ||
             !reviewer.allowedSourceRefs.includes(sourceRef)) return;

@@ -220,7 +220,10 @@ export async function createLocalComposition(dependencies: UploadDependencies, o
     authorizeSource,
     featurePlugins: [
       session.plugin,
-      composeDiscovery({ catalog: localSourceCatalog, store, reviewer, authorizeReviewer: session.authorizeReviewer }),
+      composeDiscovery({
+        catalog: localSourceCatalog, store, reviewer, authorizeReviewer: session.authorizeReviewer,
+        registerCandidate: registry?.registerCandidate.bind(registry),
+      }),
       createSourcePlugin({ catalog: localSourceCatalog, authorizeSource, store }),
       createPreviewPlugin({
         authorizeRead, readSnapshot, readTarget,
