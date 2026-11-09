@@ -4,18 +4,18 @@ import { profileA, profileB, validSpecA, validSpecB } from '../../../tests/fixtu
 import { compareArtifactsResult, type CompareSubject } from '../src/compare.js';
 
 function subject(
-  overrides: Partial<CompareSubject> & { payload?: DiscoveryProposalV2 } = {},
+  overrides: Partial<CompareSubject> = {},
 ): CompareSubject {
   const payload: DiscoveryProposalV2 = overrides.payload ?? {
     schemaVersion: 2, id: 'proposal', revision: 1, taskId: 'task',
     spec: validSpecA, profiles: [profileA], findingRefs: [], investigationIds: ['source'],
   };
+  const { payload: _ignored, ...rest } = overrides;
   return {
     proposalId: payload.id,
     revision: payload.revision,
-    payload,
     payloadHash: hashCanonical(payload),
-    ...overrides,
+    ...rest,
     payload,
   };
 }
