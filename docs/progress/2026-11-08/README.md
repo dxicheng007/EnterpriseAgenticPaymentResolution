@@ -2,7 +2,7 @@
 
 This checkpoint publishes completed local work, preserves separately committed candidates, and records remaining work. It is not acceptance of the complete demo. Machine checks, independent Astra review, and joint user acceptance remain distinct.
 
-**Latest:** reviewed integration `8962292` clarifies other-account records, investigation records, and the amount still owed after proposed import. Typecheck and 238 unit tests pass. Separate bootstrap result schemas and the pure import planner are accepted. The full combined V2 gate also passes on `8962292`: 21 commands, 94 assertions and ten safe screenshots. Discovery lifecycle, source validation and independent bootstrap expectations remain in progress. Joint user acceptance is pending. See [the terminology checkpoint](#terminology-and-bootstrap-contract-checkpoint).
+**Latest:** reviewed integration `8962292` clarifies other-account records, investigation records, and the amount still owed after proposed import. Typecheck and 254 unit tests pass after the lifecycle integration; 101 PostgreSQL integration tests and the V0 gate also pass. Separate bootstrap result schemas and the pure import planner are accepted. The full combined V2 gate also passes on `8962292`: 21 commands, 94 assertions and ten safe screenshots. The unmounted discovery lifecycle is accepted; source validation and independent bootstrap expectations remain in progress. Joint user acceptance is pending. See [the terminology checkpoint](#terminology-and-bootstrap-contract-checkpoint).
 
 ## Published checkpoint (historical)
 
@@ -135,3 +135,12 @@ The fresh full V2 gate on clean `89622924c1c6ae1b34f56fd0908b8c8f30c0a328` passe
 Candidate `c4f862a` passed [fresh Astra review](reviews/b-bootstrap-planner-independent-review.md) and was integrated at `83f64f3`. The [planner report](handoffs/b-bootstrap-planner-report.md) records 39 focused tests and behavioral red checks. Root ran typecheck and all **253 unit tests** on the combined integration. The unchanged financial planner now has a separate pure wrapper that prepares customer, account and billing-configuration records, preserves exact reused metadata, adds evidence lineage and rejects blocked or empty import baselines. It projects into a copied target and performs no writes.
 
 The full V2 packet remains specifically for `8962292`; the new planner has its focused and combined unit evidence, not a new full bootstrap gate. Its [independent oracle](handoffs/b-bootstrap-oracle.md) is assigned next. Complete bootstrap verification, review readiness and activation still await their dependent runner, registry and authority components.
+
+
+## Durable discovery lifecycle checkpoint
+
+L1 candidate `e754790` passed [independent Astra review](reviews/v4-lifecycle-L1-independent-review.md) and was integrated at `42bcfa6`. The [builder report](handoffs/v4-lifecycle-L1-report.md) records the exact concurrency barriers and limitations. Root ran typecheck, **254 unit tests**, **101 PostgreSQL integration tests**, and the full **V0 gate** on that combined integration. V0 packet: `.evidence/42bcfa613e75119de88ae514639fc01ce6ecf2ae/V0/2026-11-09T00-45-29-503Z-88698/`. These checks used an isolated cluster, not the live demo.
+
+The [discovery package guide](../../../packages/discovery/AGENTS.md) explains the dedicated supervisor connection, durable budgets, pause/replay, timeout accounting and generation fencing. The component is deliberately unmounted; L2 still must provide HTTP authorization, validated pinned captures, mandatory capture recheck, and atomic delegation. Review found no blocking defect. Cross-task native-ID reuse and byte-oversized persistence cases are recorded as narrow additional coverage for L2, not claimed as existing L1 tests.
+
+Control migration 004 is now implemented. The later bootstrap registry remains assigned 005. Live-model execution, agent-generated connector construction, parent persistence and automatic sync remain unavailable.

@@ -1,0 +1,10 @@
+# Discovery lifecycle
+
+Follow the [repository](../../AGENTS.md) and [package](../AGENTS.md) guides. This control-only package implements the L1 portion of the [lifecycle handoff](../../docs/progress/2026-11-08/handoffs/v4-lifecycle-handoffs.md), under the [discovery shapes freeze](../../docs/superpowers/plans/2026-11-08-contract-freeze-v3-discovery-shapes.md). It is not mounted by local startup and has no production model adapter.
+
+- [Repository](src/repository.ts) owns durable start replay, coherent state reads, pause/resume, and internal specialist storage. Current authorization precedes saved replay; exact replay precedes model configuration and fresh capture requirements. L2 must supply authenticated HTTP policy, validated immutable capture, mandatory transactional capture recheck and strict delegation.
+- [Supervisor](src/supervisor.ts) serializes scheduler transactions on the dedicated advisory-lock connection. Generation fences and persistent dispatch state reject late callbacks. Never substitute a healthy ordinary pool connection after owner failure.
+- [Budgets](src/budgets.ts) cap unsettled model invocations across supervisor replacements in the same process. Timeout records interruption and unknown usage once; it does not release a permit until the underlying Promise settles.
+- [Migration](../../db/control/004_discovery.sql) owns lifecycle rows, constraints and limited application grants. Keep external I/O outside database transactions. Publish only allowed safe activity in the same transaction as state.
+
+Run `npm run typecheck`, `npm run test:unit -- packages/discovery/test`, and `npm run test:integration -- tests/integration/v4-lifecycle.test.ts tests/integration/v4-activity-read.test.ts` on an assigned isolated PostgreSQL lease. The [review](../../docs/progress/2026-11-08/reviews/v4-lifecycle-L1-independent-review.md) records L1 boundaries and deferred L2 proof. Scripted clients are test-only. No findings/proposals, construction completion, provider competence, activation or runtime writes are established by L1.
