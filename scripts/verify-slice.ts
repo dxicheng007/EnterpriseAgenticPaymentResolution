@@ -3,11 +3,9 @@ import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSy
 import { join, relative, resolve } from 'node:path';
 import { z } from 'zod';
 import { hashBytes, hashCanonical } from '../packages/contracts/src/canonical.js';
-import { migrationIdentities, migrationStreams, readMigrationCatalog } from './migrate.js';
 import {
   chromiumVersion, collectScreenshots, commandResult, normalizeReport, v1ExitCode,
 } from './verify-slice-evidence.js';
-import { localPort, testLeasePrefix } from './native-db.js';
 
 const registry = {
   V0: [
@@ -18,10 +16,6 @@ const registry = {
   V1: [
     'tests/integration/v1-evidence.test.ts', 'packages/evidence/test/locate.test.ts', 'tests/e2e/v1-sources.spec.ts',
     'tests/integration/v1-manifests.test.ts', 'packages/sources/test/change-feed.test.ts',
-  ],
-  V2: [
-    'packages/compiler/test/compile.test.ts', 'packages/compiler/test/plan-batch.test.ts', 'packages/finance/test/finance.test.ts',
-    'tests/integration/v2-preview.test.ts', 'tests/integration/v2-verification.test.ts', 'tests/e2e/v2-preview.spec.ts',
   ],
   V3: ['tests/integration/v3-activation.test.ts', 'tests/e2e/v3-review.spec.ts', 'tests/integration/v3-corrections.test.ts'],
   V4: ['tests/integration/v4-agent-tools.test.ts', 'tests/e2e/v4-monitor.spec.ts', 'tests/live/v4-build-connectors.test.ts'],
@@ -147,7 +141,9 @@ function browserCases(path: string, expectedFile: string) {
   return { cases, versions: [...versions] };
 }
 
-function verifyV0() {
+async function verifyV0() {
+  const { migrationIdentities, migrationStreams, readMigrationCatalog } = await import('./migrate.js');
+  const { localPort } = await import('./native-db.js');
   const source = sourceIdentity();
   const runId = new Date().toISOString().replace(/[:.]/g, '-') + '-' + process.pid;
   const evidence = resolve('.evidence', source.evidenceKey, 'V0', runId);
@@ -298,7 +294,9 @@ function readV1Report(report: string, browser: boolean, file: typeof registry.V1
   }
 }
 
-function verifyV1() {
+async function verifyV1() {
+  const { migrationIdentities, migrationStreams, readMigrationCatalog } = await import('./migrate.js');
+  const { localPort, testLeasePrefix } = await import('./native-db.js');
   const env = { ...process.env };
   delete env.OPENAI_API_KEY;
   delete env.OPENAI_ORG_ID;
@@ -426,13 +424,16 @@ if (requested === 'live') {
   console.error('FEATURE_NOT_IMPLEMENTED: Source injection begins with the source adapters.');
   process.exitCode = 1;
 } else if (requested === 'V1') {
-  verifyV1();
+  await verifyV1();
+} else if (requested === 'V2') {
+  const { verifyV2 } = await import('./verify-v2.js');
+  verifyV2();
 } else if (requested !== 'V0') {
   const required = Object.hasOwn(registry, requested) ? registry[requested as keyof typeof registry] : undefined;
   const missing = required?.filter(file => !existsSync(file));
   if (missing?.length) console.error('Mandatory test files unavailable: ' + missing.join(', '));
-  console.error(required ? requested + ' verification is unavailable in the foundation slice.' : 'Usage: npm run verify:slice -- <V0|V1>');
+  console.error(required ? requested + ' verification is unavailable in the foundation slice.' : 'Usage: npm run verify:slice -- <V0|V1|V2>');
   process.exitCode = 1;
 } else {
-  verifyV0();
+  await verifyV0();
 }

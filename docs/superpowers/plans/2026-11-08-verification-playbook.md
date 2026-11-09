@@ -1,6 +1,6 @@
 # Joint verification playbook
 
-**Status:** V0 and V1 have executable machine gates. V1 retains allowlisted command and assertion records and two screenshots with authenticated tracing disabled. Full V2 verification and joint acceptance remain pending. Companion to the [implementation plan](2026-11-08-implementation-plan.md) and [PRD v2](../../../prdv2.md).
+**Status:** V0, V1 and V2 have executable machine gates. V1 retains allowlisted command and assertion records and two screenshots. V2 retains ten allowlisted screenshots and public observations from both completed version-2 verification jobs on an empty target fixture. Authenticated tracing is disabled for V1 and V2. Independent exact-candidate review and joint acceptance are recorded separately. Companion to the [implementation plan](2026-11-08-implementation-plan.md) and [PRD v2](../../../prdv2.md).
 
 ## What verification means
 

@@ -10,7 +10,7 @@
 
 **Spec:** [PRD v2](../../../prdv2.md). Read [shared contracts](2026-11-08-shared-contracts.md), [verification playbook](2026-11-08-verification-playbook.md), and [agent handoffs](2026-11-08-agent-handoffs.md) before execution.
 
-**Status:** The reviewed deterministic foundation, sources, evidence and preview, and the local no-login reviewer UI are implemented. Candidate `f22a70f` carries independently reviewed evidence for three Chromium test files. The V1 verifier is a separate candidate with its own machine packet. Compiled preview and protected evaluator modules have focused evidence. Full V2 mandatory coverage, the V2 runner and reviewer composition remain partial or pending. All joint acceptance remains pending.
+**Status:** The local foundation, source capture, evidence inspection and reviewer workflow have executable V0, V1 and V2 machine gates. V2 exercises the compiler, financial preview and independently checked captured development candidates against an explicitly empty target fixture. Its packet contains exact named results, safe browser evidence and public verification job bindings. Independent exact-candidate review and joint acceptance are separate. Live discovery, approval, activation, persisted parent reads and synchronization remain later-slice work.
 
 ## Global Constraints
 
@@ -427,4 +427,4 @@ expect(unsupportedCorrection.status).toBe('held');
 
 Run the self-review against PRD sections 1–20 and the verification matrix before starting implementation. The plans do not waive source/approval constraints or replace actual checks. At each joint gate, provide a short outcome-first report and the precise commands/screens for us to inspect; independent tasks may continue while review is pending, but dependent work must not silently treat a rejected interface or behavior as approved.
 
-Review the exact V1 verifier candidate and its clean-source machine packet independently, then inspect the source evidence together at G1. Full V2 verification and protected evaluator composition in the reviewer workflow remain pending.
+Review the exact V1 verifier candidate and its clean-source machine packet independently, then inspect the source evidence together at G1. Review the exact V2 gate candidate and its clean-source packet independently before the joint G2 walkthrough.
