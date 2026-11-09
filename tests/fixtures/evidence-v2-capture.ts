@@ -8,7 +8,7 @@ import {
 } from '@eapr/contracts';
 import {
   companyA, companyB, createSourceService, prepareApiRecord, publishManifest, readDossier, readEvidence, readEvidenceBytes,
-  readManifest, sourceFileId, storeSourceUpload, type UploadDependencies,
+  readManifest, sourceFileId, storeSourceUpload, type SourceDefinition, type UploadDependencies,
 } from '@eapr/sources';
 import { decodeEvidenceProducer, type EvidenceFixtureInput, type Original } from '../../packages/evaluator/src/evidence-fixtures.js';
 
@@ -16,7 +16,7 @@ const catalog = new Map([companyA, companyB].map(source => [source.companyId, so
 const uploadsSchema = strict({ metadata: UploadMetadataSchema, path: z.string() }).array();
 const originalsSchema = strict({ eventId: IdSchema, path: z.string() }).array();
 
-async function association(db: Pool, evidence: EvidenceRef, source: typeof companyA | typeof companyB): Promise<Original['binding']> {
+async function association(db: Pool, evidence: EvidenceRef, source: SourceDefinition): Promise<Original['binding']> {
   const { rows } = await db.query<{
     file_id: string | null; api_source_id: string | null; event_id: string | null; event: RawSourceEvent | null; evidence: EvidenceRef;
   }>(`
@@ -42,8 +42,9 @@ async function association(db: Pool, evidence: EvidenceRef, source: typeof compa
 
 export async function captureEvidenceFixture(
   dependencies: UploadDependencies, roots: { visibleRoot: string; truthRoot: string }, company: 'a' | 'b',
+  source: SourceDefinition = company === 'a' ? companyA : companyB,
 ) {
-  const source = company === 'a' ? companyA : companyB;
+  const captureCatalog = source === catalog.get(source.companyId) ? catalog : new Map([[source.companyId, source]]);
   const { db, store } = dependencies;
   const visible = (path: string) => {
     if (!path.split('/').every(part => /^[A-Za-z0-9._-]+$/.test(part) && part !== '.' && part !== '..')) {
@@ -62,8 +63,8 @@ export async function captureEvidenceFixture(
   for (const { metadata, path } of uploads.sort((a, b) => (a.metadata.batch?.sequence ?? 0) - (b.metadata.batch?.sequence ?? 0))) {
     await storeSourceUpload(dependencies, metadata, await visible(path));
   }
-  await publishManifest(dependencies, catalog, generated, records);
-  const service = createSourceService(dependencies, catalog);
+  await publishManifest(dependencies, captureCatalog, generated, records);
+  const service = createSourceService(dependencies, captureCatalog);
   const captured = await service.captureSnapshot(generated.id);
   if (!captured.ok) throw new Error('Expected complete real test capture');
   const [manifest, dossier, snapshot] = await Promise.all([
