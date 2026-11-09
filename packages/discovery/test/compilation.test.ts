@@ -95,3 +95,15 @@ test('compile descriptors advertise only when compile dependencies are present',
     expect(names(role, true, true)).toEqual([]);
   }
 });
+
+test('sandbox descriptors advertise only when sandbox dependencies are present', () => {
+  const names = (role: Parameters<typeof toolSchemas>[0], reads: boolean, sandbox = false) =>
+    toolSchemas(role, reads, false, sandbox).map(tool => tool.name)
+      .filter(name => name === 'runSandboxReplay' || name === 'compareArtifacts');
+  expect(names('connector', true)).toEqual([]);
+  expect(names('connector', true, true)).toEqual(['runSandboxReplay', 'compareArtifacts']);
+  expect(names('connector', false, true)).toEqual([]);
+  for (const role of ['coordinator', 'identity', 'contract', 'receivables'] as const) {
+    expect(names(role, true, true)).toEqual([]);
+  }
+});
