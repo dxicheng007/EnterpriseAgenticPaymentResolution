@@ -1,0 +1,10 @@
+{
+  "name": "@eapr/discovery",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./model": "./src/model.ts",
+    "./repository": "./src/repository.ts",
+    "./supervisor": "./src/supervisor.ts"
+  }
+}
