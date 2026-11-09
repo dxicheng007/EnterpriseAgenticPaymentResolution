@@ -9,7 +9,7 @@ import {
   hashBootstrapVerificationResult, hashProfile, hashActivationTrustPolicy, hashBundleV2,
   hashFinancialAttestation, hashFinancialReport, hashFinancialReservation, type ActivationBundleV2,
 } from '@eapr/contracts';
-import { publishActivationPolicy } from '@eapr/storage/activation-policy';
+import { publishActivationPolicy } from '../../packages/storage/src/activation-files.js';
 import { readActivationBundle } from '@eapr/storage/activation-registry';
 import { createActivationPublication } from '../../apps/control/src/activation-publication.js';
 import { baselineEventsA, baselineManifestA, emptyTargetA, profileA, validSpecA } from '../fixtures/index.js';

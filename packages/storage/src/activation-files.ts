@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { constants } from 'node:fs';
+import { constants, type Stats } from 'node:fs';
 import { link, lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { canonicalJson, HashSchema } from '@eapr/contracts';
+import {
+  ActivationTrustPolicyV1Schema, canonicalJson, HashSchema, hashActivationTrustPolicy, type ActivationTrustPolicyV1,
+} from '@eapr/contracts';
 import type { ZodType } from 'zod';
 
 export const maxActivationBytes = 10 * 1024 * 1024;
@@ -36,13 +38,18 @@ export async function trustedDirectory(path: string, create = false): Promise<vo
   }
 }
 
+function requirePrivateFile(stat: Stats, limit: number) {
+  if (!stat.isFile() || stat.uid !== process.getuid?.() ||
+    (stat.mode & 0o077) !== 0 || stat.size > limit) throw new Error('Invalid activation file');
+}
+
 export async function readPrivateBytes(path: string, limit = maxActivationBytes): Promise<Buffer> {
-  await trustedDirectory(dirname(path));
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  const absolute = resolve(path);
+  await trustedDirectory(dirname(absolute));
+  const handle = await open(absolute, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const stat = await handle.stat();
-    if (!stat.isFile() || stat.uid !== process.getuid?.() ||
-      (stat.mode & 0o077) !== 0 || stat.size > limit) throw new Error('Invalid activation file');
+    requirePrivateFile(stat, limit);
     const buffer = Buffer.alloc(stat.size + 1);
     let length = 0;
     while (length < buffer.length) {
@@ -78,6 +85,11 @@ export async function publishBytes(path: string, bytes: Buffer, replace = false)
       await handle.close();
     }
     if (replace) {
+      try {
+        requirePrivateFile(await lstat(path), maxActivationBytes);
+      } catch (error) {
+        if (!hasFileCode(error, 'ENOENT')) throw error;
+      }
       await rename(temporary, path);
     } else {
       try {
@@ -102,4 +114,26 @@ export function freezeJson<T>(value: T): T {
     Object.freeze(value);
   }
   return value;
+}
+
+export function validateActivationPolicy(policy: ActivationTrustPolicyV1) {
+  if (policy.entries.length === 0 || policy.hash !== hashActivationTrustPolicy(policy)) {
+    throw new Error('ACTIVATION_POLICY_MISMATCH');
+  }
+  return policy;
+}
+
+/** Operator setup only. Preparation and proof validation are owned by the operator command. */
+export async function publishActivationPolicy(
+  { policyRoot }: { policyRoot: string }, input: ActivationTrustPolicyV1, install = false,
+): Promise<void> {
+  try {
+    const policy = validateActivationPolicy(ActivationTrustPolicyV1Schema.parse(input));
+    await trustedDirectory(policyRoot, true);
+    const bytes = Buffer.from(canonicalJson(policy));
+    await publishBytes(digestPath(join(policyRoot, 'policies'), policy.hash), bytes);
+    if (install) await publishBytes(join(policyRoot, 'current.json'), bytes, true);
+  } catch {
+    throw new Error('ACTIVATION_POLICY_MISMATCH');
+  }
 }

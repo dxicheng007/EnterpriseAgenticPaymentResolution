@@ -5,7 +5,7 @@ import {
   canonicalJson, hashBundleV2, hashManifest, hashProfile, hashRegisteredScopeIndex,
   type BootstrapManifest, type CustomerProfile, type RegisteredScopeIndexEntryV1,
 } from '@eapr/contracts';
-import { decodeCanonical, digestPath, freezeJson, hasFileCode, publishBytes, readPrivateBytes, trustedDirectory } from './activation-files.js';
+import { decodeCanonical, digestPath, freezeJson, hasFileCode, maxActivationBytes, publishBytes, readPrivateBytes, trustedDirectory } from './activation-files.js';
 
 type RegistryOptions = { registryRoot: string };
 type Member = { entry: RegisteredScopeIndexEntryV1; profile: CustomerProfile; manifest: BootstrapManifest };
@@ -127,6 +127,7 @@ export async function readActivationBundle({ registryRoot }: RegistryOptions, bu
 /** Publish the exact bytes of a committed reviewer intent. */
 export async function publishActivationBundle({ registryRoot }: RegistryOptions, bundleHash: string, input: Uint8Array) {
   try {
+    if (input.byteLength > maxActivationBytes) throw new Error('Activation file too large');
     const bytes = Buffer.from(input);
     validateActivationBundleBytes(bytes, bundleHash);
     await trustedDirectory(registryRoot, true);

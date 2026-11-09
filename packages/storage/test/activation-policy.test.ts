@@ -1,9 +1,10 @@
-import { chmod, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { canonicalJson, hashActivationTrustPolicy, type ActivationTrustPolicyEntryV1 } from '@eapr/contracts';
-import { loadActivationPolicy, publishActivationPolicy } from '../src/activation-policy.js';
+import { loadActivationPolicy } from '@eapr/storage/activation-policy';
+import { publishActivationPolicy } from '../src/activation-files.js';
 
 const h = (digit: string) => digit.repeat(64);
 const entry: ActivationTrustPolicyEntryV1 = {
@@ -87,6 +88,7 @@ test('rejects untrusted directory, symlink, oversized content and immutable coll
   await chmod(root, 0o700);
   await rm(policyPath);
   await symlink(candidatePath, policyPath);
+  await expect(publishActivationPolicy({ policyRoot: root }, policy, true)).rejects.toThrow('ACTIVATION_POLICY_MISMATCH');
   await expect(loadActivationPolicy({ policyPath })).rejects.toThrow('ACTIVATION_POLICY_MISMATCH');
   await rm(policyPath);
   await writeFile(policyPath, Buffer.alloc(10 * 1024 * 1024 + 1), { mode: 0o600 });
@@ -94,4 +96,17 @@ test('rejects untrusted directory, symlink, oversized content and immutable coll
   await rm(candidatePath);
   await writeFile(candidatePath, '{}', { mode: 0o600 });
   await expect(publishActivationPolicy({ policyRoot: root }, policy, true)).rejects.toThrow('ACTIVATION_POLICY_MISMATCH');
+});
+
+test('opens the same normalized configured path it checked for trust', async () => {
+  const local = makePolicy();
+  const foreign = makePolicy([second], 'foreign');
+  const foreignRoot = join(root, 'foreign');
+  await publishActivationPolicy({ policyRoot: root }, local, true);
+  await publishActivationPolicy({ policyRoot: foreignRoot }, foreign, true);
+  const nested = join(foreignRoot, 'nested');
+  await mkdir(nested, { mode: 0o700 });
+  await symlink(nested, join(root, 'link'));
+  const configuredPath = root + '/link/../current.json';
+  expect((await loadActivationPolicy({ policyPath: configuredPath })).hash).toBe(local.hash);
 });
