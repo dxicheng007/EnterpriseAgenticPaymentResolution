@@ -12,3 +12,4 @@ export { readDiscoveryCapture, type ValidatedDiscoveryCapture } from './discover
 export {
   createDiscoveryReadTools, type DiscoveryReadPreparationInput, type DiscoveryReadTools, type PreparedDiscoveryRead,
 } from './discovery-tools.js';
+export { readCurrentSemantics } from './current-semantics.js';
