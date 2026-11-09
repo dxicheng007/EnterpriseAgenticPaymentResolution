@@ -254,7 +254,7 @@ export async function expectBrowserMutation(response: Response, origin: string, 
   }
 }
 
-export async function startReview(page: Page, origin: string, section: 'sources' | 'preview') {
+export async function startReview(page: Page, origin: string, section: 'sources' | 'preview' | 'parent') {
   const bootstrap = apiResponse(page, '/api/local-session', 'POST');
   await page.goto(origin + '/#' + section);
   const session = await bootstrap;
