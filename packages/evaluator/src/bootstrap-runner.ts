@@ -60,7 +60,7 @@ const shared = [
   ...[
     'activation-authority', 'activation-authority-hash', 'activation-bundle-v2',
     'activity', 'bootstrap-verification-hash', 'bootstrap-verification', 'canonical', 'common', 'connector',
-    'discovery-helpers', 'discovery', 'evidence', 'index', 'local-demo', 'model', 'review', 'runtime',
+    'discovery-helpers', 'discovery-tools', 'discovery', 'evidence', 'index', 'local-demo', 'model', 'review', 'runtime',
     'source-coverage', 'source',
   ].map(name => 'packages/contracts/src/' + name + '.ts'),
 ];
