@@ -11,6 +11,10 @@ import {
 import type { Pool } from 'pg';
 import { decodeBatch } from './company-b.js';
 import { readDiscoveryCaptureContents, type ValidatedDiscoveryCapture } from './discovery-reads.js';
+import {
+  partitionDocumentApplicability, validateDocumentApplicabilityRequest,
+  type DocumentApplicabilityRequest, type PreparedDocumentApplicability,
+} from './document-applicability.js';
 import { SourceError } from './errors.js';
 import type { SourceDefinition } from './records.js';
 
@@ -22,6 +26,9 @@ export type PreparedDiscoveryRead = { facts: ValidatedDiscoveryCapture; result: 
 export interface DiscoveryReadTools {
   prepare(input: DiscoveryReadPreparationInput): Promise<PreparedDiscoveryRead>;
 }
+export type DiscoveryDocumentApplicabilityTools = {
+  prepareDocumentApplicability(input: DocumentApplicabilityRequest): Promise<PreparedDocumentApplicability>;
+};
 
 type Capture = Awaited<ReturnType<typeof readDiscoveryCaptureContents>>;
 type CapturedCitation = SearchableCitation & { extraction: Extraction };
@@ -214,7 +221,22 @@ function prepareResult(
 export function createDiscoveryReadTools(
   dependencies: { db: Pool; store: Pick<EvidenceStore, 'get'> },
   catalog: ReadonlyMap<Id, SourceDefinition>,
-): DiscoveryReadTools {
+): DiscoveryReadTools & DiscoveryDocumentApplicabilityTools {
+  async function loadPinnedCapture(binding: DiscoveryBinding) {
+    const registered = catalog.get(binding.companyId);
+    if (!registered) throw new SourceError(404, 'SOURCE_NOT_FOUND', 'Registered source was not found');
+    const source = structuredClone(registered);
+    const capture = await readDiscoveryCaptureContents(dependencies, new Map([[binding.companyId, source]]), binding);
+    if (canonicalJson(capture.facts.binding) !== canonicalJson(binding)) {
+      throw new SourceError(409, 'SOURCE_EPOCH_CONFLICT', 'Discovery source binding conflicts');
+    }
+    const { schemaVersions } = capture.manifest;
+    if (Object.entries(schemaVersions).some(([resource, schemaVersion]) =>
+      !source.contracts.some(contract => contract.resource === resource && contract.schemaVersion === schemaVersion)) ||
+      capture.events.some(event => schemaVersions[event.resource] !== event.schemaVersion)) conflict();
+    return { capture, source };
+  }
+
   return {
     async prepare({ binding, sourceRead, ...call }) {
       const parsedBinding = DiscoveryBindingSchema.safeParse(binding);
@@ -227,20 +249,23 @@ export function createDiscoveryReadTools(
       if (pinned.companyId !== grant.companyId || pinned.sourceRef !== grant.sourceRef) {
         throw new SourceError(403, 'SOURCE_FORBIDDEN', 'Discovery source grant is forbidden');
       }
-      const registered = catalog.get(pinned.companyId);
-      if (!registered) throw new SourceError(404, 'SOURCE_NOT_FOUND', 'Registered source was not found');
-      const source = structuredClone(registered);
-      const capture = await readDiscoveryCaptureContents(dependencies, new Map([[pinned.companyId, source]]), pinned);
-      if (canonicalJson(capture.facts.binding) !== canonicalJson(pinned)) {
-        throw new SourceError(409, 'SOURCE_EPOCH_CONFLICT', 'Discovery source binding conflicts');
-      }
-      const { schemaVersions } = capture.manifest;
-      if (Object.entries(schemaVersions).some(([resource, schemaVersion]) =>
-        !source.contracts.some(contract => contract.resource === resource && contract.schemaVersion === schemaVersion)) ||
-        capture.events.some(event => schemaVersions[event.resource] !== event.schemaVersion)) conflict();
+      const { capture, source } = await loadPinnedCapture(pinned);
       const parsed = DiscoveryReadToolCallSchema.safeParse(call);
       const result = parsed.success ? prepareResult(parsed.data, capture, source, grant) : fail('DISCOVERY_INVALID');
       return { facts: capture.facts, result };
+    },
+    async prepareDocumentApplicability(input) {
+      const request = validateDocumentApplicabilityRequest(input);
+      const { capture, source } = await loadPinnedCapture(request.binding);
+      const { associations, unresolvedEvidenceIds } = partitionDocumentApplicability(
+        capture, source, request.evidenceIds,
+      );
+      return {
+        facts: capture.facts,
+        derivation: 'captured-agreement-association-v1',
+        associations,
+        unresolvedEvidenceIds,
+      };
     },
   };
 }
