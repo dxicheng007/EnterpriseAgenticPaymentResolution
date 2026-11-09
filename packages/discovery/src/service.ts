@@ -1,5 +1,6 @@
 import { DiscoveryCapabilitiesResponseV2Schema, hashCanonical, type DiscoveryBinding, type DiscoveryActionRequestV2,
   type StartDiscoveryRequestV2 } from '../../contracts/src/index.js';
+import type { DiscoveryReadTools } from './read-tools.js';
 import type { ModelClient } from './model.js';
 import { coversGrant, createDiscoveryRepository, discoveryError, type Grants, type RepositoryOptions } from './repository.js';
 import { acquireDiscoverySupervisor } from './supervisor.js';
@@ -12,6 +13,7 @@ export type DiscoveryReviewer = {
 
 type Options = RepositoryOptions & CaptureAccess & {
   modelClient?: ModelClient;
+  readTools?: DiscoveryReadTools;
   sourceRefForCompany: (companyId: string) => string | undefined;
 };
 
@@ -22,6 +24,7 @@ export async function createDiscoveryService(options: Options) {
   let closed = false;
   let active: Promise<void> | undefined;
   const pendingTasks = new Set<string>();
+  const pendingSteps = new Map<string, number>();
 
   async function tick() {
     if (!modelClient) return;
@@ -35,25 +38,30 @@ export async function createDiscoveryService(options: Options) {
         r.grants AS run_grants, t.grants AS task_grants
       FROM discovery_runs r JOIN discovery_tasks t ON t.run_id=r.id
       LEFT JOIN LATERAL (
-        SELECT s.id FROM discovery_tool_steps s
+        SELECT s.id,s.state,s.generation FROM discovery_tool_steps s
         JOIN discovery_dispatches d ON d.id=s.dispatch_id AND d.run_id=s.run_id AND d.task_id=s.task_id
-        WHERE s.run_id=r.id AND s.task_id=t.id AND s.state='pending' AND d.attempt=t.attempt
+        WHERE s.run_id=r.id AND s.task_id=t.id AND s.state IN ('pending','running','interrupted') AND d.attempt=t.attempt
         ORDER BY s.ordinal LIMIT 1
       ) p ON true
       WHERE r.status IN ('queued','running') AND r.model_id=$1 AND r.mode=$2 AND (
-        (t.status='running' AND p.id IS NOT NULL) OR
+        (t.status='running' AND (p.state='pending' OR ($4 AND p.state='interrupted' AND p.generation<$3))) OR
         (t.status IN ('queued','waiting') AND NOT EXISTS (
           SELECT 1 FROM discovery_task_dependencies edge
           JOIN discovery_tasks predecessor ON predecessor.run_id=edge.run_id AND predecessor.id=edge.predecessor_id
           WHERE edge.run_id=r.id AND edge.task_id=t.id AND predecessor.status<>'succeeded'
         ))
-      ) ORDER BY r.id,t.id`, [modelClient.modelId, modelClient.mode]);
+      ) ORDER BY r.id,t.id`, [modelClient.modelId, modelClient.mode, owner.generation, !!options.readTools]);
     for (const row of rows) {
       if (closed) break;
       if (pendingTasks.has(row.task_id) || !coversGrant(row.run_grants, row.task_grants) ||
           !coversGrant(options.resolveAuthority(row.reviewer_id, row.binding), row.task_grants)) continue;
       if (row.step_id) {
-        await owner.executePendingStep(row.run_id, row.task_id, row.step_id);
+        const generation = owner.generation;
+        if (pendingSteps.get(row.task_id) === generation) continue;
+        pendingSteps.set(row.task_id, generation);
+        void owner.executePendingStep(row.run_id, row.task_id, row.step_id).catch(() => undefined).finally(() => {
+          if (pendingSteps.get(row.task_id) === generation) pendingSteps.delete(row.task_id);
+        });
       } else {
         const claim = owner.dispatchTask(row.run_id, row.task_id);
         if (!claim) continue;
