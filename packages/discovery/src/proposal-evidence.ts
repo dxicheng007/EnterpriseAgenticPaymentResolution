@@ -3,8 +3,16 @@ import {
   type SourceContract, type SourceReadGrant,
 } from '../../contracts/src/index.js';
 import type { DraftConnectorInput, ReviseConnectorInput } from '../../contracts/src/discovery-construction-tools.js';
-import { parseReadResult, prepareRead, type DiscoveryReadTools } from './read-tools.js';
+import {
+  parseReadResult, prepareDocumentAssociations, prepareRead, type DiscoveryReadTools, type DocumentAssociations,
+} from './read-tools.js';
 import type { CaptureFacts } from './tasks.js';
+
+function isDocumentAssociations(
+  value: DocumentAssociations | DiscoveryReadToolFailure,
+): value is DocumentAssociations {
+  return value instanceof Map;
+}
 
 export type ProposalInput = DraftConnectorInput | ReviseConnectorInput;
 export type AccountSubject = Extract<DiscoverySubject, { kind: 'source_account' }>;
@@ -95,7 +103,7 @@ export async function prepareProposalEvidence(
     if (!sourceRead.sourceWide && !granted.has(key)) return forbidden;
   }
 
-  const boundRefs = new Set(accountEvidenceIds(profile));
+  const boundRefs = [...new Set(accountEvidenceIds(profile))];
   const citations = new Set([...proposalCitationIds(input), ...retainedEvidenceIds]);
   for (const evidenceId of citations) {
     const read = (end: number) => prepare({ name: 'readEvidence', arguments: { evidenceId, range: { start: 0, end } } });
@@ -107,16 +115,22 @@ export async function prepareProposalEvidence(
         !sameFacts(prepared) || !facts.evidenceIds.includes(evidenceId)) return conflict;
   }
 
-  let identityUnresolved = accountSubjects.length === 0;
+  const profileKeys = new Set(accountSubjects.map(tupleKey));
+  const associatedByTuple = new Map<string, Set<string>>(
+    accountSubjects.map(subject => [tupleKey(subject), new Set<string>()]),
+  );
+  const qualifyingEntries = (sourceAccountId: string) => profile.approvedLookups
+    .filter(lookup => lookup.valueType === 'parent-account')
+    .flatMap(lookup => lookup.entries)
+    .filter(entry =>
+      entry.source === sourceAccountId && entry.target === profile.scope.accountId && entry.evidenceRefs.length > 0);
+
   for (const { sellerEntityId, sourceAccountId } of accountSubjects) {
-    const entries = profile.approvedLookups.filter(lookup => lookup.valueType === 'parent-account')
-      .flatMap(lookup => lookup.entries).filter(entry =>
-        entry.source === sourceAccountId && entry.target === profile.scope.accountId && entry.evidenceRefs.length > 0);
-    const missing = new Set([...boundRefs, ...entries.flatMap(entry => entry.evidenceRefs)]);
-    const associated = new Set<string>();
+    const associated = associatedByTuple.get(tupleKey({ sellerEntityId, sourceAccountId }))!;
+    const needed = new Set([...boundRefs, ...qualifyingEntries(sourceAccountId).flatMap(entry => entry.evidenceRefs)]);
     const cursors = new Set<string>();
     let afterEventId: string | undefined;
-    while (missing.size > 0) {
+    while (needed.size > 0) {
       const prepared = await prepare({
         name: 'querySnapshot', arguments: { account: { sellerEntityId, sourceAccountId }, limit: 25,
           ...(afterEventId === undefined ? {} : { afterEventId }) },
@@ -129,9 +143,8 @@ export async function prepareProposalEvidence(
           return conflict;
         }
         for (const id of evidenceIds) {
-          missing.delete(id);
           associated.add(id);
-          boundRefs.delete(id);
+          needed.delete(id);
         }
       }
       if (!result.nextAfterEventId) break;
@@ -139,9 +152,40 @@ export async function prepareProposalEvidence(
       cursors.add(result.nextAfterEventId);
       afterEventId = result.nextAfterEventId;
     }
+  }
+
+  const residual = new Set<string>();
+  for (const ref of boundRefs) {
+    if (![...associatedByTuple.values()].some(associated => associated.has(ref))) residual.add(ref);
+  }
+  for (const subject of accountSubjects) {
+    const associated = associatedByTuple.get(tupleKey(subject))!;
+    for (const entry of qualifyingEntries(subject.sourceAccountId)) {
+      for (const ref of entry.evidenceRefs) {
+        if (!associated.has(ref)) residual.add(ref);
+      }
+    }
+  }
+
+  if (residual.size > 0) {
+    const associations = await prepareDocumentAssociations(tools, { binding, sourceRead, facts }, residual);
+    if (!isDocumentAssociations(associations)) return associations;
+    for (const [evidenceId, subject] of associations) {
+      const key = tupleKey(subject);
+      if (!profileKeys.has(key)) continue;
+      associatedByTuple.get(key)!.add(evidenceId);
+    }
+  }
+
+  const boundUnresolved = boundRefs.some(ref =>
+    ![...associatedByTuple.values()].some(associated => associated.has(ref)));
+  let identityUnresolved = accountSubjects.length === 0;
+  for (const subject of accountSubjects) {
+    const associated = associatedByTuple.get(tupleKey(subject))!;
+    const entries = qualifyingEntries(subject.sourceAccountId);
     if (!entries.some(entry => entry.evidenceRefs.every(id => associated.has(id)))) identityUnresolved = true;
   }
 
   return { facts, contracts, streams, accountSubjects, diagnosticCodes:
-    identityUnresolved || boundRefs.size > 0 ? ['PROPOSAL_EVIDENCE_APPLICABILITY_UNRESOLVED'] : [] };
+    identityUnresolved || boundUnresolved ? ['PROPOSAL_EVIDENCE_APPLICABILITY_UNRESOLVED'] : [] };
 }
