@@ -2,7 +2,20 @@
 
 This checkpoint publishes completed local work, preserves separately committed candidates, and records remaining work. It is not acceptance of the complete demo. Machine checks, independent Astra review, and joint user acceptance remain distinct.
 
-**Latest:** authenticated financial attestation is integrated at `dbda672`. Combined typecheck, 339 unit tests, five focused PostgreSQL tests and full V0/V2 gates passed. The live demo retains the accepted terminology and original source/pin files. Agent findings and operator policy/publication are also integrated after review. Customer activation, live model construction and ongoing sync remain incomplete.
+**Latest:** authenticated parent reads are integrated at `ff0238c`. Combined typecheck, unit and focused PostgreSQL checks, and full V0/V2 gates passed. The running demo uses actual worker parent reads for both published customer scopes; both remain inactive, preview writes zero parent records, and all 253 original source/pin hashes are unchanged. Approval preparation is being implemented. Discovery proposals are undergoing a result-limit correction before acceptance. Customer activation, live model construction and ongoing sync remain incomplete.
+
+| PRD slice | Current status | Remaining acceptance |
+| --- | --- | --- |
+| V0 — Foundation | Implemented; machine gate passing | Final whole-workflow review |
+| V1 — Sources and evidence | Implemented; machine gate passing | Joint evidence review |
+| V2 — Preview and financial verification | Implemented; latest integrated gate passing | Joint preview acceptance |
+| V3 — Customer approval and activation | Parent reads and proof/storage prerequisites integrated; approval preparation active | Actual worker import, receipt recovery and reviewer flow |
+| V4 — Agent construction | Lifecycle, monitor, read tools and findings integrated; proposals under correction | Document applicability, compilation, provider and live checks |
+| V5 — Ongoing deterministic sync | Not operational | Bounded sync and cutover workflow |
+| V6 — Failure and recovery proof | Component protections tested | End-to-end sync/recovery verification |
+| V7 — Full demo | Incomplete | Two-company rehearsal and joint acceptance |
+
+Three of eight machine gates have passed; this is not a percentage estimate of completed effort.
 
 ## Published checkpoint (historical)
 
@@ -285,3 +298,14 @@ A2 `bc272a5127af0e288cc46ae7617f00de5ffee244` passed [independent review](review
 C1 corrected `aff21214ded3a59c1295bb1dc130079410106440` passed [fresh scoped review](reviews/b-discovery-findings-fix-review.md) and is integrated at `ae982dc230adffaa2ccf6d02b93c9151133e3407`. The [report](handoffs/b-discovery-findings-report.md) preserves four reproduced capacity failures and the 80-test focused regression. Findings remain pending agent interpretations; immutable revisions and sticky origins preserve unresolved evidence. Whole-batch projection now prevents earlier findings or children from committing before a later over-capacity delegation fails. Proposal tools and live model execution remain later checkpoints.
 
 Root combined `ae982dc` typecheck, seven focused construction/discovery/build tests and 29 PostgreSQL tests passed across findings and authenticated verification. These checks include control007 alongside existing control006 provenance.
+
+
+## Registered parent reads and recovery
+
+A3b corrected candidate `a24adcf75dfcd5d92236c0bede2845c1463515c3` passed [fresh scoped Astra review](reviews/b-parent-reads-fix-review.md), following the [initial review](reviews/b-parent-reads-independent-review.md). The [implementation report](handoffs/b-parent-reads-report.md) records actual worker/control HTTP reads, explicit scope publication, inactive version-zero views, real preview composition and recovery after failed candidate registration. It is integrated at `ff0238c194b529c24e4be0c9c0ef6fdf36421be3`. The integration conflict was documentation only.
+
+Root ran typecheck, unit tests, focused parent-read/composition/findings PostgreSQL checks, full V0 and full V2 successfully on the isolated 55433 lease. V0 packet: `.evidence/ff0238c194b529c24e4be0c9c0ef6fdf36421be3/V0/2026-11-09T07-09-22-180Z-98732/`. V2 packet: `.evidence/ff0238c194b529c24e4be0c9c0ef6fdf36421be3/V2/2026-11-09T07-09-28-337Z-99178/`, with 21 passing commands, ten hash-verified screenshots and no diagnostics. The V2 packet retains its slice limitations; persisted-parent behavior additionally has the dedicated parent-read checks and live smoke below.
+
+After a preserving restart, root selected the two exact candidates from the authenticated current catalog, resolved their registered captures and explicitly published only their scope metadata. No activation policy or customer authority was installed. Authenticated live reads returned version zero and null activation for both customers; preview returned 80000/0 cents and zero parent writes. Canonical before/after contents of all runtime tables were identical. All 253 historical source/pin file hashes remained unchanged. This was API smoke evidence, not a new manual browser review or joint acceptance.
+
+Accepted design handoffs now cover [approval preparation](handoffs/b-activation-review-handoff.md), its [receipt observation mirror](handoffs/b-activation-review-mirror-addendum.md), [worker activation](handoffs/b-worker-activation-handoff.md), and [discovery proposals](handoffs/b-discovery-proposals-handoff.md). These handoffs are not implementation claims. Control008 is reserved for approval/intents and the immutable receipt observation mirror. Actual worker receipts remain authoritative.
