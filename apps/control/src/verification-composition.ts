@@ -2,11 +2,11 @@ import { constants } from 'node:fs';
 import { access, lstat, mkdir, realpath } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { z } from 'zod';
-import type { Pool } from 'pg';
 import type { CandidateRegistration } from '@eapr/compiler/preview-adapters';
 import { HashSchema, IdSchema, strict, type Diagnostic } from '@eapr/contracts';
-import { createCandidateRegistry, createVerificationJobs } from '@eapr/evaluator/registry';
-import { createProtectedVerificationLauncher } from '@eapr/evaluator/verify';
+import { createCandidateRegistry } from '@eapr/evaluator/registry';
+import type { FinancialSourceDependencies } from './financial-capture.js';
+import { composeFinancialVerification, type FinancialVerificationRoots } from './financial-verification-composition.js';
 import { probeMigration, type MigrationIdentity } from '@eapr/storage/transaction';
 import type { createLocalSessionService } from './local-session.js';
 import { createVerificationPlugin } from './routes/verification.js';
@@ -66,16 +66,19 @@ export function createVerificationSelector(input: unknown, captures: readonly Ca
 export type LocalVerificationOptions = {
   pins: SafeVerificationPin[];
   registryRoot: string;
+  roots: FinancialVerificationRoots;
   expectedMigrations: readonly MigrationIdentity[];
 };
 
 export async function composeVerification(
-  db: Pool, options: LocalVerificationOptions, captures: readonly CaptureBinding[],
+  sources: FinancialSourceDependencies, options: LocalVerificationOptions, captures: readonly CaptureBinding[],
   authorizeReviewer: ReturnType<typeof createLocalSessionService>['authorizeReviewer'],
 ) {
+  if (options.pins.some(pin => pin.fixtureSetVersion !== '2')) throw new Error('Verification fixture version is unavailable');
+  const db = sources.dependencies.db;
   const select = createVerificationSelector(options.pins, captures);
   const migration = await probeMigration(db, options.expectedMigrations);
-  if (migration.status !== 'ready' || (migration.migrationVersion ?? 0) < 3) {
+  if (migration.status !== 'ready' || (migration.migrationVersion ?? 0) < 6) {
     throw new Error('Verification registry migration is unavailable');
   }
   const root = resolve(options.registryRoot);
@@ -87,7 +90,7 @@ export async function composeVerification(
   await access(root, constants.R_OK | constants.W_OK | constants.X_OK);
 
   const registry = createCandidateRegistry(db, root);
-  const jobs = createVerificationJobs(db, createProtectedVerificationLauncher(select));
+  const jobs = await composeFinancialVerification(sources, registry, options.roots, select);
   const plugin = createVerificationPlugin({
     registry, jobs,
     async authorizeVerification(request) {
