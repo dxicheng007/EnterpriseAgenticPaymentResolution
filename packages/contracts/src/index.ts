@@ -13,3 +13,6 @@ export * from './discovery.js';
 export * from './discovery-helpers.js';
 export * from './bootstrap-verification.js';
 export * from './bootstrap-verification-hash.js';
+export * from './activation-authority.js';
+export * from './activation-authority-hash.js';
+export * from './activation-bundle-v2.js';

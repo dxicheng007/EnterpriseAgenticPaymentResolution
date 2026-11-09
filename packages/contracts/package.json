@@ -5,6 +5,9 @@
   "exports": {
     ".": "./src/index.ts",
     "./bootstrap-verification": "./src/bootstrap-verification.ts",
-    "./bootstrap-verification-hash": "./src/bootstrap-verification-hash.ts"
+    "./bootstrap-verification-hash": "./src/bootstrap-verification-hash.ts",
+    "./activation-authority": "./src/activation-authority.ts",
+    "./activation-authority-hash": "./src/activation-authority-hash.ts",
+    "./activation-bundle-v2": "./src/activation-bundle-v2.ts"
   }
 }
