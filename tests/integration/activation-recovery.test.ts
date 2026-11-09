@@ -23,7 +23,22 @@ it('requires service authentication before a malformed receipt key can reach sto
       expect(invalid.statusCode).toBe(400);
       expect(invalid.headers['cache-control']).toBe('no-store');
     }
+    const hash = 'a'.repeat(64);
+    const query = new URLSearchParams({ companyId: 'co', sellerEntityId: 'seller', accountId: 'account',
+      expectedRequestHash: hash, expectedBundleHash: hash });
+    const valid = '/internal/receipts/' + 'x'.repeat(160) + '?' + query;
+    for (const suffix of ['&accountId=duplicate', '&unknown=1', '&accountId[]=value', '&unknown=%zz']) {
+      const malformed = await app.inject({ url: valid + suffix, headers: { authorization: 'Bearer worker-service' } });
+      expect(malformed.statusCode).toBe(400);
+    }
+    const invalidPost = await app.inject({
+      method: 'POST', url: '/internal/activate', headers: { 'content-type': 'application/json' }, payload: '{bad',
+    });
+    expect(invalidPost.statusCode).toBe(401);
     expect(reads).toBe(0);
+    const maximumLength = await app.inject({ url: valid, headers: { authorization: 'Bearer worker-service' } });
+    expect(maximumLength.statusCode).toBe(503);
+    expect(reads).toBe(1);
   } finally {
     await app.close();
   }

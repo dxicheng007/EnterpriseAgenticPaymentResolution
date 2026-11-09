@@ -32,3 +32,32 @@ it('rejects invalid authority without deriving eligibility from input flags', ()
   expect(() => validateActivationBundle({ verificationReport: { eligible: true } }, undefined))
     .toThrow('ACTIVATION_BUNDLE_MISMATCH');
 });
+
+it('bounds source responses, preserves upstream denial status, and forbids redirects', async () => {
+  let redirected = false;
+  let status = 403;
+  const server = createServer((request, response) => {
+    if (request.url === '/redirected') redirected = true;
+    response.statusCode = status;
+    if (status === 302) response.setHeader('location', '/redirected');
+    response.end(status === 200 ? ' '.repeat(257 * 1024) : '');
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  try {
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('No loopback address');
+    const read = createSourceSemanticsClient({
+      baseUrl: 'http://127.0.0.1:' + address.port, token: 'source-read-token', sourceRefs: ['source-a'],
+    });
+    for (const upstream of [403, 404, 302, 200]) {
+      status = upstream;
+      const statusCode = upstream === 403 || upstream === 404 ? upstream : 503;
+      await expect(read('source-a')).rejects.toMatchObject({ statusCode });
+    }
+    expect(redirected).toBe(false);
+  } finally {
+    server.close();
+    await once(server, 'close');
+  }
+});

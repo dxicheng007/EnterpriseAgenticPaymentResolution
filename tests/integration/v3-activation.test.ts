@@ -1,44 +1,30 @@
 import { createServer } from 'node:http';
+import { projectBootstrapTarget } from '@eapr/parent/bootstrap';
+import { lockImportIdentities } from '@eapr/parent/persistence';
 import { withTransaction } from '@eapr/storage/transaction';
 import { once } from 'node:events';
-import { mkdtemp, readFile, realpath, rm, writeFile, unlink } from 'node:fs/promises';
+import { mkdtemp, realpath, rm, writeFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import type { PoolClient } from 'pg';
 import { expect, test } from 'vitest';
-import { compile } from '@eapr/compiler/compile';
 import {
   ActivationStateV1Schema, ActivationTrustPolicyV1Schema, ParentViewSchema, ReceiptResponseSchema, SemanticPreflightSchema,
   LocalSessionResponseSchema, ReviewPackageSchema, canonicalJson, hashActivationTrustPolicy, hashBootstrapVerificationResult,
-  hashBundleV2, hashCanonical, hashFinancialAttestation, hashFinancialReport, hashFinancialReservation, hashPlan,
-  hashReviewPackage, hashTargetSnapshot, type ActivationBundleV2, type TargetState,
+  hashBundleV2, hashCanonical, hashEvent, hashManifest, hashFinancialAttestation, hashFinancialReport, hashFinancialReservation, hashPlan,
+  hashProfile, hashReviewPackage, hashTargetSnapshot, type ActivationBundleV2, type RawSourceEvent,
 } from '@eapr/contracts';
-import { createEvidenceStore } from '@eapr/evidence';
-import { fixtureA, fixtureB } from '../../packages/sources/src/canonical-fixtures.js';
-import { createSourceService } from '@eapr/sources';
+import { streamContentHash } from '@eapr/sources';
+import { aggregateHash } from '../../packages/sources/src/dossier.js';
+import { deriveFinancialCapture } from '../../packages/evaluator/src/financial-attestation-verify.js';
 import { createScenarioAdmin } from '../../packages/sources/src/scenario-admin.js';
-import { readFixedBootstrapBuildPins } from '@eapr/evaluator/bootstrap-launcher';
-import { createProtectedFinancialLauncher, readFixedFinancialBuildHash } from '@eapr/evaluator/financial-attestation-launcher';
-import { createFinancialAttestationRegistry } from '@eapr/evaluator/financial-attestation-registry';
-import { createCandidateRegistry } from '@eapr/evaluator/registry';
-import { loadActivationPolicy } from '@eapr/storage/activation-policy';
-import { createRegisteredScopeReader } from '@eapr/storage/activation-registry';
-import { createRegisteredScopePublication } from '../../apps/control/src/activation-publication.js';
-import { createLocalComposition, localSourceCatalog } from '../../apps/control/src/composition.js';
-import { buildDemoCandidate } from '../../apps/control/src/demo-candidates.js';
-import { createFinancialCaptureReader } from '../../apps/control/src/financial-capture.js';
-import type { BootstrapExpectationReview } from '../../packages/evaluator/src/bootstrap-fixtures.js';
-import { decodeEvidenceProducer, type EvidenceFixtureInput } from '../../packages/evaluator/src/evidence-fixtures.js';
-import { pinProtectedEvidenceFixture } from '../../packages/evaluator/src/fixture-store.js';
+import { createRegisteredScopeReader, publishActivationBundle, publishRegisteredScopeMembers, readActivationBundle } from '@eapr/storage/activation-registry';
+import { createLocalComposition } from '../../apps/control/src/composition.js';
 import { createControlDb } from '../../packages/storage/src/control-db.js';
 import { createRuntimeDb } from '../../packages/storage/src/runtime-db.js';
-import { generateFixtures } from '../../scripts/generate-fixtures.js';
 import { migrate, migrationIdentities, migrationStreams, readMigrationCatalog } from '../../scripts/migrate.js';
 import { dropTest, localPort, provisionTest, startNativeDb } from '../../scripts/native-db.js';
-import { prepareAndPublishActivationPolicy } from '../../scripts/prepare-activation-policy.js';
-import { prepareBootstrapVerification } from '../../scripts/prepare-bootstrap-verification.js';
-import { captureEvidenceFixture } from '../fixtures/evidence-v2-capture.js';
+import { activationCutover as asOf, issueActivationProofs, verifyOriginals } from '../fixtures/activation-proof.js';
 import { testNamespace } from '../fixtures/harness.js';
 import { createWorkerClient, launchControl } from '../../apps/control/src/server.js';
 import { createParentReadClient } from '../../apps/control/src/parent-read-client.js';
@@ -48,24 +34,8 @@ import { launchWorker } from '../../apps/worker/src/server.js';
 
 import { composeWorkerActivation } from '../../apps/worker/src/activation-composition.js';
 import { createActivationWorkerClient } from '../../apps/control/src/activation-worker-client.js';
-import { publishActivationBundle } from '@eapr/storage/activation-registry';
-
-const asOf = '2026-10-01T00:00:00.000Z';
-const fixtureSeed = 'activation-policy';
-
-function verifyOriginals(target: TargetState, company: 'a' | 'b') {
-  const fixture = company === 'a' ? fixtureA(fixtureSeed, asOf) : fixtureB(fixtureSeed, asOf);
-  const expected = fixture.records.filter(record => record.sourceAccountId === fixture.accounts[0]!.accountId)
-    .map(({ sourceAccountId: _account, recordId, effectiveDate, ...facts }) => ({
-      ...facts, recordId, effectiveAt: effectiveDate + 'T00:00:00.000Z',
-    })).sort((a, b) => a.recordId.localeCompare(b.recordId));
-  const actual = [...target.invoices, ...target.payments, ...target.credits, ...target.allocations].map(
-    ({ id: _id, identity, scope: _scope, currency: _currency, sourceEventId: _eventId,
-      sourceRecordVersion: _version, ...facts }) => ({ ...facts, recordId: identity.recordId }),
-  ).sort((a, b) => a.recordId.localeCompare(b.recordId));
-  expect(actual).toEqual(expected);
-  expect(target.reversals).toEqual([]);
-}
+import { createWorkerActivation } from '../../apps/worker/src/activation.js';
+import { createWorkerActivationPlugin } from '../../apps/worker/src/routes/activation.js';
 
 test('activates one approved customer from real A and B proofs and recovers the authoritative receipt', async () => {
   const root = await mkdtemp(join(await realpath(tmpdir()), 'eapr-activation-setup-'));
@@ -85,113 +55,18 @@ test('activates one approved customer from real A and B proofs and recovers the 
           'SELECT to_jsonb(t) FROM public.' + name + ' t ORDER BY to_jsonb(t)',
         )).rows));
       };
-      const before = await runtimeState();
-      const visibleRoot = join(root, 'visible');
-      const truthRoot = join(root, 'truth');
-      const storeRoot = join(root, 'originals');
-      const registryRoot = join(root, 'registry');
-      const policyRoot = join(root, 'policy');
-      const policyPath = join(policyRoot, 'current.json');
-      const bootstrapRoots = {
-        sidecarRoot: join(root, 'bootstrap'), evidencePinRoot: join(root, 'evaluator'),
-        servedRoots: [visibleRoot, storeRoot, registryRoot],
-      };
-      const store = await createEvidenceStore(storeRoot);
-      const dependencies = { db, store, clock: () => new Date('2026-11-08T00:00:00.000Z') };
-      const service = createSourceService(dependencies, localSourceCatalog);
-      const candidates = createCandidateRegistry(db, registryRoot);
-      const financialRegistry = createFinancialAttestationRegistry(db, candidates);
-      const captureReader = createFinancialCaptureReader({ dependencies, service, catalog: localSourceCatalog, registry: candidates });
-      const publishScopes = createRegisteredScopePublication({ registryRoot, candidates }).publishRegisteredScopes;
-      const scopeReader = createRegisteredScopeReader({ registryRoot });
-      await expect(scopeReader.readSnapshot()).rejects.toThrow('REGISTERED_SCOPE_UNAVAILABLE');
-      await generateFixtures({ seed: fixtureSeed, asOf, visibleRoot, truthRoot });
-      const evaluatorBuildHash = await readFixedFinancialBuildHash();
-
-      async function issue(company: 'a' | 'b') {
-        const { input, source, contractFileId } = await captureEvidenceFixture(dependencies, { visibleRoot, truthRoot }, company);
-        const launcher = createProtectedFinancialLauncher({ registry: candidates, roots: {
-          evidencePinRoot: bootstrapRoots.evidencePinRoot, servedRoots: bootstrapRoots.servedRoots,
-        } });
-        const { manifest, snapshot, events } = input;
-        const citation = input.citations.find(item => item.evidence.sourceId === contractFileId &&
-          item.evidence.locator.kind === 'pdf' && item.evidence.locator.page === 1);
-        const built = buildDemoCandidate({
-          source, capture: { companyId: source.companyId, manifestId: manifest.id, contractFileId },
-          manifest, snapshot, events, citation,
-        });
-        if (!('candidate' in built) || !citation) throw new Error('Expected captured agreement and candidate');
-        const { spec, profiles } = built.candidate.request;
-        const [profile] = profiles;
-        const compiled = compile(spec, profiles);
-        if (!compiled.ok || !profile?.bootstrap) throw new Error('Expected a metadata-bearing compiled candidate');
-        const artifact = compiled.value;
-        await candidates.registerCandidate({ spec, profiles, artifact, manifest, snapshot });
-        const selection = { artifactHash: artifact.hash, manifestId: manifest.id, selectedProfileHash: profile.hash };
-        await publishScopes([selection]);
-        const scopes = await scopeReader.readSnapshot();
-        expect(scopes.resolveRegisteredScope(profile.scope.accountId)?.profile).toEqual(profile);
-        expect(scopes.resolveRegisteredScope('unknown')).toBeNull();
-
-        async function issueProof(fixture: EvidenceFixtureInput, suffix: string) {
-          const producer = decodeEvidenceProducer(fixture.producerJson);
-          const identity = producer.identities.find(item => item.sourceAccountId === profile!.sourceAccountIds[0])!;
-          const term = producer.contracts.find(item => item.sourceAccountId === identity.sourceAccountId)!;
-          await pinProtectedEvidenceFixture(fixture, pathToFileURL(bootstrapRoots.evidencePinRoot + '/'));
-          const capture = await captureReader.readCapture(selection);
-          const jobId = 'activation-policy:' + company + ':' + suffix;
-          const probe = await launcher.probe({
-            protocolVersion: 'financial-attestation-probe-1', jobId, capture, evaluatorBuildHash,
-            selection: { fixtureSetId: producer.fixtureSetId, fixtureSetVersion: '2', purpose: 'construction',
-              snapshotHash: snapshot.contentHash },
-          });
-          const review: BootstrapExpectationReview = {
-            fixtureSetId: producer.fixtureSetId, fixtureSetVersion: 'bootstrap-v1', evidencePin: probe.evidencePin,
-            subjects: [{
-              profileHash: profile!.hash, profileId: profile!.id, scope: profile!.scope, identityFactId: identity.id,
-              customerId: identity.buyerId, customerEvidenceRefs: [citation!.evidence.id],
-              terms: profile!.bootstrap!.billingConfigurationIds.map(({ termId, id }) => ({
-                factId: term.id, termId, configurationId: id, evidenceRefs: [citation!.evidence.id],
-              })),
-            }],
-          };
-          const pin = await prepareBootstrapVerification(candidates, service, { ...selection, review }, bootstrapRoots);
-          const reservation = {
-            schemaVersion: '1', jobId, issuerId: 'eapr-control-registry-1', runnerId: 'eapr-financial-1',
-            protocolVersion: '1', harnessVersion: '1', purpose: 'construction', evaluatorBuildHash,
-            artifactHash: artifact.hash, requiredProfileHashes: artifact.requiredProfileHashes,
-            capture: probe.capture, evidencePin: probe.evidencePin,
-          } as const;
-          await financialRegistry.reserve({
-            protocolVersion: 'financial-attestation-1', jobId, capture,
-            reservation: { ...reservation, hash: hashFinancialReservation(reservation) },
-          });
-          const request = await financialRegistry.start(jobId);
-          const { report } = await financialRegistry.complete(jobId, await launcher.launch(request));
-          expect(report.eligible).toBe(true);
-          return {
-            selection: { ...selection, financialReportId: report.id, bootstrapFixture: {
-              fixtureSetId: pin.fixtureSetId, fixtureSetVersion: pin.fixtureSetVersion, fixtureHash: pin.hash,
-            } },
-            report, request, evidencePin: probe.evidencePin,
-          };
+      const clearRuntimeFixtures = async () => {
+        const owner = createRuntimeDb({ connectionString: pair.runtime.migrationUrl });
+        try {
+          // Fixture cleanup stays inside this test's randomized, disposable database.
+          await owner.query('TRUNCATE parent_scopes CASCADE');
+        } finally {
+          await owner.end();
         }
-
-        const first = await issueProof(input, 'first');
-        return { ...first, accountId: profile.scope.accountId, sourceRef: manifest.sourceRef, capture: { companyId: source.companyId, manifestId: manifest.id, contractFileId } };
-      }
-
-      const a = await issue('a');
-      const b = await issue('b');
-
-      const selection = { policyId: 'review-policy', entries: [a.selection, b.selection] };
-      await prepareAndPublishActivationPolicy({
-        candidates, captureReader, financialRegistry, bootstrapRoots,
-        readFinancialBuildHash: readFixedFinancialBuildHash, readBootstrapBuildPins: readFixedBootstrapBuildPins,
-      }, selection, { policyRoot, install: true });
-      const policyBytes = await readFile(policyPath);
-      const selectionPath = join(root, 'selection.json');
-      await writeFile(selectionPath, canonicalJson(selection), { mode: 0o600 });
+      };
+      const before = await runtimeState();
+      const { a, b, candidates, dependencies, registryRoot, scopeReader, bootstrapRoots, policyPath, policyBytes, selectionPath } =
+        await issueActivationProofs(root, db);
       const workerPort = localPort('EAPR_WORKER_PORT', 3002);
       const controlPort = localPort('EAPR_CONTROL_PORT', 3001);
       const webOrigin = 'http://127.0.0.1:' + localPort('EAPR_WEB_PORT', 5173);
@@ -200,6 +75,7 @@ test('activates one approved customer from real A and B proofs and recovers the 
       const serviceToken = 'integration-service-token';
       const sourceReadToken = 'integration-source-read-token';
       const clock = () => new Date();
+      const workerClock = () => new Date('2026-11-09T08:00:00.000Z');
       const migrations = readMigrationCatalog();
       type SourceReply = { status: number; body: string };
       let sourceIntercept: ((reply: SourceReply) => Promise<SourceReply>) | undefined;
@@ -225,6 +101,7 @@ test('activates one approved customer from real A and B proofs and recovers the 
       const sourceOrigin = 'http://127.0.0.1:' + sourceAddress.port;
       type SqlFault = { write: RegExp; states: string[] };
       let fault: SqlFault | undefined;
+      let duringQuery: ((sql: string, values: unknown[] | undefined) => void) | undefined;
       const transactions: { client: PoolClient; sql: string[] }[] = [];
       const instrumentedRuntime = new Proxy(runtime, {
         get(pool, property) {
@@ -239,7 +116,9 @@ test('activates one approved customer from real A and B proofs and recovers the 
                     transactions.push(transaction);
                   }
                   transaction?.sql.push(sql);
-                  const result = await connection.query(sql, values);
+                  const pending = connection.query(sql, values);
+                  duringQuery?.(sql, values);
+                  const result = await pending;
                   if (transaction && fault?.write.test(sql)) {
                     const state = fault.states.shift();
                     if (state) await connection.query("DO $$ BEGIN RAISE EXCEPTION 'injected test fault' USING ERRCODE = '" + state + "'; END $$");
@@ -257,7 +136,7 @@ test('activates one approved customer from real A and B proofs and recovers the 
         },
       });
       const startWorker = () => launchWorker({
-        db: instrumentedRuntime, clock, serviceToken, expectedMigrations: migrationIdentities(migrations.runtime),
+        db: instrumentedRuntime, clock: workerClock, serviceToken, expectedMigrations: migrationIdentities(migrations.runtime),
         featurePlugins: [
           composeWorkerParentReads(registryRoot),
           composeWorkerActivation({ registryRoot, policyPath, sourceOrigin, sourceReadToken, sourceRefs: [a.sourceRef, b.sourceRef] }),
@@ -349,8 +228,10 @@ test('activates one approved customer from real A and B proofs and recovers the 
         await operator.semanticChangeA(operatorToken, {
           ...scenario, id: 'unrelated-revision', accountId: 'unrelated-account', revision: 'other-v2',
         });
+        const selectedSourceAccount = (await scopeReader.readSnapshot())
+          .resolveRegisteredScope(a.accountId)!.profile.sourceAccountIds[0]!;
         await operator.freshInvoiceA(operatorToken, {
-          ...scenario, id: 'unrelated-financial-event', accountId: 'unrelated-account',
+          ...scenario, id: 'ordinary-financial-event', accountId: selectedSourceAccount,
           amount: '5.00', dueDate: '2026-10-31', semanticVersion: 'financial-only',
         });
 
@@ -373,6 +254,18 @@ test('activates one approved customer from real A and B proofs and recovers the 
         expect((await strictPost({ ...dispatch, bundleHash: '../../protected' }, 'Bearer ' + serviceToken)).status).toBe(400);
         expect((await strictPost({ ...dispatch, reviewer: intent.reviewer }, 'Bearer ' + serviceToken)).status).toBe(400);
 
+        const forgedIssuer = {
+          ...intent.bundle, request: { ...intent.request, idempotencyKey: 'forged-issuer' },
+          authorityPolicy: { ...intent.bundle.authorityPolicy, issuerId: 'self-issued' },
+        };
+        forgedIssuer.hash = hashCanonical(forgedIssuer);
+        const issuerBytes = Buffer.from(canonicalJson(forgedIssuer));
+        await expect(publishActivationBundle({ registryRoot }, forgedIssuer.hash, issuerBytes))
+          .rejects.toThrow('ACTIVATION_BUNDLE_MISMATCH');
+        await writeFile(join(bundleDirectory, forgedIssuer.hash + '.json'), issuerBytes, { mode: 0o600 });
+        await expect(activationWorker.activate({
+          idempotencyKey: forgedIssuer.request.idempotencyKey, bundleHash: forgedIssuer.hash,
+        })).rejects.toMatchObject({ code: 'ACTIVATION_BUNDLE_MISMATCH' });
         const installed = ActivationTrustPolicyV1Schema.parse(JSON.parse(policyBytes.toString('utf8')));
         const [aEntry] = installed.entries.filter(entry => entry.selectedProfileHash === approval.expectedProfileHash);
         const bEntry = installed.entries.find(entry => entry.selectedProfileHash !== approval.expectedProfileHash)!;
@@ -390,6 +283,14 @@ test('activates one approved customer from real A and B proofs and recovers the 
           await publishActivationBundle({ registryRoot }, draft.hash, Buffer.from(canonicalJson(draft)));
           return activationWorker.activate({ idempotencyKey: label, bundleHash: draft.hash });
         };
+        const resealPlan = (draft: ActivationBundleV2) => {
+          draft.previewPlan.hash = hashPlan(draft.previewPlan);
+          draft.reviewPackage.previewPlanHash = draft.previewPlan.hash;
+          draft.reviewPackage.hash = hashReviewPackage(draft.reviewPackage);
+          draft.request.expectedPackageHash = draft.reviewPackage.hash;
+          draft.bootstrapVerification.planHash = draft.previewPlan.hash;
+          draft.bootstrapVerification.hash = hashBootstrapVerificationResult(draft.bootstrapVerification);
+        };
         const malformed: [string, string, (draft: ActivationBundleV2) => void][] = [
           ['financial-eligible-self-hash', 'FINANCIAL_ATTESTATION_MISMATCH', draft => {
             draft.verificationReport.checks.pop();
@@ -404,6 +305,40 @@ test('activates one approved customer from real A and B proofs and recovers the 
             resealFinancial(draft);
           }],
           ['partial-capture', 'ACTIVATION_BUNDLE_MISMATCH', draft => { draft.bootstrapEvents.pop(); }],
+          ['partial-profile-set', 'ACTIVATION_BUNDLE_MISMATCH', draft => { draft.profiles = []; }],
+          ['wrong-financial-build', 'ACTIVATION_POLICY_MISMATCH', draft => {
+            const other = bEntry.financial.evaluatorBuildHash === draft.verificationReport.evaluatorBuildHash
+              ? hashCanonical('another build') : bEntry.financial.evaluatorBuildHash;
+            draft.verificationReport.evaluatorBuildHash = other;
+            draft.financialAttestation.reservation.evaluatorBuildHash = other;
+            resealFinancial(draft);
+          }],
+          ['wrong-bootstrap-descriptor', 'ACTIVATION_POLICY_MISMATCH', draft => {
+            draft.bootstrapVerification.pin.fixtureHash = draft.financialAttestation.reservation.evidencePin.bundleHash;
+            draft.bootstrapVerification.hash = hashBootstrapVerificationResult(draft.bootstrapVerification);
+          }],
+          ['unavailable-bootstrap', 'BOOTSTRAP_VERIFICATION_MISMATCH', draft => {
+            const proof = draft.bootstrapVerification;
+            proof.planHash = null;
+            proof.passed = false;
+            proof.assertions = proof.assertions.map(item => ({ ...item, status: 'unavailable', caseIds: [] }));
+            proof.cases = proof.cases.map(item => ({ ...item, status: 'unavailable' }));
+            proof.hash = hashBootstrapVerificationResult(proof);
+          }],
+          ['metadata-tampered', 'REVIEW_NOT_READY', draft => {
+            const operation = draft.previewPlan.operations.find(item => item.op === 'ensure_customer')!;
+            operation.record.displayName = 'Changed Name';
+            resealPlan(draft);
+          }],
+          ['operation-order-tampered', 'REVIEW_NOT_READY', draft => {
+            draft.previewPlan.operations.reverse();
+            resealPlan(draft);
+          }],
+          ['ensure-only', 'REVIEW_NOT_READY', draft => {
+            draft.previewPlan.operations = draft.previewPlan.operations.filter(item => !('identity' in item.record));
+            draft.previewPlan.eventIds = [];
+            resealPlan(draft);
+          }],
           ['wrong-financial-pin', 'ACTIVATION_POLICY_MISMATCH', draft => {
             draft.financialAttestation.reservation.evidencePin.bundleHash = hashCanonical('different evidence pin');
             resealFinancial(draft);
@@ -418,18 +353,152 @@ test('activates one approved customer from real A and B proofs and recovers the 
           }],
           ['lineage-tampered', 'REVIEW_NOT_READY', draft => {
             draft.previewPlan.lineage.reverse();
-            draft.previewPlan.hash = hashPlan(draft.previewPlan);
-            draft.reviewPackage.previewPlanHash = draft.previewPlan.hash;
-            draft.reviewPackage.hash = hashReviewPackage(draft.reviewPackage);
-            draft.request.expectedPackageHash = draft.reviewPackage.hash;
-            draft.bootstrapVerification.planHash = draft.previewPlan.hash;
-            draft.bootstrapVerification.hash = hashBootstrapVerificationResult(draft.bootstrapVerification);
+            resealPlan(draft);
           }],
         ];
         expect(aEntry).toBeTruthy();
         for (const [label, code, change] of malformed) {
           await expect(forged(label, change), label).rejects.toMatchObject({ code });
           expect(await runtimeState(), label).toEqual(before);
+        }
+
+        // The competing transaction stands in for a runtime writer with a different account alias.
+        // It inserts the same original identity under the same global locks as A5 before releasing them.
+        const original = intent.bundle.previewPlan.operations.find(operation => operation.op === 'insert_invoice')!.record;
+        const alias = { ...original.scope, accountId: 'economic-alias' };
+        const aliasRecord = { ...original, scope: alias, sourceEventId: 'alias-event', sourceRecordVersion: original.sourceRecordVersion + 1 };
+        const aliasKey = [alias.accountId, alias.companyId, alias.sellerEntityId];
+        const aliasLocked = Promise.withResolvers<void>();
+        const releaseAlias = Promise.withResolvers<void>();
+        const competingWriter = withTransaction(runtime, async client => {
+          await client.query('INSERT INTO parent_scopes VALUES ($1,$2,$3)', aliasKey);
+          await lockImportIdentities(client, [aliasRecord.identity], []);
+          await client.query(
+            `INSERT INTO parent_financial_records
+             (account_id, company_id, seller_entity_id, source_ref, kind, source_record_id, record_id,
+              source_record_version, event_id, canonical, digest) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+            [...aliasKey, aliasRecord.identity.sourceRef, aliasRecord.kind, aliasRecord.identity.recordId, aliasRecord.id,
+              aliasRecord.sourceRecordVersion, aliasRecord.sourceEventId, canonicalJson(aliasRecord), hashCanonical(aliasRecord)],
+          );
+          aliasLocked.resolve();
+          await releaseAlias.promise;
+        });
+        await Promise.race([aliasLocked.promise, competingWriter]);
+        const awaitingEconomicLock = Promise.withResolvers<void>();
+        const lockId = (await runtime.query<{ lock_id: string }>(
+          'SELECT hashtextextended($1, 0) AS lock_id', [canonicalJson(['parent-economic', original.identity])],
+        )).rows[0]!.lock_id;
+        const otherLockId = (await runtime.query<{ lock_id: string }>(
+          'SELECT hashtextextended($1, 0) AS lock_id', [canonicalJson(['parent-record', original.id])],
+        )).rows[0]!.lock_id;
+        duringQuery = (sql, values) => {
+          if (sql.includes('pg_advisory_xact_lock') && [lockId, otherLockId].includes(String(values?.[0]))) awaitingEconomicLock.resolve();
+        };
+        const collidingWorker = activationWorker.activate(dispatch);
+        try {
+          await Promise.race([awaitingEconomicLock.promise, collidingWorker.then(() => { throw new Error('Worker skipped global lock'); })]);
+          expect(await runtimeState()).toEqual(before);
+        } finally {
+          releaseAlias.resolve();
+          await competingWriter;
+          duringQuery = undefined;
+        }
+        await expect(collidingWorker).resolves.toEqual({ status: 'pending' });
+        expect((await runtime.query('SELECT account_id FROM parent_financial_records')).rows).toEqual([{ account_id: alias.accountId }]);
+        expect((await runtime.query('SELECT * FROM runtime_activation_imports')).rowCount).toBe(0);
+        await clearRuntimeFixtures();
+        expect(await runtimeState()).toEqual(before);
+
+        const replayOnlyTarget = {
+          ...projectBootstrapTarget({
+            scope: original.scope, version: 0, asOf, invoices: [], payments: [], credits: [], allocations: [],
+            reversals: [], customers: [], accounts: [], billingConfigurations: [],
+          }, intent.bundle.previewPlan.operations),
+          version: 1,
+        };
+        const replayScope = replayOnlyTarget.scope;
+        const replayKey = [replayScope.accountId, replayScope.companyId, replayScope.sellerEntityId];
+        const replayTargetHash = hashTargetSnapshot(replayOnlyTarget);
+        await withTransaction(runtime, async client => {
+          await client.query('INSERT INTO parent_scopes VALUES ($1,$2,$3)', replayKey);
+          await client.query('INSERT INTO parent_snapshots VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+            [...replayKey, 1, replayTargetHash, asOf, canonicalJson(replayOnlyTarget), hashCanonical(replayOnlyTarget)]);
+          await client.query('INSERT INTO parent_targets VALUES ($1,$2,$3,$4,$5)', [...replayKey, 1, replayTargetHash]);
+        });
+        const beforeReplayOnly = await runtimeState();
+        await expect(forged('replay-only-target', draft => {
+          draft.previewPlan.expectedTargetVersion = 1;
+          draft.reviewPackage.expectedTargetVersion = 1;
+          draft.request.expectedTargetVersion = 1;
+          draft.bootstrapVerification.binding.expectedTargetVersion = 1;
+          draft.bootstrapVerification.binding.targetSnapshotHash = replayTargetHash;
+          resealPlan(draft);
+        })).rejects.toMatchObject({ code: 'REVIEW_NOT_READY' });
+        expect(await runtimeState()).toEqual(beforeReplayOnly);
+        await clearRuntimeFixtures();
+        expect(await runtimeState()).toEqual(before);
+
+        // Deliberately reseal an altered capture under a test-only policy to reach the worker's independent
+        // planner guard. The original issued A/B bundles remain the only successful subjects.
+        const selectedProfile = intent.bundle.profiles.find(item => item.hash === intent.request.expectedProfileHash)!;
+        for (const [label, change] of [
+          ['selected-blocker', (event: RawSourceEvent) => { event.payload.amount = 'unsupported-money'; }],
+          ['source-wide-blocker', (event: RawSourceEvent) => { delete event.rawIdentity.sourceAccountId; }],
+        ] as const) {
+          const draft = structuredClone(intent.bundle);
+          draft.request.idempotencyKey = label;
+          const selected = draft.bootstrapEvents.find(event => event.id === original.sourceEventId)!;
+          change(selected);
+          selected.contentHash = hashEvent(selected);
+          const { manifest, snapshot, bootstrapEvents } = draft;
+          const events = new Map(bootstrapEvents.map(event => [event.id, event]));
+          for (const stream of manifest.streams) {
+            stream.snapshotHash = streamContentHash(manifest.sourceRef, stream.streamId, stream.resumeAfter,
+              stream.eventIds.map(id => events.get(id)!));
+          }
+          manifest.hash = hashManifest(manifest);
+          snapshot.contentHash = aggregateHash(manifest, snapshot.eventIds, snapshot.evidenceIds);
+          const capture = deriveFinancialCapture({
+            artifact: draft.artifact, profiles: draft.profiles, manifest, snapshot, events: bootstrapEvents,
+          });
+          draft.financialAttestation.reservation.capture = capture;
+          draft.verificationReport.manifestHash = manifest.hash;
+          draft.reviewPackage.manifestHash = manifest.hash;
+          Object.assign(draft.bootstrapVerification.binding, {
+            manifestHash: manifest.hash, snapshotHash: capture.snapshotHash, eventsHash: capture.eventsHash,
+          });
+          resealPlan(draft);
+          resealFinancial(draft);
+          const synthetic = { ...installed, entries: [{ ...aEntry!, capture }] };
+          const policy = { ...synthetic, hash: hashActivationTrustPolicy(synthetic) };
+          draft.authorityPolicy.policyHash = policy.hash;
+          draft.hash = hashBundleV2(draft);
+          const blockerRoot = join(root, label);
+          const blockerPolicy = join(blockerRoot, 'current.json');
+          await publishRegisteredScopeMembers({ registryRoot: blockerRoot }, [{
+            entry: { accountId: a.accountId, scope: selectedProfile.scope, profileHash: selectedProfile.hash,
+              manifestId: manifest.id, manifestHash: manifest.hash, manifestAsOf: manifest.asOf },
+            profile: selectedProfile, manifest,
+          }]);
+          await writeFile(blockerPolicy, canonicalJson(policy), { mode: 0o600 });
+          await publishActivationBundle({ registryRoot: blockerRoot }, draft.hash, Buffer.from(canonicalJson(draft)));
+          const blockerWorker = await launchWorker({
+            db: instrumentedRuntime, clock: workerClock, serviceToken, expectedMigrations: migrationIdentities(migrations.runtime),
+            featurePlugins: [composeWorkerActivation({
+              registryRoot: blockerRoot, policyPath: blockerPolicy, sourceOrigin, sourceReadToken, sourceRefs: [a.sourceRef],
+            })],
+          }, 0);
+          try {
+            const address = blockerWorker.server.address();
+            if (!address || typeof address === 'string') throw new Error('No blocker test listener');
+            const client = createActivationWorkerClient('http://127.0.0.1:' + address.port, serviceToken);
+            const previousAttempts = transactions.length;
+            await expect(client.activate({ bundleHash: draft.hash, idempotencyKey: label })).rejects.toMatchObject({ code: 'REVIEW_NOT_READY' });
+            expect(transactions).toHaveLength(previousAttempts + 1);
+          } finally {
+            await blockerWorker.close();
+          }
+          expect(await runtimeState()).toEqual(before);
         }
 
         const sourceObservation = (original: SourceReply) => SemanticPreflightSchema.parse(JSON.parse(original.body));
@@ -474,6 +543,24 @@ test('activates one approved customer from real A and B proofs and recovers the 
           expect(fault.states, write.source).toEqual([]);
           expect(await runtimeState(), write.source).toEqual(before);
         }
+        const emptyRecorded = {
+          scope: original.scope, version: 0, asOf: '2026-09-30T00:00:00.000Z',
+          invoices: [], payments: [], credits: [], allocations: [], reversals: [], customers: [], accounts: [], billingConfigurations: [],
+        };
+        const recordedHash = hashTargetSnapshot(emptyRecorded);
+        await withTransaction(runtime, async client => {
+          await client.query('INSERT INTO parent_scopes VALUES ($1,$2,$3)', replayKey);
+          await client.query('INSERT INTO parent_snapshots VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+            [...replayKey, 0, recordedHash, emptyRecorded.asOf, canonicalJson(emptyRecorded), hashCanonical(emptyRecorded)]);
+          await client.query('INSERT INTO parent_targets VALUES ($1,$2,$3,$4,$5)', [...replayKey, 0, recordedHash]);
+        });
+        const beforePointerUpdate = await runtimeState();
+        fault = { write: /UPDATE parent_targets/, states: ['23514'] };
+        await expect(activationWorker.activate(dispatch)).resolves.toEqual({ status: 'pending' });
+        expect(fault.states).toEqual([]);
+        expect(await runtimeState()).toEqual(beforePointerUpdate);
+        await clearRuntimeFixtures();
+        expect(await runtimeState()).toEqual(before);
         fault = { write: /INSERT INTO runtime_activation_imports/, states: ['40001', '40P01', '40001'] };
         transactions.length = 0;
         const readsBeforeRetries = sourceReads;
@@ -488,6 +575,47 @@ test('activates one approved customer from real A and B proofs and recovers the 
           expect(sql.at(-1)).toBe('ROLLBACK');
         }
         expect(await runtimeState()).toEqual(before);
+        const wrongPolicyEntered = Promise.withResolvers<void>();
+        const releaseWrongPolicy = Promise.withResolvers<void>();
+        const wrongPolicy = { ...installed, policyId: 'other-worker-policy' };
+        const otherRuntime = new Proxy(runtime, {
+          get(pool, property) {
+            if (property === 'connect') return async () => {
+              const client = await pool.connect();
+              return new Proxy(client, {
+                get(connection, member) {
+                  if (member === 'query') return async (sql: string, values?: unknown[]) => {
+                    const result = await connection.query(sql, values);
+                    if (sql.includes('FROM runtime_activation_imports WHERE account_id') && !result.rowCount) {
+                      wrongPolicyEntered.resolve();
+                      await releaseWrongPolicy.promise;
+                    }
+                    return result;
+                  };
+                  const value: unknown = Reflect.get(connection, member);
+                  return typeof value === 'function' ? value.bind(connection) : value;
+                },
+              }) satisfies PoolClient;
+            };
+            const value: unknown = Reflect.get(pool, property);
+            return typeof value === 'function' ? value.bind(pool) : value;
+          },
+        });
+        const otherService = createWorkerActivation({
+          db: otherRuntime, clock, registered: scopeReader,
+          policy: { ...wrongPolicy, hash: hashActivationTrustPolicy(wrongPolicy) },
+          readBundle: hash => readActivationBundle({ registryRoot }, hash),
+          async observe() { throw new Error('Invalid policy must stop before source observation'); },
+        });
+        const otherWorker = await launchWorker({
+          db: runtime, clock, serviceToken, expectedMigrations: migrationIdentities(migrations.runtime),
+          featurePlugins: [createWorkerActivationPlugin(otherService, serviceToken)],
+        }, 0);
+        const otherAddress = otherWorker.server.address();
+        if (!otherAddress || typeof otherAddress === 'string') throw new Error('No competing worker listener');
+        const otherClient = createActivationWorkerClient('http://127.0.0.1:' + otherAddress.port, serviceToken);
+        const policyPeerResponse = otherClient.activate(dispatch);
+        await Promise.race([wrongPolicyEntered.promise, policyPeerResponse.then(() => { throw new Error('Expected held inactive-scope read'); })]);
         fault = { write: /INSERT INTO runtime_activation_imports/, states: ['40001', '40P01'] };
         const preflightEntered = Promise.withResolvers<void>();
         const failPreflight = Promise.withResolvers<void>();
@@ -514,6 +642,13 @@ test('activates one approved customer from real A and B proofs and recovers the 
         } finally {
           failPreflight.resolve();
           finishMatchingPreflight.resolve();
+          releaseWrongPolicy.resolve();
+        }
+        let policyReplay;
+        try {
+          policyReplay = await policyPeerResponse;
+        } finally {
+          await otherWorker.close();
         }
         const [peer, matchingPeer] = await Promise.all([peerResponse, matchingPeerResponse]);
         const responses = await Promise.all([applied, peer, matchingPeer].map(async response => {
@@ -527,6 +662,8 @@ test('activates one approved customer from real A and B proofs and recovers the 
         const [first] = responses;
         expect(new Set(responses.map(response => canonicalJson(response.receipt))).size).toBe(1);
         const receipt = first!.receipt;
+        expect(receipt.committedAt).toBe(workerClock().toISOString());
+        expect(policyReplay).toEqual({ status: 'receipt', result: { receipt, replayed: true } });
         expect(await repository.readWorkerReceiptObservation(intent.intentId)).toMatchObject({ receipt });
         expect((await db.query('SELECT * FROM activation_receipt_observations')).rowCount).toBe(1);
 
@@ -547,18 +684,30 @@ test('activates one approved customer from real A and B proofs and recovers the 
         };
         expect(await state(a.accountId)).toMatchObject({
           activation: {
-            reviewerId: intent.reviewer.reviewerId, epoch: 1, status: 'active',
+            reviewerId: intent.reviewer.reviewerId, epoch: 1, status: 'active', approvedAt: workerClock().toISOString(),
             baselineCursors: intent.bundle.manifest.streams.map(({ streamId, resumeAfter }) => ({ streamId, resumeAfter })),
           },
           initialReceipt: receipt,
         });
         expect(await state(b.accountId)).toMatchObject({ activation: null, initialReceipt: null });
         expect((await runtime.query('SELECT * FROM runtime_activation_imports')).rowCount).toBe(1);
-        expect((await runtime.query('SELECT * FROM runtime_import_lineage')).rowCount).toBe(intent.bundle.previewPlan.lineage.length);
+        const lineage = await runtime.query<{ canonical: string }>(
+          'SELECT canonical FROM runtime_import_lineage WHERE account_id = $1 ORDER BY ordinal', [a.accountId],
+        );
+        expect(lineage.rows.map(row => row.canonical)).toEqual(intent.bundle.previewPlan.lineage.map(canonicalJson));
         expect((await runtime.query('SELECT * FROM runtime_delivery_outcomes')).rowCount).toBe(receipt.eventIds.length);
         expect((await runtime.query("SELECT * FROM activity_events WHERE event->>'type' = 'customer.activated'")).rowCount).toBe(1);
 
         const exactQuery = { scope: intent.bundle.reviewPackage.scope, expectedRequestHash: intent.requestHash, expectedBundleHash: intent.bundleHash };
+        const stableState = await runtimeState();
+        await expect(activationWorker.receipt('missing-key', exactQuery)).resolves.toEqual({ status: 'absent' });
+        await expect(activationWorker.receipt(approval.idempotencyKey, {
+          ...exactQuery, scope: { ...exactQuery.scope, accountId: b.accountId },
+        })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+        await expect(activationWorker.receipt(approval.idempotencyKey, {
+          ...exactQuery, expectedBundleHash: hashCanonical('wrong bundle'),
+        })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+        expect(await runtimeState()).toEqual(stableState);
         await expect(activationWorker.receipt(approval.idempotencyKey, {
           ...exactQuery, expectedRequestHash: hashCanonical('wrong request'),
         })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
@@ -608,8 +757,14 @@ test('activates one approved customer from real A and B proofs and recovers the 
         const beforeRotation = await runtimeState();
         sourceIntercept = undefined;
         await worker.close();
-        const rotated = { ...installed, policyId: 'rotated-policy' };
         await unlink(policyPath);
+        worker = await startWorker();
+        const unavailablePolicy = await post(bRoute, bApproval);
+        expect(unavailablePolicy.status).toBe(503);
+        expect(await unavailablePolicy.json()).toMatchObject({ code: 'ACTIVATION_POLICY_UNAVAILABLE' });
+        expect(await runtimeState()).toEqual(beforeRotation);
+        await worker.close();
+        const rotated = { ...installed, policyId: 'rotated-policy' };
         await writeFile(policyPath, canonicalJson({ ...rotated, hash: hashActivationTrustPolicy(rotated) }), { mode: 0o600 });
         worker = await startWorker();
         const bStale = await post(bRoute, bApproval);
@@ -656,6 +811,9 @@ test('activates one approved customer from real A and B proofs and recovers the 
         expect(bParent.status).toBe(200);
         verifyOriginals(ParentViewSchema.parse(await bParent.json()).records, 'b');
         expect(bIntent.bundle.bootstrapEvents.length).toBeGreaterThan(bState.initialReceipt!.eventIds.length);
+        const unidentified = bIntent.bundle.bootstrapEvents.find(event => event.recordId.startsWith('pay-b:unresolved-'));
+        expect(unidentified).toBeDefined();
+        expect(bState.initialReceipt!.eventIds).not.toContain(unidentified!.id);
         const bDeliveries = await runtime.query<{ event_id: string }>(
           'SELECT event_id FROM runtime_delivery_outcomes WHERE account_id = $1 ORDER BY event_id', [b.accountId],
         );
@@ -671,6 +829,18 @@ test('activates one approved customer from real A and B proofs and recovers the 
           await owner.end();
         }
 
+        const member = (await scopeReader.readSnapshot()).resolveRegisteredScope(a.accountId)!;
+        const revisedProfile = { ...member.profile, version: member.profile.version + 1 };
+        revisedProfile.hash = hashProfile(revisedProfile);
+        await publishRegisteredScopeMembers({ registryRoot }, [{
+          entry: { ...member.entry, profileHash: revisedProfile.hash }, profile: revisedProfile, manifest: member.manifest,
+        }]);
+        expect((await scopeReader.readSnapshot()).resolveRegisteredScope(a.accountId)?.profile.hash).toBe(revisedProfile.hash);
+        const readsBeforeRecovery = sourceReads;
+        await expect(activationWorker.receipt(approval.idempotencyKey, exactQuery)).resolves.toEqual({
+          status: 'receipt', result: { receipt, replayed: true },
+        });
+        expect(sourceReads).toBe(readsBeforeRecovery);
         const after = await runtimeState();
         await control.close();
         await worker.close();
@@ -692,6 +862,21 @@ test('activates one approved customer from real A and B proofs and recovers the 
         expect(ReceiptResponseSchema.parse(await bRecovered.json())).toEqual({ receipt: bState.initialReceipt, replayed: true });
         expect(await repository.readWorkerReceiptObservation(bIntent.intentId)).toMatchObject({ receipt: bState.initialReceipt });
         expect(await runtimeState()).toEqual(after);
+        const reportPath = process.env.EAPR_A5_SAFE_TEST_REPORT_FILE;
+        if (reportPath) {
+          await writeFile(reportPath, JSON.stringify({
+            policy: installed.hash, subjects: [intent.bundle, bIntent.bundle].map(bundle => ({
+              artifact: bundle.artifact.hash, bundle: bundle.hash, manifest: bundle.manifest.hash,
+              financialBuild: bundle.financialAttestation.reservation.evaluatorBuildHash,
+              financialEvidence: bundle.financialAttestation.reservation.evidencePin.bundleHash,
+              financialReport: bundle.financialAttestation.reportHash, financialProof: bundle.financialAttestation.hash,
+              bootstrapBuild: bundle.bootstrapVerification.pin.evaluatorBuildHash,
+              bootstrapSubjectBuild: bundle.bootstrapVerification.pin.subjectBuildHash,
+              bootstrapDescriptor: bundle.bootstrapVerification.pin.fixtureHash,
+              bootstrapProof: bundle.bootstrapVerification.hash,
+            })),
+          }, null, 2), { mode: 0o600 });
+        }
       } finally {
         await control?.close();
         await worker.close();
