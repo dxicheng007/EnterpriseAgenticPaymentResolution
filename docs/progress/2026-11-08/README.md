@@ -2,7 +2,7 @@
 
 This checkpoint publishes completed local work, preserves separately committed candidates, and records remaining work. It is not acceptance of the complete demo. Machine checks, independent Astra review, and joint user acceptance remain distinct.
 
-**Latest:** reviewed integration `8962292` clarifies other-account records, investigation records, and the amount still owed after proposed import. Typecheck and 238 unit tests pass. Separate bootstrap result schemas are accepted. The full combined V2 gate also passes on `8962292`: 21 commands, 94 assertions and ten safe screenshots. Discovery lifecycle, source validation and bootstrap planning remain in progress. Joint user acceptance is pending. See [the terminology checkpoint](#terminology-and-bootstrap-contract-checkpoint).
+**Latest:** reviewed integration `8962292` clarifies other-account records, investigation records, and the amount still owed after proposed import. Typecheck and 238 unit tests pass. Separate bootstrap result schemas and the pure import planner are accepted. The full combined V2 gate also passes on `8962292`: 21 commands, 94 assertions and ten safe screenshots. Discovery lifecycle, source validation and independent bootstrap expectations remain in progress. Joint user acceptance is pending. See [the terminology checkpoint](#terminology-and-bootstrap-contract-checkpoint).
 
 ## Published checkpoint (historical)
 
@@ -128,3 +128,10 @@ Bootstrap contract candidate `a49a8cf` passed [independent review](reviews/b-boo
 On combined `8962292`, root typecheck and all 238 unit tests passed. The pure bootstrap planner is under fresh review, durable discovery lifecycle and read-only capture validation are being implemented separately. Production live discovery, activation, persisted parent import and automatic sync are still pending.
 
 The fresh full V2 gate on clean `89622924c1c6ae1b34f56fd0908b8c8f30c0a328` passed **21 commands and 94 named assertions**, retaining ten hash-verified PNGs and no diagnostics. Packet: `.evidence/89622924c1c6ae1b34f56fd0908b8c8f30c0a328/V2/2026-11-09T00-36-07-517Z-79044/`. Its safe 15-file inventory was copied to user-facing outputs. This verifies the combined preview and evaluator paths; bootstrap execution and durable discovery still require their own later checks.
+
+
+## Pure bootstrap planner checkpoint
+
+Candidate `c4f862a` passed [fresh Astra review](reviews/b-bootstrap-planner-independent-review.md) and was integrated at `83f64f3`. The [planner report](handoffs/b-bootstrap-planner-report.md) records 39 focused tests and behavioral red checks. Root ran typecheck and all **253 unit tests** on the combined integration. The unchanged financial planner now has a separate pure wrapper that prepares customer, account and billing-configuration records, preserves exact reused metadata, adds evidence lineage and rejects blocked or empty import baselines. It projects into a copied target and performs no writes.
+
+The full V2 packet remains specifically for `8962292`; the new planner has its focused and combined unit evidence, not a new full bootstrap gate. Its [independent oracle](handoffs/b-bootstrap-oracle.md) is assigned next. Complete bootstrap verification, review readiness and activation still await their dependent runner, registry and authority components.
