@@ -73,3 +73,23 @@ test('proposal inputs require the full submitted shapes and exact CAS forms', as
     ok: false, code: 'TOOL_RESULT_LIMIT',
   });
 });
+
+test('compileConnector accepts only proposal identity and exact revision', async () => {
+  const { CompileConnectorInputSchema, CompileConnectorResultSchema, discoveryCompileToolSchemas } =
+    await import('../src/discovery-construction-tools.js');
+  const input = { proposalId: 'proposal', revision: 1 };
+  expect(CompileConnectorInputSchema.parse(input)).toEqual(input);
+  for (const invalid of [
+    { ...input, artifactHash: 'a'.repeat(64) },
+    { ...input, assessment: {} },
+    { ...input, expectedRevision: 1 },
+    { proposalId: 'proposal', revision: 0 },
+    { revision: 1 },
+    { proposalId: 'proposal' },
+  ]) expect(CompileConnectorInputSchema.safeParse(invalid).success).toBe(false);
+  expect(discoveryCompileToolSchemas).toHaveLength(1);
+  expect(discoveryCompileToolSchemas[0]).toMatchObject({ name: 'compileConnector' });
+  expect(CompileConnectorResultSchema.parse({ ok: false, code: 'TOOL_UNAVAILABLE' })).toEqual({
+    ok: false, code: 'TOOL_UNAVAILABLE',
+  });
+});
