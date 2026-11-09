@@ -439,6 +439,22 @@ it('returns captured unsupported kinds as unresolved instead of throwing', () =>
   expectUnresolved(partitionDocumentApplicability(capture, source, ids), ids);
 });
 
+it('leaves a conflict-free multipage agreement unresolved even when its page-one citation is requested', () => {
+  const source = companyA;
+  const binding = bind(source);
+  const fields = party(source.sellerEntityId);
+  const multiFile = pdfFile(binding, 'contract_pdf', [
+    agreementText({ format: 'a', ...fields }), 'Harmless extra page.',
+  ]);
+  const { capture } = captureOf({
+    source, binding, files: [multiFile],
+    sourceAccounts: [{ sellerEntityId: fields.seller, sourceAccountId: fields.account }],
+  });
+  const pageOne = pageCitation(capture, multiFile, 1);
+  expect(pageOne.locator).toMatchObject({ kind: 'pdf', page: 1, start: 0 });
+  expectUnresolved(partitionDocumentApplicability(capture, source, [pageOne.id]), [pageOne.id]);
+});
+
 it('does not treat a shorter or later-page locator as the required full page-one citation', () => {
   const source = companyA;
   const binding = bind(source);
@@ -533,12 +549,25 @@ it('forbids a grant that does not match the requested binding', () => {
   );
 });
 
-it('throws for a foreign evidence ID instead of listing it as unresolved', () => {
+it('forbids a foreign evidence ID instead of listing it as unresolved', () => {
   const { capture, source, citation } = grammarCapture(companyA, 'a');
   const foreign = id('ev');
   expect(capture.facts.evidenceIds).not.toContain(foreign);
   expectThrown(
     () => partitionDocumentApplicability(capture, source, [citation.id, foreign]),
-    400, 'SOURCE_CONTENT_INVALID',
+    403, 'SOURCE_FORBIDDEN',
+  );
+});
+
+it('conflicts when a facts evidence ID has no citation membership', () => {
+  const { capture, source, citation } = grammarCapture(companyA, 'a');
+  const orphan = id('ev');
+  const broken = {
+    ...capture,
+    facts: { ...capture.facts, evidenceIds: [...capture.facts.evidenceIds, orphan].sort() },
+  };
+  expectThrown(
+    () => partitionDocumentApplicability(broken, source, [citation.id, orphan]),
+    409, 'SOURCE_HASH_CONFLICT',
   );
 });

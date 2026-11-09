@@ -2,6 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Pool } from 'pg';
+import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { afterAll, beforeAll, expect, test } from 'vitest';
 import {
   hashCanonical, hashManifest, QuerySnapshotResultSchema,
@@ -54,6 +55,28 @@ async function agreementBytes(format: 'a' | 'b', fields: {
     : [title, parties, legal, 'Monthly fee USD 1800.00 effective 2026-07-01.', 'Monthly invoice anchor day 1.'];
   if (fields.extra) lines.push(fields.extra);
   return Buffer.from(await textPdf(lines, now, title));
+}
+
+async function multipageAgreementBytes(fields: {
+  contract: string; seller: string; buyer: string; account: string; name: string;
+}) {
+  const pdf = await PDFDocument.create({ updateMetadata: false });
+  pdf.setCreationDate(new Date(now));
+  pdf.setModificationDate(new Date(now));
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const pageOne = pdf.addPage();
+  const lines = [
+    'Fixed monthly agreement ' + fields.contract,
+    'Seller ' + fields.seller + '; buyer ' + fields.buyer + '; account ' + fields.account,
+    'Legal name ' + fields.name,
+    'Monthly fee USD 1234.56',
+    'Effective 2026-07-01; monthly invoice anchor day 1.',
+  ];
+  for (const [index, line] of lines.entries()) {
+    pageOne.drawText(line, { x: 45, y: 750 - index * 22, size: 11, font });
+  }
+  pdf.addPage().drawText('Extra page that keeps the document unsupported.', { x: 45, y: 750, size: 11, font });
+  return Buffer.from(await pdf.save());
 }
 
 function invoiceA(account: string, recordId: string) {
@@ -264,7 +287,7 @@ test('associates captured A and B agreements and keeps PDF IDs out of snapshot e
   }]);
   expect(bResult.unresolvedEvidenceIds).toContain(copied);
   expect(bResult.associations[0]!.originalHash).not.toBe(a1.agreement.contentHash);
-  await expect(apply(b, [aCitation])).rejects.toMatchObject({ status: 400, code: 'SOURCE_CONTENT_INVALID' });
+  await expect(apply(b, [aCitation])).rejects.toMatchObject({ status: 403, code: 'SOURCE_FORBIDDEN' });
   expect(await snapshotEvidence(b)).not.toContain(bCitation);
   expect(await state()).toEqual(before);
 });
@@ -303,7 +326,7 @@ test('returns only the older pinned capture after a later publication', async ()
   expect(older.facts.binding.manifestId).not.toBe(a2.binding.manifestId);
   expect(older.associations.map(entry => entry.fileId)).toEqual([a1.agreement.fileId]);
   expect(older.facts.evidenceIds).not.toContain(laterCitation);
-  await expect(apply(a1, [laterCitation])).rejects.toMatchObject({ status: 400, code: 'SOURCE_CONTENT_INVALID' });
+  await expect(apply(a1, [laterCitation])).rejects.toMatchObject({ status: 403, code: 'SOURCE_FORBIDDEN' });
 });
 
 test('rejects oversized and duplicate citation lists without reading originals', async () => {
@@ -313,4 +336,103 @@ test('rejects oversized and duplicate citation lists without reading originals',
   const duplicate = 'ev:duplicate-id';
   await expect(apply(a1, [duplicate, duplicate])).rejects.toMatchObject({ status: 400, code: 'SOURCE_CONTENT_INVALID' });
   expect(blobReads).toBe(reads);
+});
+
+test('leaves a conflict-free multipage agreement unresolved on its page-one citation', async () => {
+  const multiBytes = await multipageAgreementBytes({
+    contract: 'contract-a-multi', seller: companyA.sellerEntityId, buyer: 'buyer-a-1',
+    account: 'acct-a-1', name: 'Northstar Studio',
+  });
+  const multi = await capture(companyA, a1.events, [
+    { documentId: 'agreement-a-multi', bytes: multiBytes },
+  ], 3);
+  const pageOne = (await fileEvidenceIds(multi.agreement.fileId))[0]!;
+  const pageCount = (await admin.query<{ pages: number }>(
+    `SELECT jsonb_array_length(extraction->'document'->'pages')::int AS pages
+     FROM source_files WHERE file_id=$1`, [multi.agreement.fileId],
+  )).rows[0]!.pages;
+  expect(pageCount).toBeGreaterThan(1);
+  const result = await apply(multi, [pageOne]);
+  expect(result.associations).toEqual([]);
+  expect(result.unresolvedEvidenceIds).toEqual([pageOne]);
+});
+
+test('fails closed for wrong binding, corrupt extraction, and unavailable originals', async () => {
+  const aCitation = (await fileEvidenceIds(a1.agreement.fileId))[0]!;
+  await expect(tools.prepareDocumentApplicability({
+    binding: { ...a1.binding, snapshotHash: 'a'.repeat(64) },
+    sourceRead: wide(a1),
+    evidenceIds: [aCitation],
+  })).rejects.toMatchObject({ status: 409, code: 'SOURCE_EPOCH_CONFLICT' });
+
+  const original = (await admin.query(
+    'SELECT extraction, extraction_hash FROM source_files WHERE file_id=$1', [a1.agreement.fileId],
+  )).rows[0]!;
+  try {
+    const forged = {
+      ...original.extraction,
+      document: { ...original.extraction.document, pages: ['forged agreement text'] },
+    };
+    await admin.query(
+      'UPDATE source_files SET extraction=$2, extraction_hash=$3 WHERE file_id=$1',
+      [a1.agreement.fileId, JSON.stringify(forged), hashCanonical(forged)],
+    );
+    await expect(apply(a1, [aCitation])).rejects.toMatchObject({ code: 'SOURCE_HASH_CONFLICT' });
+  } finally {
+    await admin.query(
+      'UPDATE source_files SET extraction=$2, extraction_hash=$3 WHERE file_id=$1',
+      [a1.agreement.fileId, JSON.stringify(original.extraction), original.extraction_hash],
+    );
+  }
+
+  const unavailableTools = createDiscoveryReadTools({
+    db,
+    store: {
+      async get() {
+        throw new Error('private/test/path');
+      },
+    },
+  }, catalog);
+  await expect(unavailableTools.prepareDocumentApplicability({
+    binding: a1.binding, sourceRead: wide(a1), evidenceIds: [aCitation],
+  })).rejects.toMatchObject({ status: 503, code: 'SOURCE_UNAVAILABLE' });
+});
+
+test('rejects when a dossier changes during the original byte read', async () => {
+  const aCitation = (await fileEvidenceIds(a1.agreement.fileId))[0]!;
+  const reached = Promise.withResolvers<void>();
+  const resume = Promise.withResolvers<void>();
+  const gated = createDiscoveryReadTools({
+    db,
+    store: {
+      async get(hash) {
+        reached.resolve();
+        await resume.promise;
+        return store.get(hash);
+      },
+    },
+  }, catalog);
+  const operation = gated.prepareDocumentApplicability({
+    binding: a1.binding, sourceRead: wide(a1), evidenceIds: [aCitation],
+  });
+  const assertion = expect(operation).rejects.toMatchObject({ status: 409, code: 'MANIFEST_MEMBER_MISSING' });
+  try {
+    await Promise.race([
+      reached.promise,
+      operation.then(() => { throw new Error('Expected an original read barrier'); }),
+    ]);
+    expect(db.idleCount).toBe(db.totalCount);
+    await admin.query(
+      "UPDATE source_dossiers SET dossier = dossier || '{\"complete\":false}' WHERE manifest_id=$1",
+      [a1.binding.manifestId],
+    );
+    resume.resolve();
+    await assertion;
+  } finally {
+    resume.resolve();
+    await admin.query(
+      "UPDATE source_dossiers SET dossier = dossier || '{\"complete\":true}' WHERE manifest_id=$1",
+      [a1.binding.manifestId],
+    );
+  }
 });

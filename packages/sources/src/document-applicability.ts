@@ -51,6 +51,14 @@ function forbiddenGrant(): never {
   throw new SourceError(403, 'SOURCE_FORBIDDEN', 'Document applicability grant is forbidden');
 }
 
+function foreignCitation(): never {
+  throw new SourceError(403, 'SOURCE_FORBIDDEN', 'Document applicability citation is forbidden');
+}
+
+function captureConflict(): never {
+  throw new SourceError(409, 'SOURCE_HASH_CONFLICT', 'Document applicability citation conflicts with the capture');
+}
+
 function tupleKey(sellerEntityId: Id, sourceAccountId: Id) {
   return JSON.stringify([sellerEntityId, sourceAccountId]);
 }
@@ -59,37 +67,46 @@ function parsedIdsValid(ids: readonly string[]) {
   return ids.every(value => IdSchema.safeParse(value).success);
 }
 
-function pageOneText(file: StoredSourceFile) {
-  const { document } = file.extraction;
-  return document.kind === 'pdf' ? document.pages[0] : undefined;
-}
-
-function emailBody(file: StoredSourceFile) {
-  const { document } = file.extraction;
-  return document.kind === 'email' ? document.body : undefined;
-}
-
 function isFullPageOneLocator(locator: EvidenceRef['locator'], page: string): locator is PdfLocator {
   return locator.kind === 'pdf' && locator.page === 1 && locator.start === 0 && locator.end === page.length;
 }
 
+function locatedExcerpt(file: StoredSourceFile, citation: EvidenceRef): string | undefined {
+  try {
+    return locate(file.extraction.document, citation.locator).excerpt;
+  } catch (error) {
+    if (error instanceof CitationError) return;
+    throw error;
+  }
+}
+
 function conflictedTuples(capture: DocumentApplicabilityCapture) {
+  const files = new Map(capture.files.map(file => [file.file_id, file]));
   const agreements = new Map<string, { sourceBuyerId: Id; displayName: string }[]>();
   const directories = new Map<string, Id[]>();
-  for (const file of capture.files) {
+  for (const citation of capture.fileCitations) {
+    const file = files.get(citation.sourceId);
+    if (!file) continue;
     if (file.metadata.kind === 'contract_pdf') {
-      const text = pageOneText(file);
-      if (!text) continue;
-      const parsed = parseAgreement({ text, citationId: file.file_id }, capture.manifest.asOf);
+      const { document } = file.extraction;
+      if (document.kind !== 'pdf') continue;
+      const page = document.pages[0];
+      if (!page || !isFullPageOneLocator(citation.locator, page)) continue;
+      const excerpt = locatedExcerpt(file, citation);
+      if (excerpt === undefined || excerpt !== page) continue;
+      const parsed = parseAgreement({ text: excerpt, citationId: citation.id }, capture.manifest.asOf);
       if (!parsed || !parsedIdsValid([
         parsed.contractId, parsed.sellerEntityId, parsed.sourceBuyerId, parsed.sourceAccountId,
       ])) continue;
       const key = tupleKey(parsed.sellerEntityId, parsed.sourceAccountId);
       agreements.set(key, [...(agreements.get(key) ?? []), parsed]);
-    } else if (file.metadata.kind === 'email_json') {
-      const text = emailBody(file);
-      if (text === undefined) continue;
-      for (const claim of parseDirectory({ text, citationId: file.file_id })) {
+    } else if (file.metadata.kind === 'email_json' && citation.locator.kind === 'email') {
+      const { document } = file.extraction;
+      if (document.kind !== 'email') continue;
+      if (citation.locator.start !== 0 || citation.locator.end !== document.body.length) continue;
+      const excerpt = locatedExcerpt(file, citation);
+      if (excerpt === undefined || excerpt !== document.body) continue;
+      for (const claim of parseDirectory({ text: excerpt, citationId: citation.id })) {
         if (!parsedIdsValid([claim.sellerEntityId, claim.sourceBuyerId, claim.sourceAccountId])) continue;
         const key = tupleKey(claim.sellerEntityId, claim.sourceAccountId);
         directories.set(key, [...(directories.get(key) ?? []), claim.sourceBuyerId]);
@@ -121,13 +138,9 @@ function associateCitation(
   const page = document.pages[0];
   const { locator } = citation;
   if (!page || !isFullPageOneLocator(locator, page)) return;
-  try {
-    if (locate(document, locator).excerpt !== page) return;
-  } catch (error) {
-    if (error instanceof CitationError) return;
-    throw error;
-  }
-  const parsed = parseAgreement({ text: page, citationId: citation.id }, capture.manifest.asOf);
+  const excerpt = locatedExcerpt(file, citation);
+  if (excerpt === undefined || excerpt !== page) return;
+  const parsed = parseAgreement({ text: excerpt, citationId: citation.id }, capture.manifest.asOf);
   if (!parsed || !parsedIdsValid([
     parsed.contractId, parsed.sellerEntityId, parsed.sourceBuyerId, parsed.sourceAccountId,
   ])) return;
@@ -174,9 +187,7 @@ export function partitionDocumentApplicability(
 ): Pick<PreparedDocumentApplicability, 'associations' | 'unresolvedEvidenceIds'> {
   const captured = new Set(capture.facts.evidenceIds);
   for (const evidenceId of evidenceIds) {
-    if (!captured.has(evidenceId)) {
-      throw new SourceError(400, 'SOURCE_CONTENT_INVALID', 'Document applicability citation is not in the capture');
-    }
+    if (!captured.has(evidenceId)) foreignCitation();
   }
   const citations = new Map<Id, EvidenceRef>();
   for (const citation of capture.fileCitations) citations.set(citation.id, citation);
@@ -189,7 +200,8 @@ export function partitionDocumentApplicability(
   const unresolvedEvidenceIds: Id[] = [];
   for (const evidenceId of [...new Set(evidenceIds)].toSorted()) {
     const citation = citations.get(evidenceId);
-    const associated = citation && associateCitation(capture, source, citation, observed, conflicted);
+    if (!citation) captureConflict();
+    const associated = associateCitation(capture, source, citation, observed, conflicted);
     if (associated) associations.push(associated);
     else unresolvedEvidenceIds.push(evidenceId);
   }
