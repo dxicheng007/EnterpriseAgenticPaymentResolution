@@ -4,7 +4,10 @@ import { modelLimits, type ModelClient } from './model.js';
 export type OfflineLiveModelOptions = {
   configured: boolean;
   modelId: Id;
+  /** When true, run waits on `hangUntil` (or forever) so supervisor timeout can fire first. */
   hangUntilAbort?: boolean;
+  /** Test gate: settle after timeout interrupt so the adapter Promise can finish. */
+  hangUntil?: Promise<unknown>;
   preflightTokens?: { input: number; output: number };
   result?: ModelResultV2;
 };
@@ -22,7 +25,7 @@ function exceedsCeilings(
 
 /** Offline live ModelClient. Options are Discovery stub knobs, not product env secrets. */
 export function offlineLiveModel(options: OfflineLiveModelOptions): ModelClient {
-  const { configured, modelId, hangUntilAbort, preflightTokens, result } = options;
+  const { configured, modelId, hangUntilAbort, hangUntil, preflightTokens, result } = options;
   return {
     mode: 'live',
     modelId,
@@ -34,8 +37,9 @@ export function offlineLiveModel(options: OfflineLiveModelOptions): ModelClient 
         throw new Error('MODEL_BUDGET_EXCEEDED');
       }
       if (hangUntilAbort) {
-        // Never resolves: supervisor timeout / interrupt fences prove unknown accounting without AbortSignal.
-        return new Promise(() => {});
+        // Prefer hangUntil so tests can release after supervisor timeout; forever hang otherwise.
+        await (hangUntil ?? new Promise(() => {}));
+        throw new Error('MODEL_HUNG');
       }
       if (!result) {
         throw new Error('MODEL_NO_RESULT');
