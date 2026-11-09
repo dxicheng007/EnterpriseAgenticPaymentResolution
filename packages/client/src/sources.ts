@@ -4,6 +4,7 @@ import {
   type EvidenceResponse, type UploadMetadata, type UploadResponse,
 } from '../../contracts/src/evidence.js';
 import { SourceDossierSchema, type SourceDossier } from '../../contracts/src/source.js';
+import { SourceCoverageResponseSchema, type SourceCoverageResponse } from '../../contracts/src/source-coverage.js';
 import { LocalApiError, requestLocal } from './http.js';
 
 export async function getDossier(companyId: Id, manifestId?: Id, signal?: AbortSignal): Promise<SourceDossier> {
@@ -14,6 +15,20 @@ export async function getDossier(companyId: Id, manifestId?: Id, signal?: AbortS
     throw new LocalApiError(200, 'MALFORMED_RESPONSE', 'The dossier did not match the selected scope.');
   }
   return dossier;
+}
+
+export async function getSourceCoverage(
+  companyId: Id, snapshotId: Id, signal?: AbortSignal,
+): Promise<SourceCoverageResponse> {
+  const company = encodeURIComponent(IdSchema.parse(companyId));
+  const snapshot = encodeURIComponent(IdSchema.parse(snapshotId));
+  const coverage = await requestLocal('/api/sources/' + company + '/coverage?snapshotId=' + snapshot,
+    SourceCoverageResponseSchema, { signal });
+  if (coverage.companyId !== companyId || coverage.snapshot.id !== snapshotId ||
+    snapshotId !== 'snapshot:' + coverage.snapshot.manifestId) {
+    throw new LocalApiError(200, 'MALFORMED_RESPONSE', 'Source coverage did not match the selected aggregate snapshot.');
+  }
+  return coverage;
 }
 
 export async function getEvidence(id: Id, signal?: AbortSignal): Promise<EvidenceResponse> {
