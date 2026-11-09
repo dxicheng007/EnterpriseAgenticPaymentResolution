@@ -42,9 +42,19 @@ async function localFeaturePlugins(
     verificationSetupDiagnostic = code;
   } else if (process.env.EAPR_VERIFICATION_PINS !== undefined) {
     try {
+      const registryRoot = fileURLToPath(new URL('../.local/artifacts', import.meta.url));
       verification = {
         pins: safeVerificationPins.parse(JSON.parse(process.env.EAPR_VERIFICATION_PINS)),
-        registryRoot: fileURLToPath(new URL('../.local/artifacts', import.meta.url)),
+        registryRoot,
+        roots: {
+          evidencePinRoot: fileURLToPath(new URL('../.local/protected-evaluator', import.meta.url)),
+          servedRoots: [
+            resolve(required('EAPR_DEMO_EVIDENCE_ROOT')),
+            fileURLToPath(new URL('../.local/demo/visible', import.meta.url)),
+            fileURLToPath(new URL('../apps/web', import.meta.url)),
+            registryRoot,
+          ],
+        },
         expectedMigrations,
       };
     } catch {

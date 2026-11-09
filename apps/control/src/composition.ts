@@ -134,7 +134,9 @@ export async function createLocalComposition(dependencies: UploadDependencies, o
   if (options.verification && !setupCode) {
     try {
       if (companies.size !== localSourceCatalog.size) throw new Error('Local verification captures are incomplete');
-      verification = await composeVerification(db, options.verification, captureBindings, session.authorizeReviewer);
+      verification = await composeVerification(
+        { dependencies, catalog: localSourceCatalog, service }, options.verification, captureBindings, session.authorizeReviewer,
+      );
       catalog.verificationAvailable = true;
     } catch {
       setupCode = 'VERIFICATION_FIXTURE_CONFLICT';

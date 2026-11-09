@@ -8,13 +8,19 @@ import { tmpdir } from 'node:os';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { expect, test } from 'vitest';
 import {
-  DemoCandidatesResponseSchema, PreviewResponseSchema, VerificationJobSchema, VerificationReportSchema, hashBytes, hashCanonical,
+  DemoCandidatesResponseSchema, PreviewResponseSchema, VerificationJobSchema, VerificationReportSchema, hashActivationTrustPolicy, hashBytes, hashCanonical,
 } from '@eapr/contracts';
 import { compile } from '@eapr/compiler/compile';
 import { createEvidenceStore } from '@eapr/evidence';
-import { createCandidateRegistry } from '@eapr/evaluator/registry';
+import { createSourceService } from '@eapr/sources';
+import { createCandidateRegistry, createVerificationJobs } from '@eapr/evaluator/registry';
+import { createFinancialAttestationRegistry } from '@eapr/evaluator/financial-attestation-registry';
+import { deriveFinancialCapture } from '@eapr/evaluator/financial-attestation-verify';
+import { createFinancialCaptureReader } from '../../apps/control/src/financial-capture.js';
+import { composeFinancialVerification } from '../../apps/control/src/financial-verification-composition.js';
 import { createProtectedVerificationLauncher } from '@eapr/evaluator/verify';
-import { createLocalComposition } from '../../apps/control/src/composition.js';
+import { createLocalComposition, localSourceCatalog } from '../../apps/control/src/composition.js';
+import { createVerificationPlugin } from '../../apps/control/src/routes/verification.js';
 import { createVerificationSelector } from '../../apps/control/src/verification-composition.js';
 import { decodeTruth } from '../../packages/evaluator/src/fixtures.js';
 import { evaluatorBuildHash } from '../../packages/evaluator/src/launcher.js';
@@ -27,12 +33,14 @@ const webOrigin = 'http://127.0.0.1:5179';
 const setupRequired = { code: 'VERIFICATION_FIXTURE_SETUP_REQUIRED' };
 const conflict = { code: 'VERIFICATION_FIXTURE_CONFLICT' };
 
+// This gate case preserves the expected-only v1 protocol through an explicit legacy fixture.
 test('real reviewer jobs use operator pins for the registered source captures', async () => {
   const directory = await mkdtemp(join(await realpath(tmpdir()), 'eapr-verification-startup-'));
   const roots = { visibleRoot: join(directory, 'visible'), truthRoot: join(directory, 'protected') };
   const store = await createEvidenceStore(join(directory, 'evidence'));
   const registryRoot = join(directory, 'artifacts');
   const protectedPaths: URL[] = [];
+  let legacyReader: ((jobId: string, report: ReturnType<typeof VerificationReportSchema.parse>, manifestId: string) => Promise<void>) | undefined;
   let restartControl: (() => Promise<FastifyInstance>) | undefined;
   const pinsByCompany = new Map<string, Awaited<ReturnType<typeof prepareVerificationPins>>[number]>();
   try {
@@ -123,17 +131,45 @@ test('real reviewer jobs use operator pins for the registered source captures', 
         await writeFile(expectedB, JSON.stringify({ ...truth, hash: hashCanonical(truth) }));
         expect(await prepare()).toEqual(pins);
 
-        const options = { webOrigin, captures, verification: {
+        const registry = createCandidateRegistry(services.db, registryRoot);
+        const options = { webOrigin, captures, registry, verification: {
           pins, registryRoot, expectedMigrations: migrationIdentities(readMigrationCatalog().control),
+          roots: {
+            evidencePinRoot: fileURLToPath(new URL('../../.local/protected-evaluator', import.meta.url)),
+            servedRoots: [roots.visibleRoot, join(directory, 'evidence'), registryRoot],
+          },
         } };
+        legacyReader = async (jobId, report, manifestId) => {
+          const sources = { dependencies, catalog: localSourceCatalog, service: createSourceService(dependencies, localSourceCatalog) };
+          const reopenedRegistry = createCandidateRegistry(services.db, registryRoot);
+          const select = createVerificationSelector(pins, pins);
+          const jobs = await composeFinancialVerification(sources, reopenedRegistry, options.verification.roots, select);
+          expect((await jobs.get(jobId)).job).toMatchObject({ state: 'completed', summary: { reportId: report.id } });
+          const capture = await createFinancialCaptureReader({ ...sources, registry: reopenedRegistry })
+            .readCapture({ artifactHash: report.artifactHash, manifestId });
+          const policy = { schemaVersion: '1' as const, policyId: 'test-only', entries: [] };
+          await expect(createFinancialAttestationRegistry(services.db, reopenedRegistry).readRegisteredFinancialAttestation(report.id, {
+            artifactHash: report.artifactHash, requiredProfileHashes: report.profileHashes, capture: deriveFinancialCapture(capture),
+            policy: { ...policy, hash: hashActivationTrustPolicy(policy) },
+          })).rejects.toMatchObject({ statusCode: 503, message: 'FINANCIAL_ATTESTATION_UNAVAILABLE' });
+        };
+        const legacyPlugins = async () => {
+          const local = await createLocalComposition(dependencies, options);
+          const jobs = createVerificationJobs(services.db, createProtectedVerificationLauncher(createVerificationSelector(pins, pins)));
+          return [...local.featurePlugins, createVerificationPlugin({
+            registry, jobs,
+            async authorizeVerification(request) {
+              return { caller: 'reviewer', ...await local.authorizeReviewer(request, { mutation: request.method === 'POST' }) };
+            },
+          })];
+        };
         restartControl = async () => {
-          const restarted = await createLocalComposition(dependencies, options);
           const app = Fastify();
-          for (const plugin of restarted.featurePlugins) app.register(plugin, services);
+          for (const plugin of await legacyPlugins()) app.register(plugin, services);
           await app.ready();
           return app;
         };
-        return (await createLocalComposition(dependencies, options)).featurePlugins;
+        return legacyPlugins();
       },
     });
 
@@ -148,7 +184,7 @@ test('real reviewer jobs use operator pins for the registered source captures', 
       const mutation = { cookie, origin: webOrigin, 'x-eapr-csrf': csrf };
       const catalog = DemoCandidatesResponseSchema.parse(
         (await system.control.request('/api/demo/candidates', { headers: { cookie } })).body);
-      expect(catalog).toMatchObject({ verificationAvailable: true, targetMode: 'empty-fixture', diagnostics: [] });
+      expect(catalog).toMatchObject({ verificationAvailable: false, targetMode: 'empty-fixture', diagnostics: [expect.objectContaining(conflict)] });
       expect(catalog.candidates.map(candidate => candidate.companyId)).toEqual(['company-a', 'company-b']);
 
       const beforePreview = catalog.candidates[0]!;
@@ -207,6 +243,7 @@ test('real reviewer jobs use operator pins for the registered source captures', 
           id: 'evidence_support', status: 'unavailable', cases: 0,
         }));
         expect(report.unexplainedDifferenceCents).toBe(0);
+        await legacyReader!(jobId, report, pin.manifestId);
         expect(JSON.stringify(finished)).not.toContain(pin.fixtureSetId);
         expect(JSON.stringify(finished)).not.toContain(roots.truthRoot);
 
