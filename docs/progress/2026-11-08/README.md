@@ -2,7 +2,7 @@
 
 This checkpoint publishes completed local work, preserves separately committed candidates, and records remaining work. It is not acceptance of the complete demo. Machine checks, independent Astra review, and joint user acceptance remain distinct.
 
-**Latest:** reviewed integration `8962292` clarifies other-account records, investigation records, and the amount still owed after proposed import. Typecheck and 254 unit tests pass after the lifecycle integration; 101 PostgreSQL integration tests and the V0 gate also pass. Separate bootstrap result schemas and the pure import planner are accepted. The full combined V2 gate also passes on `8962292`: 21 commands, 94 assertions and ten safe screenshots. The unmounted discovery lifecycle is accepted; source validation and independent bootstrap expectations remain in progress. Joint user acceptance is pending. See [the terminology checkpoint](#terminology-and-bootstrap-contract-checkpoint).
+**Latest:** reviewed integration `8962292` clarifies other-account records, investigation records, and the amount still owed after proposed import. Typecheck and 254 unit tests pass after the lifecycle integration; 101 PostgreSQL integration tests and the V0 gate also pass. Separate bootstrap result schemas and the pure import planner are accepted. The full combined V2 gate also passes on `8962292`: 21 commands, 94 assertions and ten safe screenshots. The unmounted discovery lifecycle and read-only source validation are accepted; independent bootstrap expectations remain in progress. Joint user acceptance is pending. See [the terminology checkpoint](#terminology-and-bootstrap-contract-checkpoint).
 
 ## Published checkpoint (historical)
 
@@ -144,3 +144,12 @@ L1 candidate `e754790` passed [independent Astra review](reviews/v4-lifecycle-L1
 The [discovery package guide](../../../packages/discovery/AGENTS.md) explains the dedicated supervisor connection, durable budgets, pause/replay, timeout accounting and generation fencing. The component is deliberately unmounted; L2 still must provide HTTP authorization, validated pinned captures, mandatory capture recheck, and atomic delegation. Review found no blocking defect. Cross-task native-ID reuse and byte-oversized persistence cases are recorded as narrow additional coverage for L2, not claimed as existing L1 tests.
 
 Control migration 004 is now implemented. The later bootstrap registry remains assigned 005. Live-model execution, agent-generated connector construction, parent persistence and automatic sync remain unavailable.
+
+
+## Validated source capture checkpoint
+
+Source candidate `413d6e9` passed [fresh Astra review](reviews/b-discovery-capture-read-independent-review.md) and was integrated at `1dae289`. See its [builder report](handoffs/b-discovery-capture-read-report.md). Root typecheck and 254 unit tests passed, followed by all 12 discovery-capture PostgreSQL tests with lifecycle tables installed and the full V1 source/evidence gate. V1 packet: `.evidence/1dae28994cbcbc97f784489fc89a99eea0aa7f01/V1/2026-11-09T00-48-55-688Z-90703/`. No source or runtime writes occur in the validator.
+
+The selected capture is checked against original bytes, registered resource schemas, manifest/snapshot membership, citation content and relational associations, with exact rechecks after external reads. Valid sellerless events remain part of the captured evidence and are omitted only from the exact seller/account tuple list. This preserves unresolved input for investigation instead of inventing an identity or silently dropping evidence.
+
+The live supervisor was restarted on `a905c32`, before this additive reader integration: health reports control migration 4 and runtime migration 1. All 253 existing demo/source/verification files retained identical fingerprints. A fresh browser preview still displays Company A's $800 unpaid amount, other-account category and zero parent writes. The read-only discovery entry point is not mounted until the separately specified L2 integration.
