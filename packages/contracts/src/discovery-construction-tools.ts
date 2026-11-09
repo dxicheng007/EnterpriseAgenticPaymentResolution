@@ -99,6 +99,17 @@ export type ReviseConnectorInput = z.infer<typeof ReviseConnectorInputSchema>;
 export type DraftConnectorResult = z.infer<typeof DraftConnectorResultSchema>;
 export type ReviseConnectorResult = z.infer<typeof ReviseConnectorResultSchema>;
 
+export const CompileConnectorInputSchema = strict({
+  proposalId: IdSchema, revision: VersionSchema,
+}).refine(fitsProposalBytes, 'Invalid canonical input or input exceeds 65,536 UTF-8 bytes');
+
+export const CompileConnectorResultSchema = z.union([
+  strict({ ok: z.literal(true), result: ProposalResultSchema }), DiscoveryReadToolFailureSchema,
+]).refine(fitsProposalBytes, 'Tool result exceeds 65,536 UTF-8 bytes');
+
+export type CompileConnectorInput = z.infer<typeof CompileConnectorInputSchema>;
+export type CompileConnectorResult = z.infer<typeof CompileConnectorResultSchema>;
+
 // The runtime draft parser retains the full profile refinements. Its preprocessing
 // is opaque to JSON Schema conversion, so derive the wire shape from the same fields.
 const { hash: _profileHash, ...profileFields } = CustomerProfileSchema.out.shape;
@@ -120,4 +131,9 @@ export const discoveryProposalToolSchemas = [
     inputSchema: proposalDescriptor({ expectedRevision: z.literal(0) }) },
   { name: 'reviseConnector', description: 'Submit a new exact revision of an existing proposal for the same customer.',
     inputSchema: proposalDescriptor({ proposalId: IdSchema, expectedRevision: VersionSchema }) },
+];
+
+export const discoveryCompileToolSchemas = [
+  { name: 'compileConnector', description: 'Compile the exact current proposal revision and register a candidate when assessment is clear.',
+    inputSchema: z.toJSONSchema(CompileConnectorInputSchema, { io: 'input', reused: 'ref', unrepresentable: 'any' }) },
 ];

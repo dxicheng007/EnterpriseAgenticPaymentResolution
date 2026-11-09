@@ -32,9 +32,10 @@ test('namespace only representation identities while preserving all submitted cu
 });
 
 test('proposal descriptors require both source read access and the connector role', () => {
-  const names = (role: Parameters<typeof toolSchemas>[0], reads: boolean) =>
-    toolSchemas(role, reads).map(tool => tool.name).filter(name => name.endsWith('Connector'));
+  const names = (role: Parameters<typeof toolSchemas>[0], reads: boolean, compile = false) =>
+    toolSchemas(role, reads, compile).map(tool => tool.name).filter(name => name.endsWith('Connector'));
   expect(names('connector', true)).toEqual(['draftConnector', 'reviseConnector']);
+  expect(names('connector', true, true)).toEqual(['draftConnector', 'reviseConnector', 'compileConnector']);
   expect(names('connector', false)).toEqual([]);
   for (const role of ['coordinator', 'identity', 'contract', 'receivables'] as const) {
     expect(names(role, true)).toEqual([]);

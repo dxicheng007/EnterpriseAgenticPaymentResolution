@@ -1,5 +1,6 @@
 import { DiscoveryCapabilitiesResponseV2Schema, hashCanonical, type DiscoveryBinding, type DiscoveryActionRequestV2,
   type StartDiscoveryRequestV2 } from '../../contracts/src/index.js';
+import type { CompileRegisterCandidate, ConstructionCaptureReader } from './compilation.js';
 import type { DiscoveryReadTools } from './read-tools.js';
 import type { ModelClient } from './model.js';
 import { coversGrant, createDiscoveryRepository, discoveryError, type Grants, type RepositoryOptions } from './repository.js';
@@ -14,13 +15,20 @@ export type DiscoveryReviewer = {
 type Options = RepositoryOptions & CaptureAccess & {
   modelClient?: ModelClient;
   readTools?: DiscoveryReadTools;
+  constructionCapture?: ConstructionCaptureReader;
+  registerCandidate?: CompileRegisterCandidate;
   sourceRefForCompany: (companyId: string) => string | undefined;
 };
 
 export async function createDiscoveryService(options: Options) {
   const { db, modelClient, readCapture, recheckCapture, sourceRefForCompany } = options;
   const repository = createDiscoveryRepository(options);
-  let owner = modelClient && await acquireDiscoverySupervisor({ ...options, model: modelClient, capture: options });
+  const supervisorOptions = () => ({
+    ...options, model: modelClient!, capture: options,
+    constructionCapture: options.constructionCapture,
+    registerCandidate: options.registerCandidate,
+  });
+  let owner = modelClient && await acquireDiscoverySupervisor(supervisorOptions());
   let closed = false;
   let active: Promise<void> | undefined;
   const pendingTasks = new Set<string>();
@@ -28,7 +36,7 @@ export async function createDiscoveryService(options: Options) {
 
   async function tick() {
     if (!modelClient) return;
-    if (!owner || !owner.isValid()) owner = await acquireDiscoverySupervisor({ ...options, model: modelClient, capture: options });
+    if (!owner || !owner.isValid()) owner = await acquireDiscoverySupervisor(supervisorOptions());
     if (!owner || closed) return;
     const { rows } = await db.query<{
       run_id: string; task_id: string; step_id: string | null; recovering_read: boolean | null; reviewer_id: string;
