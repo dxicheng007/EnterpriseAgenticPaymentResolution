@@ -1,4 +1,4 @@
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { PoolClient } from 'pg';
 import {
   BootstrapManifestSchema, EvidenceRefSchema, RawSourceEventSchema, SourceDossierSchema, SourceSnapshotSchema,
@@ -13,6 +13,7 @@ import type { CaptureFacts } from '../../../packages/discovery/src/tasks.js';
 import { aggregateHash } from '../../../packages/sources/src/dossier.js';
 import type { createLocalSessionService } from './local-session.js';
 import { mountDiscovery } from './routes/discovery.js';
+import { mountDiscoveryEvents } from './routes/events.js';
 
 const equalIds = (left: readonly Id[], right: readonly Id[]) =>
   left.length === right.length && hashCanonical([...left].sort()) === hashCanonical([...right].sort());
@@ -130,6 +131,11 @@ export function composeDiscovery(options: {
         };
       },
     });
-    await app.register(mountDiscovery(service, async (request, access) => {      const caller = await authorizeReviewer(request, access);      return { reviewerId: caller.reviewer.reviewerId, allowedSourceRefs: caller.allowedSourceRefs };    }));
+    const authorize = async (request: FastifyRequest, access: { mutation: boolean }) => {
+      const caller = await authorizeReviewer(request, access);
+      return { reviewerId: caller.reviewer.reviewerId, allowedSourceRefs: caller.allowedSourceRefs };
+    };
+    await app.register(mountDiscovery(service, authorize));
+    await app.register(mountDiscoveryEvents({ db, authorizeReviewer: authorize, readState: service.readState }));
   };
 }
