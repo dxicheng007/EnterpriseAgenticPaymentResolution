@@ -8,6 +8,7 @@ import { IdSchema, type Diagnostic } from '../../../../../packages/contracts/src
 import type {
   DiscoveryCapabilitiesResponseV2, DiscoveryStateV2,
 } from '../../../../../packages/contracts/src/discovery.js';
+import { DiscoveryConstruction } from './DiscoveryConstruction.js';
 
 function Diagnostics({ diagnostics }: { diagnostics: Diagnostic[] }) {
   if (!diagnostics.length) return null;
@@ -214,6 +215,7 @@ function RunDetails({ state }: { state: DiscoveryStateV2 }) {
     </section>
     <section className="review-card" aria-labelledby="discovery-usage">
       <h2 id="discovery-usage">Model usage</h2>
+      <p>These are design-time discovery counters. Runtime model usage is not reported by this API.</p>
       <p>In-flight model calls {state.inFlightModelCalls}</p>
       <p>In-flight tool steps {state.inFlightToolSteps}</p>
       <p>Model calls {usage.modelCalls}</p>
@@ -234,11 +236,6 @@ function RunDetails({ state }: { state: DiscoveryStateV2 }) {
         {task.diagnosticCodes.length > 0 && <p>{task.diagnosticCodes.join(', ')}</p>}
       </li>)}</ul>
     </section>
-    <section className="review-card" aria-labelledby="discovery-construction">
-      <h2 id="discovery-construction">Connector construction</h2>
-      <p>{state.findings.length ? 'Finding references ' + state.findings.length : 'No findings recorded.'}</p>
-      <p>{state.proposals.length ? 'Proposal results ' + state.proposals.length : 'No proposals recorded.'}</p>
-      {state.proposals.length === 0 && <p>Connector construction is unavailable in this monitor.</p>}
-    </section>
+    <DiscoveryConstruction state={state} />
   </>;
 }
