@@ -6,6 +6,8 @@
     "./control-db": "./src/control-db.ts",
     "./runtime-db": "./src/runtime-db.ts",
     "./transaction": "./src/transaction.ts",
-    "./activity": "./src/activity.ts"
+    "./activity": "./src/activity.ts",
+    "./activation-policy": "./src/activation-policy.ts",
+    "./activation-registry": "./src/activation-registry.ts"
   }
 }
