@@ -4,9 +4,14 @@
   "type": "module",
   "exports": {
     "./bootstrap": "./src/bootstrap.ts",
-    "./state": "./src/state.ts"
+    "./state": "./src/state.ts",
+    "./activation-store": "./src/activation-store.ts",
+    "./persistence": "./src/persistence.ts",
+    "./snapshots": "./src/snapshots.ts"
   },
   "dependencies": {
-    "@eapr/contracts": "*"
+    "@eapr/contracts": "*",
+    "@eapr/finance": "*",
+    "@eapr/storage": "*"
   }
 }
