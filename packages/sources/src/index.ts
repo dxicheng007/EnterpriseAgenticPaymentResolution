@@ -8,3 +8,4 @@ export { companyB } from './company-b.js';
 export { createSourceService, publishManifest } from './manifest.js';
 export { validateChangePage } from './change-feed.js';
 export { readSourceCoverage } from './source-coverage.js';
+export { readDiscoveryCapture, type ValidatedDiscoveryCapture } from './discovery-reads.js';
