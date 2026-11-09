@@ -2,7 +2,7 @@
 
 This checkpoint publishes completed local work, preserves separately committed candidates, and records remaining work. It is not acceptance of the complete demo. Machine checks, independent Astra review, and joint user acceptance remain distinct.
 
-**Latest:** reviewed integration `8962292` clarifies other-account records, investigation records, and the amount still owed after proposed import. Typecheck and 254 unit tests pass after the lifecycle integration; 101 PostgreSQL integration tests and the V0 gate also pass. Separate bootstrap result schemas and the pure import planner are accepted. The full combined V2 gate also passes on `8962292`: 21 commands, 94 assertions and ten safe screenshots. The unmounted discovery lifecycle and read-only source validation are accepted; independent bootstrap expectations remain in progress. Joint user acceptance is pending. See [the terminology checkpoint](#terminology-and-bootstrap-contract-checkpoint).
+**Latest:** reviewed integration `8962292` clarifies other-account records, investigation records, and the amount still owed after proposed import. Latest combined typecheck and 260 unit tests pass, along with seven affected PostgreSQL integrations. Earlier scoped V0/V1/V2 gates and their exact commits remain recorded below. Separate bootstrap result schemas and the pure import planner are accepted. The full combined V2 gate also passes on `8962292`: 21 commands, 94 assertions and ten safe screenshots. The unmounted discovery lifecycle, read-only source validation, independent bootstrap expectations and exact-subject financial bridge are accepted. Discovery HTTP integration and candidate metadata are in progress. The user accepted the two record-category labels; broader joint acceptance remains pending. See [the terminology checkpoint](#terminology-and-bootstrap-contract-checkpoint).
 
 ## Published checkpoint (historical)
 
@@ -153,3 +153,19 @@ Source candidate `413d6e9` passed [fresh Astra review](reviews/b-discovery-captu
 The selected capture is checked against original bytes, registered resource schemas, manifest/snapshot membership, citation content and relational associations, with exact rechecks after external reads. Valid sellerless events remain part of the captured evidence and are omitted only from the exact seller/account tuple list. This preserves unresolved input for investigation instead of inventing an identity or silently dropping evidence.
 
 The live supervisor was restarted on `a905c32`, before this additive reader integration: health reports control migration 4 and runtime migration 1. All 253 existing demo/source/verification files retained identical fingerprints. A fresh browser preview still displays Company A's $800 unpaid amount, other-account category and zero parent writes. The read-only discovery entry point is not mounted until the separately specified L2 integration.
+
+
+## Joint terminology acceptance
+
+The user confirmed: “got it this is good, let's use this terminology,” explicitly choosing **Other accounts needing connectors** and **Records needing investigation**. This records acceptance of those presentation categories and their explanation. It does not imply approval of a customer, acceptance of financial reconstruction, or completion of the V2/V4 joint gates. The balance label remains **Amount still owed after proposed import**.
+
+
+## Independent bootstrap expectations and financial bridge
+
+S2 `e212cbd` passed [independent review](reviews/b-bootstrap-oracle-independent-review.md); S4b `1e2bf32` passed [independent review](reviews/b-bootstrap-financial-bridge-independent-review.md). Both are integrated at `2a2f292`. Root typecheck, **260 unit tests**, and all **seven affected PostgreSQL integration tests** passed on that combined code. [Oracle report](handoffs/b-bootstrap-oracle-report.md) and [financial bridge report](handoffs/b-bootstrap-financial-bridge-report.md) retain exact candidate evidence and limits.
+
+The protected oracle derives expected metadata, financial effects and lineage from source facts across the ten defined cases. The financial checker now permits a shape-valid bootstrap-bearing profile while retaining all previous financial evidence checks on the exact new subject. Actual A/B reports still require all thirteen checks. This does not certify metadata ensures, create approval authority, or activate a connection. The standalone bootstrap runner and trusted result registry remain pending.
+
+The [L2 discovery handoff](handoffs/b-discovery-l2.md) passed [scoped architecture fix review](reviews/b-discovery-l2-fix-review.md), correcting source error passthrough and requiring all delegation dependencies/memberships to be checked before the first batch effect. Implementation is assigned separately; accepted architecture is not an implemented API.
+
+Reproducibility note: S2's report digests belong to its exact candidate. The combined `2a2f292` run produced different sidecar digests with the same capture hashes because discovery workspace entries changed `package-lock.json`. The generator includes that lockfile in its build identity, which flows through protected producer/evidence hashes into the sidecar. This is an expected build-bound difference, not changed captured financial content.
