@@ -2,7 +2,7 @@
 
 This checkpoint publishes completed local work, preserves separately committed candidates, and records remaining work. It is not acceptance of the complete demo. Machine checks, independent Astra review, and joint user acceptance remain distinct.
 
-**Latest:** the localhost demo includes the reviewed Discovery monitor. Combined `700d135` passed typecheck, 309 unit tests, two Chromium monitor tests and the full V2 gate (21 commands, 94 assertions, ten safe screenshots). Safe authority contracts and durable bootstrap proof storage are integrated. Discovery read schemas are integrated at `c60fe26` after focused checks. Source tools, attested financial execution and parent storage are the three current implementation lanes. Model execution remains unconfigured; customer activation and continuing sync remain unavailable. Accepted record-category terminology remains unchanged.
+**Latest:** the localhost demo includes the reviewed Discovery monitor. Combined `700d135` passed typecheck, 309 unit tests, two Chromium monitor tests and the full V2 gate (21 commands, 94 assertions, ten safe screenshots). Safe authority contracts and durable bootstrap proof storage are integrated. Discovery read schemas are integrated at `c60fe26` after focused checks. Source read tools are integrated at `5b4c257`; their lifecycle integration, attested financial execution and parent storage are current work. Model execution remains unconfigured; customer activation and continuing sync remain unavailable. Accepted record-category terminology remains unchanged.
 
 ## Published checkpoint (historical)
 
@@ -236,3 +236,10 @@ D0 `0f0fca3a9d0a429aa792b0da5ce854e6f8d17542` passed [independent review](review
 3. [A3a parent persistence](handoffs/b-parent-storage-handoff.md): runtime002 and transaction-bound immutable records/receipts/snapshots. [Handoff review](reviews/b-parent-storage-handoff-independent-review.md) accepts this storage-only scope. Composed inactive reads still depend on A2; no grant route or sync loop is included.
 
 All three lanes require exact-candidate independent review before integration. Their current assignments are not evidence of implemented financial authority.
+
+
+## Pinned source read tools
+
+D1 initial `7242138` was withheld after review found that a source-wide CSV query could lack a captured original batch row. Corrected `d4f14bff7ba1bfb269cb166efd9c2828b691e4a2` passed [fresh scoped review](reviews/b-discovery-source-tools-fix-review.md) and is integrated at `5b4c257d71610a3fa8645b2b9040d4e11f848e9f`. The [report](handoffs/b-discovery-source-tools-report.md) preserves both the reproduced failure and fix evidence. Query requires complete original-row proof before applying account-only citation filtering. Prepared content uses the detached original-verified extraction instead of reloading mutable rows after validation.
+
+Root combined typecheck, 32 focused unit tests, 21 source/capture PostgreSQL tests and the full V1 gate passed. Packet `.evidence/5b4c257d71610a3fa8645b2b9040d4e11f848e9f/V1/2026-11-09T02-56-54-844Z-39486/` records the source/evidence regression. D2 owns actual tool advertisement, claims, guarded settlement, pause/recovery and persistence; a library alone does not enable live discovery.
