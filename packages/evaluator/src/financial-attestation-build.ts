@@ -8,7 +8,7 @@ export const financialBuildSources = Object.freeze([
     .map(name => 'packages/' + name + '/package.json'),
   ...[
     'activation-authority', 'activation-authority-hash', 'activation-bundle-v2', 'current-authority', 'activity', 'bootstrap-verification',
-    'bootstrap-verification-hash', 'canonical', 'common', 'connection-state', 'connector', 'discovery-helpers', 'discovery-tools',
+    'bootstrap-verification-hash', 'canonical', 'common', 'connector', 'discovery-helpers', 'discovery-tools',
     'discovery', 'evidence', 'index', 'local-demo', 'model', 'review-details', 'review', 'runtime', 'source-coverage', 'source', 'sync-capture',
   ].map(name => 'packages/contracts/src/' + name + '.ts'),
   ...[
