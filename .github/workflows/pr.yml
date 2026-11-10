@@ -1,0 +1,73 @@
+name: PR checks
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: pr-checks-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  EAPR_WEB_PORT: '5173'
+  EAPR_CONTROL_PORT: '3001'
+  EAPR_WORKER_PORT: '3002'
+  EAPR_PG_PORT: '55432'
+  EAPR_TEST_PREFIX: eapr_test_v0
+
+jobs:
+  typecheck-unit:
+    name: typecheck-unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:unit
+
+  integration:
+    name: integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install PostgreSQL 18
+        run: bash scripts/ci-install-pg18.sh
+      - run: npm ci
+      - run: npm run test:integration
+
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install PostgreSQL 18
+        run: bash scripts/ci-install-pg18.sh
+      - run: npm ci
+      - run: npm exec playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - name: Upload Playwright artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-test-results
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
