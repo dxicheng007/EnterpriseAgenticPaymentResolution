@@ -37,3 +37,25 @@ Main advanced to `6c7d4b4` through PR20 (CI workflow, installer and guidance onl
 Candidate `ad13e2fe87abeb03cfd1f2ab15eac19dc413ebaa` implements the internal current-authority service, durable head and immutable command audit. The [implementation report](platform-current-authority-implementation-report.md) records typecheck, 488 unit tests and 84 bounded integration tests passing, including 35 authority cases. Independent exact-candidate review is pending; authenticated product ingress and financial application remain excluded.
 
 Main subsequently advanced to `89cf0bd` through PR11 (the approval UI branch). The separate review-details PR14 remains unmerged and retains the findings above. New PR21 adds request-investigation schemas; PR22 corrects malformed tool-argument error mapping. They are separate owner candidates and have not yet received integrator acceptance.
+
+## Exact task acceptance and combined checks
+
+The [fresh exact-candidate review](../reviews/platform-current-authority-ad13e2f-review.md) approves both spec compliance and code quality at `ad13e2f`, with zero findings. Root pulled main `89cf0bd` cleanly into `d7e62274ffd36fa086486fb6c8dbc40ab885148b`. The integrated branch passes typecheck, 499 unit tests in 74 files, and all five migration-prerequisite/local-composition checks. The unchanged authority candidate's four-suite run passed all 84 cases. Logs: `/private/tmp/eapr-authority-integrated-checks.log` and `/private/tmp/eapr-authority-candidate-integration.log`. These are bounded machine results, not whole-slice or joint acceptance.
+
+[Draft PR23](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/23) is published. Its [first CI run](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/actions/runs/42746838521) failed at startup with no jobs. GitHub's visible annotation states that recent account payments failed or the spending limit needs increasing. Root did not change billing or settings. There is no CI pass.
+
+[PR21 and PR22 received an exact delta review](../reviews/platform-owner-pr21-pr22-review.md). PR21 has no blocker for contracts-only integration and one minor dormant-descriptor omission; it adds no protected-build source dependency. PR22 correctly normalizes malformed tool-argument JSON, but closes only part of the previously reviewed response-parsing finding. Four P1 groups and the remainder of the P2 remain open for live transport integration. No producer, live-provider or Gate J acceptance follows from these narrow corrections.
+
+Root pulled again after PR21/PR22 merged: main `8afe1c92b3e8decbcc4663131f8ce74002e984f8`, integration merge `a48c9bd626863a3623b52dda477f7ac00702ba77`. Typecheck and all 12 affected contracts/transport unit cases pass (`/private/tmp/eapr-authority-owner-integration.log`). The preceding authority, full-unit and startup evidence is retained with its exact candidate; no broader gate claim is added. Final whole-branch review follows this checkpoint.
+
+## Final bounded acceptance
+
+The [fresh final whole-branch review](../reviews/platform-current-authority-final-review.md) approves `acebe2bfa1aab9cb9dc145113d36a8d555efed13` over main `8afe1c9`, with zero findings. Its explicit proof limits match the accepted internal-service scope. PR23 was externally merged as `003fc3f54ed14ca11da7d5cd1e2a3a326f1c0651` while review ran; root pulled that merge cleanly. The authority source is unchanged from the independently accepted candidate. Remaining publication contains review and handoff documentation only.
+
+This completes the bounded current-authority implementation. The next implementation prerequisite is an exact plan for the accepted pure classification design; financial application, capture scheduling and authenticated authority ingress are still separate assignments. Runtime004 is now applied catalog history and must remain immutable. There is no remaining current-task code finding or implicit approval to mount the service.
+
+## Latest developer snapshot
+
+The [latest exact owner review](../reviews/platform-owner-pr24-pr25-experience-review.md) covers PR24 `0c6205e`, PR25 `6de30ef`, and Experience PR14 `3d818eb`. The offline token heuristic has no finding within that narrow scope, but does not close live-provider preflight/accounting requirements. The Gate J status documentation needs one P2 correction: merged consumers and conditional injection do not establish the failed acceptance gate. Experience restores the matching-details approval prerequisite in source; the original evidence/stop-condition, old-request recovery, and same-package detail retry findings remain open, with mounted browser proof still missing. These PR states are a snapshot; later commits require their own delta review.
+
+Final publication pull: main `4434030` includes PR25 and Experience PR14. The reviewed owner findings above remain applicable despite merge status. Root typecheck and all 12 review-client unit cases pass (`/private/tmp/eapr-authority-final-pull-checks.log`); no new mounted-browser acceptance is claimed. The authority follow-up diff against this main contains documentation only.
