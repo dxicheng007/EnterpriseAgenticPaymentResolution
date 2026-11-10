@@ -18,3 +18,4 @@ export * from './activation-authority.js';
 export * from './activation-authority-hash.js';
 export * from './activation-bundle-v2.js';
 export * from './discovery-tools.js';
+export * from './sync-capture.js';
