@@ -35,6 +35,7 @@ vi.mock('../src/bootstrap-runner.js', async importOriginal => {
 });
 
 const checkout = fileURLToPath(new URL('../../../', import.meta.url));
+const constructionTools = 'packages/contracts/src/discovery-construction-tools.ts';
 const families = [
   ['packages/evaluator/src/bootstrap-comparison.ts', false],
   ['packages/evaluator/src/bootstrap-reference.ts', false],
@@ -47,6 +48,7 @@ const families = [
   ['packages/contracts/src/current-authority.ts', true],
   ['packages/contracts/src/connection-state.ts', true],
   ['packages/contracts/src/discovery-tools.ts', true],
+  [constructionTools, true],
   ['packages/contracts/src/activation-authority.ts', true],
   ['packages/contracts/src/activation-authority-hash.ts', true],
   ['packages/contracts/src/activation-bundle-v2.ts', true],
@@ -58,21 +60,29 @@ const families = [
   ['tsconfig.json', true],
 ] as const;
 
-test('hashes actual source bytes from every owned family', async () => {
-  expect(bootstrapBuildSources.subject).toContain('packages/compiler/src/plan-batch.ts');
-  expect(bootstrapBuildSources.evaluator).toContain('packages/compiler/src/plan-batch.ts');
+async function withBuildCopy(check: (root: URL) => Promise<void>) {
   const temporary = await mkdtemp(join(tmpdir(), 'eapr-bootstrap-build-'));
   const root = pathToFileURL(temporary + '/');
   try {
-    await Promise.all(bootstrapBuildSources.evaluator.map(async name => {
-      const destination = join(temporary, name);
-      await mkdir(dirname(destination), { recursive: true });
+    await Promise.all([...new Set([...bootstrapBuildSources.evaluator, constructionTools])].map(async name => {
+      const destination = new URL(name, root);
+      await mkdir(new URL('.', destination), { recursive: true });
       await writeFile(destination, await readFile(join(checkout, name)));
     }));
+    await check(root);
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+}
+
+test('hashes actual source bytes from every owned family', async () => {
+  expect(bootstrapBuildSources.subject).toContain('packages/compiler/src/plan-batch.ts');
+  expect(bootstrapBuildSources.evaluator).toContain('packages/compiler/src/plan-batch.ts');
+  await withBuildCopy(async root => {
     const baseline = await readBootstrapBuildPins(root);
     expect(baseline).toEqual(await readBootstrapBuildPins());
     for (const [name, shared] of families) {
-      const path = join(temporary, name);
+      const path = new URL(name, root);
       const original = await readFile(path);
       await appendFile(path, '\n');
       const updated = await readBootstrapBuildPins(root);
@@ -80,11 +90,17 @@ test('hashes actual source bytes from every owned family', async () => {
       expect(updated.subjectBuildHash === baseline.subjectBuildHash, name).toBe(!shared);
       await writeFile(path, original);
     }
-    await rm(join(temporary, 'package-lock.json'));
+    await rm(new URL('package-lock.json', root));
     await expect(readBootstrapBuildPins(root)).rejects.toThrow('BUILD_MISMATCH');
-  } finally {
-    await rm(temporary, { recursive: true, force: true });
-  }
+  });
+});
+
+test('rejects bootstrap build pins when the construction tool leaf is missing', async () => {
+  await withBuildCopy(async root => {
+    expect(await readBootstrapBuildPins(root)).toEqual(await readBootstrapBuildPins());
+    await rm(new URL(constructionTools, root));
+    await expect(readBootstrapBuildPins(root)).rejects.toThrow('BUILD_MISMATCH');
+  });
 });
 
 test('pins the recursive runtime import graph of each bootstrap entrypoint', async () => {
