@@ -29,13 +29,12 @@ type IntentRow = {
 };
 type ObservationRow = { receipt_id: string; receipt_canonical: string; receipt_digest: string; observed_at: Date };
 type ReviewFields = Omit<ReviewPackage, 'id' | 'hash' | 'revision'>;
+export type StoredPreparation = {
+  review: ReviewPackage; companion: unknown; fingerprint: string; sourceRef: string;
+};
 
 export function createReviewRepository(db: Pool, clock: () => Date) {
-  async function readHead(accountId: string, executor: Pool | PoolClient = db) {
-    const { rows: [row] } = await executor.query<ReviewRow>(
-      'SELECT r.* FROM review_heads h JOIN prepared_reviews r ON r.id = h.package_id WHERE h.account_id = $1', [accountId],
-    );
-    if (!row) return null;
+  function decodePreparation(row: ReviewRow): StoredPreparation {
     const review = ReviewPackageSchema.parse(JSON.parse(row.package_canonical));
     const companion: unknown = JSON.parse(row.companion_canonical);
     if (review.id !== row.id || review.scope.accountId !== row.account_id || review.revision !== Number(row.revision) ||
@@ -43,6 +42,21 @@ export function createReviewRepository(db: Pool, clock: () => Date) {
         canonicalJson(review) !== row.package_canonical || canonicalJson(companion) !== row.companion_canonical ||
         hashCanonical(companion) !== row.companion_digest) throw new ReviewError(503, 'REVIEW_UNAVAILABLE');
     return { review, companion, fingerprint: row.fingerprint, sourceRef: row.source_ref };
+  }
+
+  async function readHead(accountId: string, executor: Pool | PoolClient = db) {
+    const { rows: [row] } = await executor.query<ReviewRow>(
+      'SELECT r.* FROM review_heads h JOIN prepared_reviews r ON r.id = h.package_id WHERE h.account_id = $1', [accountId],
+    );
+    return row ? decodePreparation(row) : null;
+  }
+
+  async function readPrepared(accountId: string, packageHash: string): Promise<StoredPreparation | null> {
+    const { rows } = await db.query<ReviewRow>(
+      'SELECT * FROM prepared_reviews WHERE account_id = $1 AND package_hash = $2', [accountId, packageHash],
+    );
+    if (rows.length > 1) throw new ReviewError(503, 'REVIEW_UNAVAILABLE');
+    return rows[0] ? decodePreparation(rows[0]) : null;
   }
 
   async function lockHead(client: PoolClient, accountId: string) {
@@ -104,7 +118,7 @@ export function createReviewRepository(db: Pool, clock: () => Date) {
   }
 
   return {
-    readHead, readCommittedIntent, readIntentByKey,
+    readHead, readPrepared, readCommittedIntent, readIntentByKey,
     async savePreparation(token: HeadToken, input: {
       fields: ReviewFields; fingerprint: string; sourceRef: string; companion: unknown;
     }) {

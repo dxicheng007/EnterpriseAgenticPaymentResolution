@@ -11,7 +11,8 @@ The supervisor generates a separate read-only source capability for control and 
 Use the local reviewer session and origin. Send the session cookie and CSRF header on mutations.
 
 - Send `POST /api/review/:accountId/prepare` with an empty JSON object. Control validates the current capture, financial proof, target and source semantics. It executes or reuses a protected bootstrap verification for that exact target and saves the prepared package.
-- Send `GET /api/review/:accountId` to read the saved package. This request reads the saved review without running verification.
+- Send `GET /api/review/:accountId` to read the latest saved package. This request reads the saved review without running verification.
+- Send `GET /api/review/:accountId/packages/:packageHash/details` with the displayed package hash. Current account and source grants apply to every read, including historical packages. The response includes the saved parent baseline, proposed import and lineage, referenced citation IDs for the pinned snapshot, and the reviewed future scope. Both displayed balances use the plan's evaluation time. The read remains available after setup is removed if the saved bindings are intact. It performs zero parent writes.
 - After explicitly reviewing the individual customer, send `POST /api/review/:accountId/activate`. Supply only `reviewPackageId`, `expectedPackageHash`, `expectedArtifactHash`, `expectedProfileHash`, `expectedTargetVersion` from the prepared package, and a fresh `idempotencyKey` for this action.
 
 Control commits the approval intent, checks for an exact worker receipt, and publishes the original bundle if application is still pending. HTTP 200 contains the authoritative receipt and its replay flag. HTTP 202 indicates the durable intent remains pending. Retry the same body and key with a currently authorized reviewer session. See [first activation and receipt recovery](worker-activation-setup.md) for runtime inspection and recovery.

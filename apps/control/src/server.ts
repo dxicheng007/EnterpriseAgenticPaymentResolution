@@ -1,4 +1,6 @@
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyPluginAsync, type FastifyReply, type FastifyRequest } from 'fastify';
+import { reviewDetailsRoute, sendReviewError } from './routes/review.js';
+import { ReviewError } from './review-repository.js';
 import { ParentReadError, sendParentReadError } from '../../worker/src/routes/parent.js';
 import type { Pool } from 'pg';
 import { ApiErrorSchema, ServiceHealthSchema, type Diagnostic, type HealthResponse, type ServiceHealth } from '../../../packages/contracts/src/index.js';
@@ -61,6 +63,11 @@ export function buildControl({ db, workerClient, clock, expectedMigrations, feat
             ((parentPath.test(request.url) && control.hasRoute({ method: 'GET', url: '/api/parent/:accountId' })) ||
              (activationPath.test(request.url) && control.hasRoute({ method: 'GET', url: '/api/accounts/:accountId/activation' })))) {
           return sendParentReadError(new ParentReadError(400), request, reply);
+        }
+        const detailsPath = /^(?:https?:\/\/[^/?#]+)?\/api\/review\/[^/?#]+\/packages\/[^/?#]+\/details(?:\?|$)/;
+        if (request.method === 'GET' && detailsPath.test(request.url) &&
+            control.hasRoute({ method: 'GET', url: reviewDetailsRoute })) {
+          return sendReviewError(new ReviewError(400, 'REVIEW_REQUEST_INVALID'), request, reply);
         }
         const reviewPath = /^(?:https?:\/\/[^/?#]+)?\/api\/review\/[^/?#]+(?:\/(prepare|activate))?(?:\?|$)/;
         const reviewMatch = reviewPath.exec(request.url);
