@@ -762,6 +762,103 @@ test('cross-run readVerification denial keeps foreign jobs out of verificationJo
   }
 }, 180_000);
 
+test('reserve then stale assessment restart recovers job without current success', async () => {
+  let owner: Owner | undefined;
+  let pending: Promise<unknown> | undefined;
+  let runId = '';
+  try {
+    const prepared = await preparedVerify('verif-stale-restart', {
+      testHooks: {
+        afterVerificationEnqueue: async () => {
+          const { rows: [row] } = await db.query<{ job_id: string }>(
+            'SELECT job_id FROM discovery_verification_requests WHERE run_id=$1', [runId]);
+          await waitJob(row!.job_id);
+          const updated = await db.query(`
+            UPDATE discovery_proposal_current
+            SET result = jsonb_set(
+              jsonb_set(result, '{assessment,diagnosticCodes}', '["ASSESSMENT_STALE"]'::jsonb, true),
+              '{state}', '"compile_blocked"')
+            WHERE run_id=$1`, [runId]);
+          if (updated.rowCount !== 1) throw new Error('failed to stale assessment: ' + updated.rowCount);
+          void owner?.close();
+        },
+      },
+    });
+    owner = prepared.owner;
+    runId = prepared.run.runId;
+    const priorGeneration = owner.generation;
+    const [step] = await prepared.run.accept(owner, [verifyCall('verify', prepared.compiled)], 3, prepared.task);
+    pending = owner.executePendingStep(prepared.run.runId, prepared.task, step!);
+    expect(await pending).toBeUndefined();
+    expect(await mappingCount(prepared.run.runId)).toBe(1);
+    const jobId = (await db.query<{ job_id: string }>(
+      'SELECT job_id FROM discovery_verification_requests WHERE run_id=$1', [prepared.run.runId],
+    )).rows[0]!.job_id;
+
+    owner = (await acquire(prepared.model.model, instrumentReads().readTools, { withVerification: true })).owner;
+    expect(owner.generation).toBeGreaterThan(priorGeneration);
+    expect(await storedStep(step!)).toMatchObject({ state: 'interrupted', result: null });
+    const recovered = await owner.executePendingStep(prepared.run.runId, prepared.task, step!);
+    expect(recovered).toMatchObject({ ok: false, code: 'DISCOVERY_CONFLICT' });
+    expect(await counts(prepared.run.runId)).toMatchObject({
+      mappings: 1, attempts: 1, reservations: 1, completed: 1,
+    });
+    expect((await prepared.run.state()).verificationJobs).toEqual([
+      expect.objectContaining({
+        proposalId: prepared.compiled.proposalId, proposalRevision: prepared.compiled.revision, jobId,
+      }),
+    ]);
+    expect((await prepared.run.state()).proposals[0]).toMatchObject({ state: 'compile_blocked' });
+  } finally {
+    try { await pending; } catch { /* owner lost */ }
+    await owner?.close();
+    trustedAccounts = [];
+  }
+}, 180_000);
+
+test('completed job survives settle loss and recovers without relaunch', async () => {
+  let owner: Owner | undefined;
+  let pending: Promise<unknown> | undefined;
+  let runId = '';
+  try {
+    const prepared = await preparedVerify('verif-complete-settle-loss', {
+      testHooks: {
+        afterVerificationEnqueue: async () => {
+          const { rows: [row] } = await db.query<{ job_id: string }>(
+            'SELECT job_id FROM discovery_verification_requests WHERE run_id=$1', [runId]);
+          await waitJob(row!.job_id);
+          void owner?.close();
+        },
+      },
+    });
+    owner = prepared.owner;
+    runId = prepared.run.runId;
+    const priorGeneration = owner.generation;
+    const [step] = await prepared.run.accept(owner, [verifyCall('verify', prepared.compiled)], 3, prepared.task);
+    pending = owner.executePendingStep(prepared.run.runId, prepared.task, step!);
+    expect(await pending).toBeUndefined();
+    const jobId = (await db.query<{ job_id: string }>(
+      'SELECT job_id FROM discovery_verification_requests WHERE run_id=$1', [prepared.run.runId],
+    )).rows[0]!.job_id;
+    expect(await counts(prepared.run.runId)).toMatchObject({
+      mappings: 1, attempts: 1, reservations: 1, completed: 1, reports: 1, attestations: 1,
+    });
+
+    owner = (await acquire(prepared.model.model, instrumentReads().readTools, { withVerification: true })).owner;
+    expect(owner.generation).toBeGreaterThan(priorGeneration);
+    expect(await storedStep(step!)).toMatchObject({ state: 'interrupted', result: null });
+    const recovered = await owner.executePendingStep(prepared.run.runId, prepared.task, step!);
+    expect(recovered).toMatchObject({ ok: true, job: { jobId, state: 'completed' } });
+    expect(await counts(prepared.run.runId)).toMatchObject({
+      mappings: 1, attempts: 1, reservations: 1, completed: 1, reports: 1, attestations: 1,
+    });
+  } finally {
+    try { await pending; } catch { /* owner lost */ }
+    await owner?.close();
+    trustedAccounts = [];
+  }
+}, 180_000);
+
 test('same-key concurrent replay reuses one mapping and budget', async () => {
   trustedAccounts = [trustedAccountId];
   const model = scriptedModel();
