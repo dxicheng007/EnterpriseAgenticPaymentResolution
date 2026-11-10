@@ -4,6 +4,17 @@ Date: November 10, 2026
 Audience: Integrator, Platform, Experience, cold-start agents  
 Status: Coordination path for a **runnable on-stage demo**. Not joint acceptance. Not live construction.
 
+## Staged frontend when services are down
+
+For walkthroughs against an incomplete deploy, the web app supports **opt-in staged demo responses**:
+
+1. Click **Enable staged demo responses** in the banner, or open with `#health?stub=1`, or set `VITE_EAPR_DEMO_STUB=1`.
+2. Buttons show a short loading theater, then hardcoded Company A fixture outcomes (80000 cutover / 50000 after simulated inject).
+3. Copy always labels the mode as staged/development-fixture — not live receipts and not live construction.
+4. Click **Use live local APIs** to return to real control/worker calls (required for e2e and joint acceptance).
+
+This is presentation scaffolding only. Core activation/sync work continues on the live path in Step 1–4 below.
+
 ## Locked product shape
 
 The demo MVP is the frozen [demo contract](../../demo/demo-contract.md) track:
