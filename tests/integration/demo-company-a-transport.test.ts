@@ -10,7 +10,7 @@ import type { DemoRoleSetup } from '../fixtures/demo-company-a-process.js';
 import { assertWorkerSourcesModelFree, modelCredentialEnvNames, workerProductionImportGraph, workerSourceFiles } from '../fixtures/v5-ai-off.js';
 import type { Pool } from 'pg';
 import { expect, test } from 'vitest';
-import { DemoCandidatesResponseSchema, IdSchema, RawSourceEventSchema, ReceiptResponseSchema, SafeIntegerSchema, hashSpec, strict } from '@eapr/contracts';
+import { ConnectionStateV1Schema, DemoCandidatesResponseSchema, IdSchema, RawSourceEventSchema, ReceiptResponseSchema, SafeIntegerSchema, hashSpec, strict } from '@eapr/contracts';
 import { createRuntimeDb } from '@eapr/storage/runtime-db';
 import { composeDemoSource } from '../../apps/control/src/demo-source-composition.js';
 import { launchControl } from '../../apps/control/src/server.js';
@@ -446,8 +446,40 @@ async function observeMountedCompanyA(data: SyncApplyFixture, collectObservation
       const original = await withTransaction(data.db, client => readStoredActivation(client, demo.scope));
       expect(original?.receipt).toEqual(stored.receipt);
       expect(original?.approvedTarget).toEqual(stored.approvedTarget);
-      if (!collectObservation) return;
       const { activation, bundle, receipt: initial } = stored;
+
+      const controlOrigin = 'http://127.0.0.1:' + controlPort;
+      const webOrigin = 'http://127.0.0.1:' + input.webPort;
+      const opened = await post(controlOrigin, '/api/local-session', undefined, '{}', { origin: webOrigin, 'x-eapr-local-ui': '1' });
+      expect(opened.status).toBe(200);
+      await opened.body?.cancel();
+      const cookie = opened.headers.getSetCookie()[0]?.split(';')[0];
+      expect(cookie).toBeTruthy();
+      const connectionResponse = await fetch(controlOrigin + '/api/connections/' + encodeURIComponent(demo.scope.accountId), {
+        headers: { cookie: cookie! }, redirect: 'error', signal: AbortSignal.timeout(10_000),
+      });
+      expect(connectionResponse.status).toBe(200);
+      const connection = ConnectionStateV1Schema.parse(await connectionResponse.json());
+      expect(connection.scope).toEqual(demo.scope);
+      expect(connection).toMatchObject({
+        activationId: activation.id, epoch: activation.epoch, parentVersion: before.version + 1,
+        lastReceiptId: applied.receiptId,
+        counts: { appliedBatches: 1, pendingEvents: null, quarantinedEvents: null },
+      });
+      expect(connection.receipts).toHaveLength(2);
+      expect(connection.receipts.find(receipt => receipt.kind === 'sync')).toMatchObject({
+        id: applied.receiptId, activationId: activation.id, epoch: activation.epoch,
+        beforeVersion: before.version, afterVersion: current.version,
+        beforeBalanceCents: 80000, afterBalanceCents: 50000,
+      });
+      expect(connection.receipts.find(receipt => receipt.kind === 'initial')).toMatchObject({
+        id: initial.id, activationId: activation.id, epoch: activation.epoch,
+        afterVersion: before.version, afterBalanceCents: 80000,
+      });
+      expect(connection.streams.map(stream => stream.streamId).sort()).toEqual([...demo.streams].sort());
+      for (const stream of connection.streams) expect(stream.lagEvents).toBeNull();
+
+      if (!collectObservation) return;
       const { artifact, manifest, reviewPackage } = bundle;
       const profile = bundle.profiles.find(profile => profile.hash === activation.profileHash);
       expect(profile).toMatchObject({ id: demo.profileId, version: demo.profileVersion, parentCustomerId: demo.parentCustomerId });
@@ -480,13 +512,6 @@ async function observeMountedCompanyA(data: SyncApplyFixture, collectObservation
       expect(savedReceipt!.targetRecordIds).toEqual(expect.arrayContaining([payment.id, allocation.id]));
       expect(savedReceipt!.targetRecordIds).toHaveLength(2);
 
-      const controlOrigin = 'http://127.0.0.1:' + controlPort;
-      const webOrigin = 'http://127.0.0.1:' + input.webPort;
-      const opened = await post(controlOrigin, '/api/local-session', undefined, '{}', { origin: webOrigin, 'x-eapr-local-ui': '1' });
-      expect(opened.status).toBe(200);
-      await opened.body?.cancel();
-      const cookie = opened.headers.getSetCookie()[0]?.split(';')[0];
-      expect(cookie).toBeTruthy();
       const catalogResponse = await fetch(controlOrigin + '/api/demo/candidates', {
         headers: { cookie: cookie! }, redirect: 'error', signal: AbortSignal.timeout(10_000),
       });
