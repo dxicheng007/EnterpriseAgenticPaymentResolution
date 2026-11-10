@@ -7,6 +7,8 @@ import { createLocalComposition } from '../../../apps/control/src/composition.js
 import { createParentReadClient } from '../../../apps/control/src/parent-read-client.js';
 import { createReviewRepository, headToken } from '../../../apps/control/src/review-repository.js';
 import type { ControlServices } from '../../../apps/control/src/server.js';
+import { composeWorkerAuthority } from '../../../apps/worker/src/authority-composition.js';
+import { createAuthorityWorkerClient } from '../../../apps/control/src/authority-worker-client.js';
 import { composeWorkerActivation } from '../../../apps/worker/src/activation-composition.js';
 import { composeWorkerParentReads } from '../../../apps/worker/src/parent-read-composition.js';
 import type { WorkerServices } from '../../../apps/worker/src/server.js';
@@ -20,6 +22,7 @@ export function createReviewActivationMount(root: string, webOrigin: string) {
   const controlOrigin = 'http://127.0.0.1:' + localPort('EAPR_CONTROL_PORT', 3001);
   const workerOrigin = 'http://127.0.0.1:' + localPort('EAPR_WORKER_PORT', 3002);
   const sourceReadToken = randomBytes(32).toString('hex');
+  const admissionToken = randomBytes(32).toString('hex');
   let serviceToken = '';
   let proofs: ReviewActivationProofs | undefined;
 
@@ -35,6 +38,10 @@ export function createReviewActivationMount(root: string, webOrigin: string) {
       sourceReadToken,
       sourceRefs: [proofs.a.sourceRef, proofs.b.sourceRef],
     })(app, services);
+    await composeWorkerAuthority({
+      admissionOrigin: controlOrigin, admissionToken,
+      source: { origin: controlOrigin, token: sourceReadToken, sourceRefs: [proofs.a.sourceRef, proofs.b.sourceRef] },
+    })(app, services);
   }];
 
   async function controlPlugins({ db, clock }: ControlServices): Promise<FastifyPluginAsync<ControlServices>[]> {
@@ -47,6 +54,7 @@ export function createReviewActivationMount(root: string, webOrigin: string) {
       registry: proofs.candidates,
       parentReads,
       sourceReadToken,
+      authorityOperations: { worker: createAuthorityWorkerClient(workerOrigin, serviceToken), admissionToken },
       activationReview: {
         registryRoot: proofs.registryRoot,
         policyPath: proofs.policyPath,

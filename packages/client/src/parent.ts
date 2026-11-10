@@ -7,6 +7,7 @@ import {
   type ParentReadQuery, type ParentView,
 } from '../../contracts/src/runtime.js';
 import { ConnectionStateV1Schema } from '../../contracts/src/connection-state.js';
+import { AuthorityStatusResponseV1Schema } from '../../contracts/src/current-authority.js';
 import { LocalApiError, requestLocal } from './http.js';
 
 function sameScope(left: Scope, right: Scope) {
@@ -77,4 +78,21 @@ export async function readConnectionState(accountId: string, signal?: AbortSigna
     throw new LocalApiError(200, 'MALFORMED_RESPONSE', 'The connection state did not match the selected account.');
   }
   return state;
+}
+
+export type AuthorityAction = 'pause' | 'resume' | 'revoke';
+
+export async function changeAuthority(
+  accountId: string, action: AuthorityAction, expectedEpoch: number, idempotencyKey: string, signal?: AbortSignal,
+) {
+  const id = accountIdOf(accountId);
+  const response = await requestLocal('/api/connections/' + encodeURIComponent(id) + '/' + action,
+    AuthorityStatusResponseV1Schema, {
+      method: 'POST', signal, headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedEpoch, idempotencyKey }),
+    }, true);
+  if (response.result.identity.scope.accountId !== id || response.result.action !== action) {
+    throw new LocalApiError(200, 'MALFORMED_RESPONSE', 'The authority result did not match the request.');
+  }
+  return response;
 }

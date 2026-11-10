@@ -50,15 +50,33 @@ test('shows worker-authoritative connection state, receipts and honest unmeasure
     await expect(panel.getByText(state.receipts[0]!.id, { exact: true }).first()).toBeVisible();
     await expect(panel.getByText(formatUsdCents(state.receipts[0]!.afterBalanceCents), { exact: true }).first()).toBeVisible();
     await expect(panel.getByText('Not measured', { exact: true }).first()).toBeVisible();
-    await expect(panel.getByText(/controls are not available/i)).toBeVisible();
-    await expect(panel.getByRole('button', { name: /pause|resume|revoke/i })).toHaveCount(0);
+
+    const controls = page.getByRole('region', { name: 'Authority controls' });
+    const pause = apiResponse(page, '/api/connections/' + accountA + '/pause', 'POST');
+    await controls.getByRole('button', { name: 'Pause this customer' }).click();
+    const paused = await pause;
+    expect(paused.status()).toBe(200);
+    expect(paused.request().postDataJSON()).toMatchObject({ expectedEpoch: 1 });
+    await expect(controls.getByText(/Pause recorded: paused at epoch 2/)).toBeVisible();
+    await expect(panel.getByText(/Paused: no new input/)).toBeVisible();
+    await expect(controls.getByRole('button', { name: 'Pause this customer' })).toHaveCount(0);
+
+    await controls.getByRole('button', { name: 'Resume this customer' }).click();
+    await expect(controls.getByText(/Resume recorded: active at epoch 3/)).toBeVisible();
+
+    await controls.getByRole('button', { name: 'Revoke this customer' }).click();
+    await page.getByRole('alertdialog', { name: 'Confirm revoke' }).getByRole('button', { name: 'Confirm revoke' }).click();
+    await expect(controls.getByText(/Revoke recorded: revoked at epoch 4/)).toBeVisible();
+    await expect(panel.getByText(/Revoked: authority was withdrawn/)).toBeVisible();
+    await expect(controls.getByRole('button')).toHaveCount(0);
 
     const inactive = apiResponse(page, '/api/connections/' + accountB);
     await page.getByLabel('Registered account').selectOption(accountB);
     const other = ConnectionStateV1Schema.parse(await (await inactive).json());
     expect(other).toMatchObject({ status: 'inactive', epoch: 0, activationId: null, receipts: [], lastReceiptId: null });
     await expect(page.getByRole('region', { name: 'Connection state' }).getByText(/Inactive:/)).toBeVisible();
-    expect(writes).toEqual([]);
+    expect(writes.map(write => write.split('/').pop())).toEqual(['pause', 'resume', 'revoke']);
+    expect(writes.every(write => write.includes(accountA))).toBe(true);
   } finally {
     await close();
   }
