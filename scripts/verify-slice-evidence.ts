@@ -20,6 +20,8 @@ const browserSpec = z.object({
   tests: z.array(z.object({
     status: z.string(),
     expectedStatus: z.string(),
+    projectId: z.string().optional(),
+    projectName: z.string().optional(),
     results: z.array(z.object({
       status: z.string(), retry: z.number().optional(), error: z.unknown().optional(), errors: z.array(z.unknown()).optional(),
     })),
@@ -32,7 +34,11 @@ const browserSuite = z.object({
 });
 const browserShape = z.object({
   suites: z.array(z.unknown()).length(1),
-  stats: z.record(z.string(), z.unknown()).optional(),
+  config: z.object({ projects: z.tuple([z.object({ id: z.string(), name: z.string() })]) }).optional(),
+  stats: z.object({
+    expected: z.number(), unexpected: z.literal(0), skipped: z.literal(0), flaky: z.literal(0),
+    failed: z.literal(0).optional(),
+  }),
 });
 const summaryShape = z.looseObject({
   success: z.literal(true).optional(),
@@ -57,12 +63,10 @@ function vitestCases(report: unknown, root: string, file: string) {
   }));
 }
 
-function playwrightCases(report: unknown, file: string) {
+function playwrightCases(report: unknown, file: string, expectedCount: number) {
   const parsed = browserShape.safeParse(report);
-  if (!parsed.success) return;
-  const { suites, stats } = parsed.data;
-  if (stats && Object.entries(stats).some(([key, value]) =>
-    ['unexpected', 'skipped', 'flaky', 'failed'].includes(key) && value !== 0)) return;
+  if (!parsed.success || parsed.data.stats.expected !== expectedCount) return;
+  const { suites, config } = parsed.data;
 
   const expectedFile = relative('tests/e2e', file);
   const specs: z.infer<typeof browserSpec>[] = [];
@@ -73,7 +77,6 @@ function playwrightCases(report: unknown, file: string) {
         (suite.data.file !== undefined && suite.data.file !== expectedFile)) return false;
     const children = suite.data.suites ?? [];
     const currentSpecs = suite.data.specs ?? [];
-    if (children.length > 0 && currentSpecs.length > 0) return false;
     if (children.length === 0 && currentSpecs.length === 0) return false;
     for (const spec of currentSpecs) {
       if (spec.file !== undefined && spec.file !== expectedFile) return false;
@@ -83,14 +86,16 @@ function playwrightCases(report: unknown, file: string) {
     return children.every(child => visit(child, depth + 1));
   }
   if (!visit(suites[0], 0) || specs.length < 1) return;
+  const firstTest = specs[0].tests[0];
+  const project = config?.projects[0] ?? { id: firstTest.projectId, name: firstTest.projectName };
   return specs.map(spec => {
     const [test] = spec.tests;
     const result = test.results[0];
     return {
       name: spec.title,
-      passed: spec.ok !== false && test.status === 'expected' &&
-        test.expectedStatus === 'passed' && test.results.length === 1 && result.status === 'passed' &&
-        (result.retry === undefined || result.retry === 0) && !result.error && !result.errors?.length,
+      passed: spec.ok !== false && test.projectId === project.id && test.projectName === project.name &&
+        test.status === 'expected' && test.expectedStatus === 'passed' && test.results.length === 1 && result.status === 'passed' &&
+        (result.retry === undefined || result.retry === 0) && result.error == null && !result.errors?.length,
     };
   });
 }
@@ -99,7 +104,9 @@ export function normalizeReport(
   kind: 'vitest' | 'playwright', report: unknown, root: string, file: string, expected: readonly string[],
 ): ReportResult {
   if (!cleanSummary(report)) return { cases: [], diagnostics: ['report-summary-invalid'] };
-  const received = kind === 'vitest' ? vitestCases(report, root, file) : playwrightCases(report, file);
+  const received = kind === 'vitest'
+    ? vitestCases(report, root, file)
+    : playwrightCases(report, file, expected.length);
   if (!received) return { cases: [], diagnostics: ['report-shape-or-file-invalid'] };
 
   const cases: NormalizedCase[] = [];

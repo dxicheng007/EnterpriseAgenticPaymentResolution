@@ -22,7 +22,7 @@ const vitest = () => ({
 });
 const execution = () => ({
   status: 'expected', expectedStatus: 'passed',
-  results: [{ status: 'passed', retry: 0, attachments: [{ body: secret }] }],
+  results: [{ status: 'passed', retry: 0, attachments: [{ body: secret }], stdout: [{ text: secret }] }],
 });
 const playwright = () => ({
   errors: [],
@@ -45,6 +45,90 @@ test('normalizes only the expected file, names and statuses', () => {
   expect(normalizeBrowser(playwright())).toEqual({
     cases: [{ file: browser, name: 'mandatory browser case', status: 'passed' }], diagnostics: [],
   });
+});
+
+const multiBrowser = 'tests/e2e/v3-review.spec.ts';
+const multiFile = 'v3-review.spec.ts';
+const browserNames = ['approve one customer', 'recover an earlier approval'];
+const browserProject = { id: 'default', name: 'Default' };
+const multiPlaywright = () => ({
+  config: { projects: [browserProject] },
+  errors: [] as unknown[],
+  stats: { unexpected: 0, skipped: 0, flaky: 0, expected: 2 },
+  suites: [{
+    file: multiFile,
+    specs: [...browserNames].reverse().map(title => ({
+      title, file: multiFile, ok: true,
+      tests: [{ ...execution(), projectId: browserProject.id, projectName: browserProject.name }],
+    })),
+  }],
+});
+const normalizeMultiBrowser = (report: unknown) => normalizeReport('playwright', report, root, multiBrowser, browserNames);
+
+const multiBrowserResult = {
+  cases: [
+    { file: multiBrowser, name: 'approve one customer', status: 'passed' },
+    { file: multiBrowser, name: 'recover an earlier approval', status: 'passed' },
+  ],
+  diagnostics: [],
+};
+
+test('normalizes two mandatory specs in one file in allowlist order', () => {
+  expect(normalizeMultiBrowser(multiPlaywright())).toEqual(multiBrowserResult);
+});
+
+test('normalizes mandatory specs across direct and nested suites of the same file', () => {
+  const report = multiPlaywright();
+  const [suite] = report.suites;
+  const [nested] = suite.specs.splice(0, 1);
+  expect(normalizeMultiBrowser({
+    ...report, suites: [{ ...suite, suites: [{ file: multiFile, specs: [nested] }] }],
+  })).toEqual(multiBrowserResult);
+});
+
+test.each<[string, (report: ReturnType<typeof multiPlaywright>) => unknown]>([
+  ['missing spec', report => report.suites[0].specs.pop()],
+  ['extra spec', report => report.suites[0].specs.push({ ...report.suites[0].specs[0], title: secret })],
+  ['duplicate spec', report => { report.suites[0].specs[0].title = report.suites[0].specs[1].title; }],
+  ['unlisted spec', report => { report.suites[0].specs[0].title = secret; }],
+  ['wrong spec file', report => { report.suites[0].specs[0].file = 'other.spec.ts'; }],
+  ['duplicate file suite', report => report.suites.push(report.suites[0])],
+  ['extra project execution', report => report.suites[0].specs[0].tests.push(report.suites[0].specs[0].tests[0])],
+  ['extra configured project', report => report.config.projects.push({ id: secret, name: secret })],
+  ['different project ID', report => { report.suites[0].specs[0].tests[0].projectId = secret; }],
+  ['different project name', report => { report.suites[0].specs[0].tests[0].projectName = secret; }],
+  ['report error', report => report.errors.push({ message: secret })],
+  ['incorrect expected count', report => { report.stats.expected = 1; }],
+  ['unexpected count', report => { report.stats.unexpected = 1; }],
+  ['skipped count', report => { report.stats.skipped = 1; }],
+  ['flaky count', report => { report.stats.flaky = 1; }],
+])('rejects %s in a multi-spec report without leaking reporter data', (_, mutate) => {
+  const report = multiPlaywright();
+  mutate(report);
+  const result = normalizeMultiBrowser(report);
+  expect(result.diagnostics).not.toEqual([]);
+  expect(JSON.stringify(result)).not.toContain(secret);
+});
+
+test('rejects empty suite branches even with both mandatory specs', () => {
+  const report = multiPlaywright();
+  const result = normalizeMultiBrowser({
+    ...report, suites: [{ ...report.suites[0], suites: [{ file: multiFile, specs: [] }] }],
+  });
+  expect(result.diagnostics).not.toEqual([]);
+});
+
+test('rejects Playwright reports with incomplete summary counters', () => {
+  const report = multiPlaywright();
+  const result = normalizeMultiBrowser({ ...report, stats: { expected: 2 } });
+  expect(result.diagnostics).not.toEqual([]);
+});
+
+test('rejects browser suites deeper than the traversal bound', () => {
+  const report = multiPlaywright();
+  let suite: unknown = report.suites[0];
+  for (let depth = 0; depth < 33; depth++) suite = { file: multiFile, suites: [suite] };
+  expect(normalizeMultiBrowser({ ...report, suites: [suite] }).diagnostics).not.toEqual([]);
 });
 
 test.each([
@@ -80,6 +164,8 @@ test.each([null, '', { testResults: [{}] }])('rejects malformed Vitest and Playw
 
 test.each([
   ['skipped', { status: 'skipped' }],
+  ['failed', { results: [{ status: 'failed', retry: 0 }] }],
+  ['result error', { results: [{ status: 'passed', retry: 0, error: { message: secret } }] }],
   ['expected failure', { expectedStatus: 'failed' }],
   ['unexpected pass', { status: 'unexpected', expectedStatus: 'failed' }],
   ['flaky', { status: 'flaky' }],
