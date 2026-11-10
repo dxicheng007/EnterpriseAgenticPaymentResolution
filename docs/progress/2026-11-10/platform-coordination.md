@@ -11,7 +11,7 @@ PR42 browser evidence, PR43 Discovery corrections, PR44 connection reads/UI and 
 - Developer 0 reserves **`db/runtime/006_sync_apply_repair.sql`** for the bounded unmounted atomic-apply repair. All 75 fetched origin refs were inspected at this checkpoint; none contained runtime migrations beyond005 or control migrations beyond009. Recheck before dispatch and integration.
 - Runtime001–005 remain immutable. The plan must repair receipt origins, captured-input coverage and atomic application progress additively while preserving PR44's reads of nonempty `runtime_sync_receipts`. No empty monetary receipt or automatic production mount is authorized.
 - Developer 0 owns the protected build-inventory integration correction for the new `packages/contracts/src/connection-state.ts` export. Combined main unit results: 558 passed / two inventory failures; typecheck passed. The source contract remains Experience's existing contribution. Do not weaken the recursive-closure tests or repin the preserved demo.
-- No control migration is reserved by this note. Discovery repair/finish grants and generated-account capability rules require their own reviewed Platform contract and reservation.
+- The later completion-prerequisite section reserves control010 after a separate catalog check. Generated-account capability remains a separate permission-policy decision.
 
 ## Owner follow-up protocol
 
@@ -58,3 +58,17 @@ The [authority ingress design](authority-operations-ingress-design.md), SHA-256 
 Experience can prepare the consumer against the documented existing DTOs and exact `{expectedEpoch,idempotencyKey}` action bodies. Preserve a pending action's original account/action/body for retries, refetch current authority after any result, and do not treat a replayed historical result or the existing overview's fallback as current command authority. No optimistic status transition or automatic fresh-key retry follows a conflict. Full route availability and actual browser integration wait for Platform implementation and review.
 
 The apply plan's stored-cut representation was clarified without a financial-policy change: shared strict coverage schemas belong to parent storage, complete historical coverage is retained, and compact page bindings reconstruct exact canonical pages after the actual stored raw page/digest/indexes have been validated. The [scoped clarification review](sync-apply-coverage-clarification-review.md) approved this boundary. Original plan review hash9b4cdaa4 and scoped hash25b734d5 plus the explicitly reviewed compact-page supplement are recorded separately; the consolidated plan now hashes to `a45221d9567e1e8d0a5c617eb0ec82f280dd61fe378009837a4c13288ea3adfc`.
+
+## Discovery completion and configuration prerequisites
+
+The [authoritative prerequisite audit](discovery-unblock-policy-audit.md) distinguishes specified implementation work from new permission policy. Existing orchestration already specifies repair/finish/investigation behavior; Platform is preparing the bounded producer contract rather than asking the user to invent those semantics. After checking all 76 fetched remote refs (none beyond control009), Developer0 reserves **`db/control/010_discovery_completion.sql`** for that reviewed additive completion/grant/request-storage increment. Runtime006 remains exclusively assigned to apply repair. No consumer tool becomes available solely because its DDL or types exist.
+
+Discovery should retain the interim trusted-account verification rule. A generated ID explicitly granted through the existing trusted capability is not inherently prohibited, but a proposal cannot grant itself access. The user has been asked the genuinely new choice between an explicit trusted grant workflow and automatic candidate-only trust; no dependent new grant path will be implemented without that decision. Existing parent-account reads remain separately authorized.
+
+Actual-input metering, isolation and honest usage are already required; Platform can prepare their offline configuration contract without a provider key. Provider/model access remains deferred. No new model credentials, live invocation or automatic grant is authorized by these notes.
+
+## Apply storage candidate and upstream check
+
+Task 1 candidate `f861fc5843961d4573e585a46399e8da903260dd` adds constrained origins, unit audits, event outcomes, application heads and exact historical reads. Focused checks passed: 11 storage cases, 48 parent/capture cases, 67 parent/compiler/finance unit cases, and typecheck. A fresh independent exact-candidate review is pending; preparation, atomic writing and concurrency proof remain subsequent tasks. The inherited writer is not yet repaired, so this intermediate candidate does not establish working ongoing synchronization.
+
+The latest fetch found main at `f409805` and only Platform draft PR48 open. No newer Discovery or Experience correction was available at that checkpoint. The authority ingress implementation plan is authored and under separate review; it does not mount the routes.
