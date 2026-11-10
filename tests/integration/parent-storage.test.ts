@@ -59,12 +59,14 @@ async function counts() {
 }
 
 async function reset() {
-  const captureDependents = [
+  const runtimeDependents = [
     'runtime_capture_lanes', 'runtime_capture_checkpoints', 'runtime_source_positions',
     'runtime_capture_pages', 'runtime_inbox', 'runtime_capture_incidents',
     'runtime_authority_commands', 'runtime_authority_heads',
+    'runtime_sync_receipts', 'runtime_sync_economic_outcomes', 'runtime_sync_delivery_outcomes',
+    'runtime_financial_origins', 'runtime_sync_units', 'runtime_sync_event_outcomes', 'runtime_sync_application_heads',
   ];
-  await admin.query('TRUNCATE ' + [...tables.filter(table => table !== 'activity_counter'), ...captureDependents].join(', '));
+  await admin.query('TRUNCATE ' + [...tables.filter(table => table !== 'activity_counter'), ...runtimeDependents].join(', '));
   await admin.query('UPDATE activity_counter SET sequence = 0');
 }
 
