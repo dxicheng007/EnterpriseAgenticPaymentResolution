@@ -99,5 +99,8 @@ export async function composeVerification(
       return { caller: 'reviewer', reviewer, allowedSourceRefs, allowedAccountIds };
     },
   });
-  return { registry, plugin, discoveryVerification: financial.discoveryVerification };
+  // Discovery verification tools require control009 mapping; reviewer jobs only need registry (>=6).
+  const discoveryVerification = (migration.migrationVersion ?? 0) >= 9 ?
+    financial.discoveryVerification : undefined;
+  return { registry, plugin, discoveryVerification };
 }

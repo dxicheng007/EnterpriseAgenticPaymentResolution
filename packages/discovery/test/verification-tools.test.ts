@@ -38,3 +38,10 @@ test('verification failures map owner-loss and attestation gaps to unavailable',
   expect(mapVerificationFailure({ code: 'FINANCIAL_ATTESTATION_UNAVAILABLE' })).toBe('TOOL_UNAVAILABLE');
   expect(mapVerificationFailure(new Error('boom'))).toBe('TOOL_UNAVAILABLE');
 });
+
+test('verification interrupted diagnostic stays a non-blocker warning', async () => {
+  const { verificationInterrupted } = await import('../src/verification-tools.js');
+  expect(verificationInterrupted).toMatchObject({
+    code: 'VERIFICATION_INTERRUPTED', severity: 'warning',
+  });
+});

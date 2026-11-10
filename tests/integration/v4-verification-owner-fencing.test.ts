@@ -447,3 +447,43 @@ test('readVerification rejects foreign job ids', async () => {
     trustedAccounts = [];
   }
 });
+
+test('stale assessment after admit keeps mapping without current success', async () => {
+  trustedAccounts = [trustedAccountId];
+  const model = scriptedModel();
+  let runId = '';
+  const { owner } = await acquire(model.model, instrumentReads().readTools, {
+    withVerification: true,
+    testHooks: {
+      async afterVerificationEnqueue() {
+        const updated = await db.query(`
+          UPDATE discovery_proposal_current
+          SET result = jsonb_set(
+            jsonb_set(result, '{assessment,diagnosticCodes}', '["ASSESSMENT_STALE"]'::jsonb, true),
+            '{state}', '"compile_blocked"')
+          WHERE run_id=$1`, [runId]);
+        if (updated.rowCount !== 1) throw new Error('failed to stale assessment: ' + updated.rowCount);
+      },
+    },
+  });
+  try {
+    const run = await createRun('verif-stale-assess', model);
+    runId = run.runId;
+    const task = await delegateConnector(run, owner);
+    const compiled = await draftCompileDemo(run, owner, task);
+    const [step] = await run.execute(owner, [verifyCall('verify', compiled)], 3, task);
+    expect(await storedStep(step!)).toMatchObject({
+      state: 'failed', result: { ok: false, code: 'DISCOVERY_CONFLICT' },
+    });
+    expect(await mappingCount(run.runId)).toBe(1);
+    const jobs = (await run.state()).verificationJobs;
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({
+      proposalId: compiled.proposalId, proposalRevision: compiled.revision,
+    });
+    await waitJob(jobs[0]!.jobId);
+  } finally {
+    await owner.close();
+    trustedAccounts = [];
+  }
+}, 120_000);

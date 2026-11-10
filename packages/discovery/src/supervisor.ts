@@ -45,12 +45,14 @@ import { captureFailure, parseReadResult, prepareRead, type DiscoveryReadTools }
 import { unavailableToolCode, toolSchemas } from './roles.js';
 import { delegateTaskInput, executeDelegation, projectedDelegationLimit, validateDelegation, type CaptureAccess, type CaptureFacts } from './tasks.js';
 import {
-  coversGrant, discoveryError, insertSpecialist, lockRun, lockTask, markBlocker, publishDiscovery, runnable,
+  appendRunDiagnostic, coversGrant, discoveryError, insertSpecialist, lockRun, lockTask, markBlocker,
+  publishDiscovery, runnable,
   type RepositoryOptions, type RunRow, type TaskRow,
 } from './repository.js';
 import {
   bindReadVerificationJob, createDiscoveryVerificationOwnerGate, createVerificationAdmissionStore,
-  loadVerificationSubject, mapVerificationFailure, requireTrustedScope, verificationToolResult,
+  hasVerificationBinding, loadVerificationSubject, mapVerificationFailure, requireTrustedScope,
+  verificationInterrupted, verificationToolResult,
   type OwnerGateTransaction, type VerificationSubject,
 } from './verification-tools.js';
 
@@ -124,7 +126,8 @@ type ReplayClaim = {
 };
 type VerificationClaim = {
   revision: string; run: RunRow; task: TaskRow; step: Step; input: RequestVerificationInput;
-  subject: VerificationSubject; candidate: Awaited<ReturnType<DiscoveryVerificationDeps['candidates']['getCandidate']>>;
+  subject: VerificationSubject; historical: boolean;
+  candidate: Awaited<ReturnType<DiscoveryVerificationDeps['candidates']['getCandidate']>>;
 };
 type Reservation = { turn: ModelTurnV2; revision: number };
 type Options = RepositoryOptions & {
@@ -148,6 +151,7 @@ type Options = RepositoryOptions & {
     beforeReplayClaimCommit?: () => Promise<void>;
     beforeReplaySettleCommit?: () => Promise<void>;
     beforeVerificationClaimCommit?: () => Promise<void>;
+    afterVerificationEnqueue?: () => Promise<void>;
     beforeVerificationSettleCommit?: () => Promise<void>;
   };
 };
@@ -1113,14 +1117,17 @@ export async function acquireDiscoverySupervisor({
             if (verificationInput && step.id === item.id) {
               if (!constructionPinned) throw discoveryError(409);
               await recheck(connection, lockedRun, constructionPinned.facts);
-              const subject = await loadVerificationSubject(connection, lockedRun.id, verificationInput);
+              const historical = await hasVerificationBinding(connection, step.id);
+              const subject = await loadVerificationSubject(
+                connection, lockedRun.id, verificationInput, { historical },
+              );
               const scope = requireTrustedScope(lockedRun, lockedTask, subject.accountId);
               if (scope) {
                 verificationScopeDenial = { ok: false, code: scope };
               } else {
                 verificationClaim = {
                   revision: lockedTask.revision, run: lockedRun, task: lockedTask, step,
-                  input: verificationInput, subject,
+                  input: verificationInput, subject, historical,
                 };
               }
             }
@@ -1369,6 +1376,7 @@ export async function acquireDiscoverySupervisor({
   async function executeVerificationClaim(claim: Omit<VerificationClaim, 'candidate'>) {
     if (!valid || !verification || !verificationDeps) return;
     let toolResult: RequestVerificationResult;
+    let interrupted = false;
     try {
       const candidate = await verificationDeps.candidates.getCandidate(
         claim.subject.artifactHash, claim.run.binding.manifestId,
@@ -1395,7 +1403,19 @@ export async function acquireDiscoverySupervisor({
             candidate,
             task: { runId: claim.run.id, accountId: claim.subject.accountId },
           });
-          toolResult = verificationToolResult(job);
+          const history = await verification.readByRequestKey({
+            requestKey: claim.step.id, candidate,
+            task: { runId: claim.run.id, accountId: claim.subject.accountId },
+          });
+          if (history.kind === 'existing' && history.executionUncertain) {
+            interrupted = true;
+            toolResult = verificationToolResult({
+              ...history.job,
+              diagnostics: [...history.job.diagnostics, verificationInterrupted],
+            });
+          } else {
+            toolResult = verificationToolResult(job);
+          }
         } finally {
           admissions.take(claim.step.id);
         }
@@ -1403,13 +1423,15 @@ export async function acquireDiscoverySupervisor({
     } catch (error) {
       toolResult = { ok: false, code: mapVerificationFailure(error) };
     }
-    return settleVerificationClaim(claim, toolResult);
+    await testHooks?.afterVerificationEnqueue?.();
+    return settleVerificationClaim(claim, toolResult, false, interrupted);
   }
 
   async function settleVerificationClaim(
     claim: Omit<VerificationClaim, 'candidate'>,
     toolResult: RequestVerificationResult,
     revoked = false,
+    interrupted = false,
   ) {
     const authorityRevoked = Symbol('verification authority revoked before settle');
     try {
@@ -1430,6 +1452,8 @@ export async function acquireDiscoverySupervisor({
         let settledResult = toolResult;
         try {
           if (!stillAuthorized()) return interruptForbiddenRead(connection, context);
+          // Current-success settlement always requires a clear live assessment. Historical
+          // recovery may still observe the original job without linking current success.
           const subject = await loadVerificationSubject(connection, run.id, claim.input);
           if (subject.artifactHash !== claim.subject.artifactHash ||
               subject.assessmentRevision !== claim.subject.assessmentRevision ||
@@ -1441,6 +1465,7 @@ export async function acquireDiscoverySupervisor({
         }
 
         if (!stillAuthorized()) throw authorityRevoked;
+        if (interrupted) await appendRunDiagnostic(connection, run.id, verificationInterrupted.code);
         const blocker = !settledResult.ok &&
           (settledResult.code === 'DISCOVERY_CONFLICT' || settledResult.code === 'TOOL_RESULT_LIMIT') ?
           settledResult.code : undefined;
@@ -1451,7 +1476,7 @@ export async function acquireDiscoverySupervisor({
       });
     } catch (error) {
       if (error !== authorityRevoked) throw error;
-      return settleVerificationClaim(claim, toolResult, true);
+      return settleVerificationClaim(claim, toolResult, true, interrupted);
     }
   }
 

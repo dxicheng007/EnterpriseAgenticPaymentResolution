@@ -57,14 +57,25 @@ export type VerificationSubject = CompileSubject & {
   artifactHash: Hash;
 };
 
-/** Exact current compiled one-profile proposal matching revision + profileHash. */
+export async function hasVerificationBinding(client: PoolClient, requestKey: string) {
+  const { rows: [row] } = await client.query<{ request_key: string }>(
+    'SELECT request_key FROM discovery_verification_requests WHERE request_key=$1', [requestKey]);
+  return !!row;
+}
+
+/**
+ * Exact one-profile compiled proposal for the tool input.
+ * New admission requires a clear assessment; historical recovery of an existing binding does not.
+ */
 export async function loadVerificationSubject(
   client: PoolClient, runId: string, input: RequestVerificationInput,
+  options: { historical?: boolean } = {},
 ): Promise<VerificationSubject> {
   const subject = await loadCompileSubject(client, runId, {
     proposalId: input.proposalId, revision: input.revision,
   });
-  if (subject.current.state !== 'compiled' || !subject.current.artifactHash || !assessmentClear(subject.current)) {
+  if (subject.current.state !== 'compiled' || !subject.current.artifactHash ||
+      (!options.historical && !assessmentClear(subject.current))) {
     throw discoveryError(409);
   }
   const profile = subject.payload.profiles[0];
@@ -81,6 +92,13 @@ export async function loadVerificationSubject(
     artifactHash: subject.current.artifactHash,
   };
 }
+
+export const verificationInterrupted = {
+  code: 'VERIFICATION_INTERRUPTED',
+  severity: 'warning' as const,
+  message: 'Protected verification execution outcome is uncertain; automatic relaunch is unavailable',
+  sourceIds: [] as string[], fieldPaths: [] as string[],
+};
 
 export function trustedAccountIds(run: RunRow, task: TaskRow): readonly string[] {
   return task.grants.allowedAccountIds.filter(id => run.grants.allowedAccountIds.includes(id));

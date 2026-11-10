@@ -60,7 +60,21 @@ const diagnostics: Record<string, string> = {
 };
 
 function diagnostic(code: string): Diagnostic {
+  if (code === 'VERIFICATION_INTERRUPTED') {
+    return {
+      code, severity: 'warning',
+      message: 'Protected verification execution outcome is uncertain; automatic relaunch is unavailable',
+      sourceIds: [], fieldPaths: [],
+    };
+  }
   return { code, severity: 'blocker', message: diagnostics[code] ?? code, sourceIds: [], fieldPaths: [] };
+}
+
+/** Append a non-blocking run diagnostic without changing status. */
+export async function appendRunDiagnostic(client: PoolClient, runId: string, code: string) {
+  await client.query(`UPDATE discovery_runs SET revision=revision+1,
+    diagnostics=CASE WHEN $2=ANY(diagnostics) THEN diagnostics ELSE array_append(diagnostics,$2) END WHERE id=$1`,
+  [runId, code]);
 }
 
 export function coversGrant(current: Grants | undefined, saved: Grants): boolean {
