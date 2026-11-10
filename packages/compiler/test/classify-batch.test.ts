@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { expect, test, vi } from 'vitest';
 import {
@@ -21,12 +22,34 @@ import {
   unscopedFinancial, unscopedSemantic, unsupportedReversals,
 } from './fixtures/classification-cases.js';
 
-const frozen: { baselineCommit: string; plannerBlob: string; cases: { id: string; outcome: unknown }[] } =
-  JSON.parse(readFileSync(new URL('./fixtures/plan-batch-before-classification.json', import.meta.url), 'utf8'));
+const deduplicated: {
+  baselineCommit: string; plannerBlob: string; originalFixtureSha256: string;
+  outcomes: Record<string, unknown>; cases: Record<string, string>;
+} = JSON.parse(readFileSync(new URL('./fixtures/plan-batch-before-classification.json', import.meta.url), 'utf8'));
+
+const frozen = {
+  baselineCommit: deduplicated.baselineCommit,
+  plannerBlob: deduplicated.plannerBlob,
+  cases: Object.entries(deduplicated.cases).map(([id, reference]) => {
+    if (!Object.hasOwn(deduplicated.outcomes, reference)) {
+      throw new Error('Missing frozen outcome ' + reference + ' for ' + id);
+    }
+    return { id, outcome: deduplicated.outcomes[reference] };
+  }),
+};
 
 test('matches every pre-change planner outcome byte-for-byte canonically', () => {
   expect(frozen.baselineCommit).toBe('53c501f203903eb08054b84f1b6d93a11d763c64');
   expect(frozen.plannerBlob).toBe('70350f44c2d03ad9bda4b114e61c3eb36495a86a');
+  expect(frozen.cases).toHaveLength(180);
+  expect(frozen.cases.filter(({ id }) => /-permutation-\d{2}$/.test(id))).toHaveLength(128);
+  const storedOutcomes = Object.keys(deduplicated.outcomes);
+  expect(storedOutcomes).toHaveLength(39);
+  expect(new Set(Object.values(deduplicated.cases))).toEqual(new Set(storedOutcomes));
+  const originalHash = '95727d9ede9cf59c0f98945b64a4ff5be3fed50039ed2af0b78827aed26cb26b';
+  expect(deduplicated.originalFixtureSha256).toBe(originalHash);
+  const expandedBytes = JSON.stringify(frozen, null, 2) + '\n';
+  expect(createHash('sha256').update(expandedBytes).digest('hex')).toBe(originalHash);
   const outcomes = new Map(frozen.cases.map(({ id, outcome }) => [id, outcome]));
   expect(outcomes.size).toBe(frozen.cases.length);
   expect([...outcomes.keys()].sort()).toEqual(compatibilityCases.map(({ id }) => id).sort());
