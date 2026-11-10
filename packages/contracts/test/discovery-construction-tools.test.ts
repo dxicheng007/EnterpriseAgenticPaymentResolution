@@ -231,3 +231,57 @@ test('requestVerification and readVerification accept only safe job shapes', asy
     .toEqual(['requestVerification', 'readVerification']);
   expect(Buffer.byteLength(JSON.stringify(discoveryVerificationToolSchemas))).toBeLessThan(8 * 1024);
 });
+
+test('requestInvestigation accepts bounded subject requests and stays advertisement-only', async () => {
+  const {
+    RequestInvestigationInputSchema, RequestInvestigationResultSchema, discoveryInvestigationToolSchemas,
+  } = await import('../src/discovery-construction-tools.js');
+
+  const source = {
+    subject: { kind: 'source' as const },
+    question: 'What accounts appear in the capture?',
+    dependencyFindingRefs: [{ findingId: 'finding-a', revision: 1 }],
+  };
+  expect(RequestInvestigationInputSchema.parse(source)).toEqual(source);
+
+  const account = {
+    subject: {
+      kind: 'source_account' as const, sellerEntityId: 'seller-a', sourceAccountId: 'account-a',
+    },
+    question: 'Resolve the captured tuple.',
+    dependencyFindingRefs: [],
+  };
+  expect(RequestInvestigationInputSchema.parse(account)).toEqual(account);
+
+  for (const invalid of [
+    { ...source, question: '' },
+    { ...source, question: 'x'.repeat(8193) },
+    { ...source, dependencyFindingRefs: [
+      { findingId: 'finding-a', revision: 1 }, { findingId: 'finding-a', revision: 1 },
+    ] },
+    { ...source, grants: [] },
+    { subject: source.subject, question: source.question },
+    { subject: { kind: 'source' }, question: source.question, dependencyFindingRefs: [{ findingId: 'f', revision: 0 }] },
+  ]) expect(RequestInvestigationInputSchema.safeParse(invalid).success).toBe(false);
+
+  const success = { ok: true as const, requestId: 'request-1' };
+  expect(RequestInvestigationResultSchema.parse(success)).toEqual(success);
+  expect(RequestInvestigationResultSchema.parse({ ok: false, code: 'TOOL_UNAVAILABLE' }))
+    .toEqual({ ok: false, code: 'TOOL_UNAVAILABLE' });
+  for (const code of [
+    'DISCOVERY_INVALID', 'DISCOVERY_FORBIDDEN', 'DISCOVERY_CONFLICT', 'DISCOVERY_PAUSED',
+    'SOURCE_UNAVAILABLE', 'TOOL_RESULT_LIMIT', 'TOOL_FORBIDDEN',
+  ] as const) {
+    expect(RequestInvestigationResultSchema.parse({ ok: false, code })).toEqual({ ok: false, code });
+  }
+  for (const invalid of [
+    { ok: true, requestId: 'request-1', grants: [] },
+    { ok: true },
+    { ok: false, code: 'VERIFICATION_SCOPE_REQUIRED' },
+    { ok: false, code: 'DISCOVERY_OWNER_LOST' },
+  ]) expect(RequestInvestigationResultSchema.safeParse(invalid).success).toBe(false);
+
+  expect(discoveryInvestigationToolSchemas).toHaveLength(1);
+  expect(discoveryInvestigationToolSchemas[0]).toMatchObject({ name: 'requestInvestigation' });
+  expect(Buffer.byteLength(JSON.stringify(discoveryInvestigationToolSchemas))).toBeLessThan(8 * 1024);
+});

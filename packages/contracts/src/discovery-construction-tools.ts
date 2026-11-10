@@ -2,7 +2,10 @@ import { z } from 'zod';
 import { HashSchema, IdSchema, NonnegativeIntegerSchema, VersionSchema, strict } from './common.js';
 import { canonicalJson } from './canonical.js';
 import { ConnectorSpecSchema, CustomerProfileSchema } from './connector.js';
-import { CustomerProfileDraftSchema, DiscoveryFindingV2Schema, DiscoveryProposalV2Schema, ProposalResultSchema } from './discovery.js';
+import {
+  CustomerProfileDraftSchema, DiscoveryFindingV2Schema, DiscoveryProposalV2Schema, DiscoverySubjectSchema,
+  ProposalResultSchema,
+} from './discovery.js';
 import { DiscoveryReadToolFailureSchema } from './discovery-tools.js';
 import { FindingSchema } from './model.js';
 import { PlanOutcomeSchema } from './runtime.js';
@@ -263,4 +266,34 @@ export const discoveryVerificationToolSchemas = [
   { name: 'readVerification',
     description: 'Read a same-run authorized verification job and safe summary. Holdout and report truth are never returned.',
     inputSchema: z.toJSONSchema(ReadVerificationInputSchema, { io: 'input', reused: 'ref', unrepresentable: 'any' }) },
+];
+
+/** Contracts-only I/O. Keep unadvertised in roles until storage/semantics land after Blocker C. */
+export const RequestInvestigationInputSchema = strict({
+  subject: DiscoverySubjectSchema,
+  question: z.string().min(1).refine(question => Buffer.byteLength(question) <= 8192, 'Question exceeds 8192 UTF-8 bytes'),
+  dependencyFindingRefs: DiscoveryProposalV2Schema.out.shape.findingRefs,
+}).refine(fitsProposalBytes, 'Invalid canonical input or input exceeds 65,536 UTF-8 bytes');
+
+export const DiscoveryInvestigationToolFailureSchema = strict({
+  ok: z.literal(false),
+  code: z.enum([
+    'DISCOVERY_INVALID', 'DISCOVERY_FORBIDDEN', 'DISCOVERY_CONFLICT', 'DISCOVERY_PAUSED',
+    'SOURCE_UNAVAILABLE', 'TOOL_RESULT_LIMIT', 'TOOL_FORBIDDEN', 'TOOL_UNAVAILABLE',
+  ]),
+});
+
+export const RequestInvestigationResultSchema = z.union([
+  strict({ ok: z.literal(true), requestId: IdSchema }),
+  DiscoveryInvestigationToolFailureSchema,
+]).refine(fitsProposalBytes, 'Tool result exceeds 65,536 UTF-8 bytes');
+
+export type RequestInvestigationInput = z.infer<typeof RequestInvestigationInputSchema>;
+export type RequestInvestigationResult = z.infer<typeof RequestInvestigationResultSchema>;
+export type DiscoveryInvestigationToolFailure = z.infer<typeof DiscoveryInvestigationToolFailureSchema>;
+
+export const discoveryInvestigationToolSchemas = [
+  { name: 'requestInvestigation',
+    description: 'Persist a bounded coordinator investigation request for a pinned source or captured tuple. Does not spawn a task or widen grants.',
+    inputSchema: z.toJSONSchema(RequestInvestigationInputSchema, { io: 'input', reused: 'ref', unrepresentable: 'any' }) },
 ];
