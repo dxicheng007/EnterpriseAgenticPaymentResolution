@@ -109,3 +109,8 @@ Paths in the table are relative to this plan workspace. The command logs retain 
 | `evidence/task-C1/run-vYIwBb/typecheck.log` | 29 | `8fa1cf5506304e8abac55868e7f1a136c9b1dde57a3981a382da4c21ea129a6f` |
 
 C1 source and SQL lease returned. Fresh independent exact-candidate review is separate. These focused results establish fixture readiness only. Catalog selection, wider integration, live behavior and joint user acceptance remain distinct.
+
+
+## Root provenance clarification after independent review
+
+The initial suite's exact text and contemporaneous repair diff were not retained. Source hashes independently prove that only the suite changed between the two runs; they cannot establish its exact textual delta. The description of the repair is the implementer's account. The final SQL JSON observer, complete source inventory and passing candidate were independently verified in the [C1 review](sync-selection-catalog-nine-review.md). No historical evidence was reconstructed.
