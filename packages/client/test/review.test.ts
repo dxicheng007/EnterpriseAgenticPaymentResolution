@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, expect, test, vi } from 'vitest';
 import {
   ActivationOutcomeView,
+  ReviewDetailsView,
   ReviewPackageView,
   ReviewPage,
   approvalStorageKey,
@@ -15,10 +16,12 @@ import {
   staleError,
   type ApprovalStorage,
 } from '../../../apps/web/src/features/connections/ReviewPage.js';
+import { ValidatorIdSchema } from '../../contracts/src/connector.js';
+import { ReviewDetailsV1Schema, type ReviewDetailsV1 } from '../../contracts/src/review-details.js';
 import { ReviewPackageSchema, type ReviewPackage } from '../../contracts/src/review.js';
 import type { LocalSession } from '../src/session.js';
 import { clearCsrfToken, LocalApiError, setCsrfToken } from '../src/http.js';
-import { activateReview, activationRequestFor, prepareReview, readReview } from '../src/review.js';
+import { activateReview, activationRequestFor, prepareReview, readReview, readReviewDetails } from '../src/review.js';
 
 afterEach(() => {
   clearCsrfToken();
@@ -122,7 +125,6 @@ test('package view shows exact hashes, blockers and withholds ready wording; rec
   expect(blocked).toContain('Not ready for approval');
   expect(blocked).toContain('UNSUPPORTED_TERM');
   expect(blocked).toContain(hash('2'));
-  expect(blocked).toContain('exposes hashes only');
   const pending = renderToStaticMarkup(createElement(ActivationOutcomeView, {
     outcome: { state: 'pending', reviewPackageId: 'package-a', idempotencyKey: 'key-a' } }));
   expect(pending).toContain('not connected');
@@ -131,6 +133,47 @@ test('package view shows exact hashes, blockers and withholds ready wording; rec
     outcome: { state: 'applied', receipt: receipt as never, replayed: true } }));
   expect(applied).toContain('replayed');
   expect(applied).toContain('$800.00');
+});
+
+function details(): ReviewDetailsV1 {
+  const asOf = '2026-10-01T00:00:00.000Z';
+  return ReviewDetailsV1Schema.parse({
+    schemaVersion: '1', sourceRef: 'source', parentWrites: 0, reviewPackage: reviewPackage(),
+    capture: { manifestId: 'manifest', manifestHash: hash('4'), snapshotId: 'snapshot:manifest', snapshotHash: hash('6') },
+    artifact: { id: 'artifact', hash: hash('2'), specHash: hash('7'), compilerVersion: '1', runtimeVersion: '1', targetSchemaVersion: '1' },
+    profile: { id: 'profile', version: 1, hash: hash('3'), sourceRef: 'source', scope, parentCustomerId: 'buyer',
+      sourceAccountIds: ['source-account'], approvedLookups: [], contractTerms: [], semanticVersion: '1',
+      bootstrap: { customer: { id: 'buyer', displayName: 'Buyer', evidenceRefs: ['cite'] }, billingConfigurationIds: [] } },
+    baseline: { scope, version: 0, asOf, snapshotHash: hash('6'), balanceCents: 1250, legacyReferences: [],
+      records: { scope, version: 0, asOf, customers: [], accounts: [], billingConfigurations: [], invoices: [],
+        payments: [], credits: [], allocations: [], reversals: [] } },
+    proposedImport: { hash: hash('5'), scope, artifactHash: hash('2'), profileHash: hash('3'), expectedTargetVersion: 0,
+      eventIds: [], operations: [], expectedBalanceCents: 80000, asOf, lineage: [] },
+    futureScope: { allowedKinds: ['invoice', 'payment'], limits: { maxTransactionCents: 5000000, maxRecordsPerCycle: 1000 },
+      validators: [...ValidatorIdSchema.options].sort(), runtimeModelCalls: 'forbidden', safetyRulesVersion: 'frozen-v1',
+      safetyRules: ['identity-bound-scope', 'source-contract-bound', 'reviewed-semantic-version',
+        'explicit-supported-finance', 'target-version-bound', 'bounded-cycle'] },
+    evidence: { snapshotId: 'snapshot:manifest', referencedEvidenceIds: ['cite'] },
+  });
+}
+
+test('decision details show owed amount after import, bounded future authority and evidence before approval', () => {
+  const html = renderToStaticMarkup(createElement(ReviewDetailsView, { details: details() }));
+  expect(html).toContain('Balance owed after proposed import');
+  expect(html).toContain('$800.00');
+  expect(html).toContain('$12.50');
+  expect(html).toContain('$50,000.00');
+  expect(html).toContain('invoice, payment');
+  expect(html).toContain('forbidden');
+  expect(html).toContain('cite');
+});
+
+test('details must match the exact package and account requested', async () => {
+  const body = details();
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(respond(body)));
+  expect(await readReviewDetails('account-a', reviewPackage())).toEqual(body);
+  expect(vi.mocked(fetch).mock.calls[0]![0]).toBe('/api/review/account-a/packages/' + hash('1') + '/details');
+  await expect(readReviewDetails('account-a', reviewPackage({ hash: hash('9') }))).rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' });
 });
 
 test('staleError treats STALE_REVIEW like REVIEW_STALE and ignores other failures', () => {

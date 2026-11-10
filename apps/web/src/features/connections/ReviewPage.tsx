@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { LocalApiError } from '../../../../../packages/client/src/http.js';
 import {
-  activateReview, activationRequestFor, prepareReview, readReview, type ActivationOutcome,
+  activateReview, activationRequestFor, prepareReview, readReview, readReviewDetails, type ActivationOutcome,
 } from '../../../../../packages/client/src/review.js';
+import type { ReviewDetailsV1 } from '../../../../../packages/contracts/src/review-details.js';
 import type { LocalSession } from '../../../../../packages/client/src/session.js';
 import { ActivationRequestSchema, type ActivationRequest, type ReviewPackage } from '../../../../../packages/contracts/src/review.js';
 import { formatUsdCents } from '../preview/preview-values.js';
@@ -28,7 +29,59 @@ export function ReviewPackageView({ reviewPackage }: { reviewPackage: ReviewPack
       <dt>Expected parent version</dt><dd>{reviewPackage.expectedTargetVersion}</dd>
     </dl>
     <Diagnostics items={reviewPackage.diagnostics} />
-    <p>The review package exposes hashes only. It does not show the amount still owed after import, allowed operations or limits. Inspect the preview and evidence for those before deciding.</p>
+  </section>;
+}
+
+function operationLabel(operation: ReviewDetailsV1['proposedImport']['operations'][number]) {
+  const { record } = operation;
+  const amount = 'amountCents' in record ? ' · ' + formatUsdCents(record.amountCents) : '';
+  return operation.op + ' · ' + record.id + amount + ('effectiveAt' in record ? ' · effective ' + record.effectiveAt : '');
+}
+
+export function ReviewDetailsView({ details }: { details: ReviewDetailsV1 }) {
+  const { baseline, proposedImport, profile, futureScope, artifact, evidence, capture } = details;
+  return <section className="review-card" aria-label="Decision details">
+    <h2>What you are approving</h2>
+    <h3>Proposed import (not yet applied)</h3>
+    <dl className="review-facts">
+      <dt>Parent version before</dt><dd>{baseline.version}</dd>
+      <dt>Balance owed before import</dt><dd>{formatUsdCents(baseline.balanceCents)}</dd>
+      <dt>Balance owed after proposed import</dt><dd>{formatUsdCents(proposedImport.expectedBalanceCents)}</dd>
+      <dt>Evaluated as of</dt><dd>{proposedImport.asOf}</dd>
+      <dt>Source events</dt><dd>{proposedImport.eventIds.length}</dd>
+      <dt>Proposed operations</dt><dd>{proposedImport.operations.length}</dd>
+    </dl>
+    {proposedImport.operations.length > 0 && <ul>
+      {proposedImport.operations.map((operation, index) => <li key={index}>{operationLabel(operation)}</li>)}
+    </ul>}
+    <p>Unallocated funds do not reduce an invoice balance. Parent writes during review: {details.parentWrites}.</p>
+    <h3>Customer profile and contract terms</h3>
+    <dl className="review-facts">
+      <dt>Profile</dt><dd>{profile.id} · version {profile.version}</dd>
+      <dt>Parent customer</dt><dd>{profile.bootstrap.customer.id} · {profile.bootstrap.customer.displayName}</dd>
+      <dt>Source accounts</dt><dd>{profile.sourceAccountIds.join(', ') || 'none'}</dd>
+      <dt>Reviewed semantic version</dt><dd>{profile.semanticVersion}</dd>
+    </dl>
+    {profile.contractTerms.length === 0 ? <p>No contract terms are in this profile.</p> : <ul>
+      {profile.contractTerms.map(term => <li key={term.id}>Term {term.id} · {formatUsdCents(term.fixedMonthlyFeeCents)} {term.currency} {term.cadence} on day {term.anchorDay},
+        valid from {term.validFrom}{term.validToExclusive ? ' until ' + term.validToExclusive : ' with no end'} · evidence {term.evidenceRefs.join(', ')}</li>)}
+    </ul>}
+    <h3>Future automatic synchronization for this customer</h3>
+    <dl className="review-facts">
+      <dt>Allowed record kinds</dt><dd>{futureScope.allowedKinds.join(', ')}</dd>
+      <dt>Maximum per transaction</dt><dd>{formatUsdCents(futureScope.limits.maxTransactionCents)}</dd>
+      <dt>Maximum records per cycle</dt><dd>{futureScope.limits.maxRecordsPerCycle}</dd>
+      <dt>Runtime model calls</dt><dd>{futureScope.runtimeModelCalls}</dd>
+      <dt>Safety rules</dt><dd>{futureScope.safetyRulesVersion}: {futureScope.safetyRules.join(', ')}</dd>
+      <dt>Validators</dt><dd>{futureScope.validators.join(', ')}</dd>
+    </dl>
+    <h3>Evidence and versions</h3>
+    <dl className="review-facts">
+      <dt>Source</dt><dd>{details.sourceRef}</dd>
+      <dt>Capture</dt><dd>{capture.manifestId} · snapshot {capture.snapshotId}</dd>
+      <dt>Artifact</dt><dd>{artifact.id} · compiler {artifact.compilerVersion}, runtime {artifact.runtimeVersion}, target schema {artifact.targetSchemaVersion}</dd>
+      <dt>Referenced evidence</dt><dd>{evidence.referencedEvidenceIds.join(', ') || 'none'}</dd>
+    </dl>
   </section>;
 }
 
@@ -135,6 +188,8 @@ function AccountReview({ accountId, session }: { accountId: string; session: Loc
   const [outcome, setOutcome] = useState<ActivationOutcome>();
   const [stale, setStale] = useState(false);
   const [savedApproval, setSavedApproval] = useState<ActivationRequest>();
+  const [details, setDetails] = useState<ReviewDetailsV1>();
+  const [detailsError, setDetailsError] = useState<unknown>();
   const inFlight = useRef(false);
 
   function accept(value: ReviewPackage) {
@@ -164,6 +219,19 @@ function AccountReview({ accountId, session }: { accountId: string; session: Loc
     return () => controller.abort();
   }, [accountId, session]);
 
+  useEffect(() => {
+    setDetails(undefined);
+    setDetailsError(undefined);
+    if (!reviewPackage) return;
+    const controller = new AbortController();
+    void readReviewDetails(accountId, reviewPackage, controller.signal).then(value => {
+      if (!controller.signal.aborted) setDetails(value);
+    }, failure => {
+      if (!controller.signal.aborted) setDetailsError(failure);
+    });
+    return () => controller.abort();
+  }, [accountId, reviewPackage?.hash, session]);
+
   async function run(action: () => Promise<void>) {
     if (inFlight.current) return;
     inFlight.current = true;
@@ -190,8 +258,9 @@ function AccountReview({ accountId, session }: { accountId: string; session: Loc
     if (result.state === 'applied') clearApproval(accountId);
   });
 
+  const detailsFor = details?.reviewPackage.hash === reviewPackage?.hash ? details : undefined;
   const pendingApproval = outcome?.state === 'pending' || (savedApproval !== undefined && outcome === undefined);
-  const canApprove = canApproveReview({ reviewPackage, loading, busy, stale, outcome });
+  const canApprove = canApproveReview({ reviewPackage, loading, busy, stale, outcome }) && detailsFor !== undefined;
   return <>
     {loading && <p role="status">Loading saved review package…</p>}
     {!loading && !reviewPackage && error == null && <p>No review package is prepared for this account.</p>}
@@ -199,6 +268,10 @@ function AccountReview({ accountId, session }: { accountId: string; session: Loc
       ? 'The package changed. Reload the saved package or prepare again, then review it before approving.'
       : 'Nothing was assumed. Check the saved state before retrying.'} />}
     {reviewPackage && <ReviewPackageView reviewPackage={reviewPackage} />}
+    {reviewPackage && !detailsFor && detailsError == null && <p role="status">Loading decision details…</p>}
+    {detailsError != null && <RequestFailure error={detailsError}
+      next="Approval stays unavailable until the exact saved financial and future-scope details load." />}
+    {detailsFor && <ReviewDetailsView details={detailsFor} />}
     {pendingApproval && !stale && <p role="status">An approval for this exact package was already submitted from this
       browser session and may not have completed. Retrying sends the same approval; it is never sent automatically.</p>}
     <div className="review-actions">
