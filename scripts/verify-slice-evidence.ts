@@ -203,6 +203,20 @@ export function v4ExitCode(
     diagnostics.length === 0 && chromium ? 0 : 1;
 }
 
+export function v5ExitCode(
+  commands: readonly ReturnType<typeof commandResult>[], diagnostics: readonly string[], chromium?: string,
+) {
+  return commands.length === 5 && commands.every(command => command.result === 'passed') &&
+    diagnostics.length === 0 && chromium ? 0 : 1;
+}
+
+export function v6ExitCode(
+  commands: readonly ReturnType<typeof commandResult>[], diagnostics: readonly string[], chromium?: string,
+) {
+  return commands.length === 8 && commands.every(command => command.result === 'passed') &&
+    diagnostics.length === 0 && chromium ? 0 : 1;
+}
+
 export function v7ExitCode(
   commands: readonly ReturnType<typeof commandResult>[], diagnostics: readonly string[], chromium?: string,
 ) {

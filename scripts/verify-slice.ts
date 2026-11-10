@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { hashBytes, hashCanonical } from '../packages/contracts/src/canonical.js';
 import {
   chromiumVersion, collectScreenshots, commandResult, normalizeReport, v1ExitCode, v3ExitCode, v4ExitCode,
-  v7ExitCode,
+  v5ExitCode, v6ExitCode, v7ExitCode,
 } from './verify-slice-evidence.js';
 
 const registry = {
@@ -21,12 +21,12 @@ const registry = {
   V3: ['tests/integration/v3-activation.test.ts', 'tests/e2e/v3-review.spec.ts', 'tests/integration/v3-corrections.test.ts'],
   V4: ['tests/integration/v4-agent-tools.test.ts', 'tests/e2e/v4-monitor.spec.ts', 'tests/live/v4-build-connectors.test.ts'],
   V5: [
-    'tests/integration/v5-sync.test.ts', 'packages/runtime/test/dependencies.test.ts', 'tests/e2e/v5-ai-off.spec.ts',
+    'tests/integration/v5-sync.test.ts', 'apps/worker/test/sync-dependencies.test.ts', 'tests/e2e/v5-ai-off.spec.ts',
     'tests/integration/v5-runtime-isolation.test.ts',
   ],
   V6: [
     'tests/integration/v6-recovery.test.ts', 'tests/integration/v6-drift.test.ts', 'tests/e2e/v6-containment.spec.ts',
-    'tests/integration/v5-sync.test.ts', 'packages/runtime/test/dependencies.test.ts', 'tests/e2e/v5-ai-off.spec.ts',
+    'tests/integration/v5-sync.test.ts', 'apps/worker/test/sync-dependencies.test.ts', 'tests/e2e/v5-ai-off.spec.ts',
     'tests/integration/v5-runtime-isolation.test.ts',
   ],
   V7: ['tests/e2e/v7-demo.spec.ts', 'tests/live/v7-holdout.test.ts'],
@@ -872,6 +872,315 @@ async function verifyV7() {
   process.exitCode = exitCode;
 }
 
+const requiredV5Cases = {
+  'tests/integration/v5-sync.test.ts': [
+    'admits standing authority for the activated customer and denies unknown accounts',
+    'captures a fresh post-activation API page without parent writes or model credentials',
+  ],
+  'apps/worker/test/sync-dependencies.test.ts': [
+    'orders providers before consumers and reports missing prerequisites',
+    'cycles are explicit exceptions',
+    'selection never splits a group and keeps stable order',
+    'third unresolved examination quarantines and transport backoff is bounded',
+  ],
+  'tests/e2e/v5-ai-off.spec.ts': [
+    'AI-off worker stays ready without model credentials or provider attempts',
+  ],
+  'tests/integration/v5-runtime-isolation.test.ts': [
+    'worker production sources and import graph stay free of model and discovery packages',
+    'model-call trap fires on attempted provider use while capture remains model-free',
+  ],
+} satisfies Record<typeof registry.V5[number], string[]>;
+
+const v5Commands = [
+  { script: 'test:integration', file: 'tests/integration/v5-sync.test.ts' as const },
+  { script: 'test:unit', file: 'apps/worker/test/sync-dependencies.test.ts' as const },
+  { script: 'test:e2e', file: 'tests/e2e/v5-ai-off.spec.ts' as const },
+  { script: 'test:integration', file: 'tests/integration/v5-runtime-isolation.test.ts' as const },
+  { script: 'typecheck', file: undefined },
+] as const;
+
+function readV5Report(report: string, browser: boolean, file: typeof registry.V5[number]) {
+  try {
+    const stat = lstatSync(report);
+    if (!stat.isFile() || stat.size > 8 * 1024 * 1024) throw new Error();
+    return normalizeReport(
+      browser ? 'playwright' : 'vitest', JSON.parse(readFileSync(report, 'utf8')),
+      process.cwd(), file, requiredV5Cases[file],
+    );
+  } catch {
+    return { cases: [], diagnostics: ['report-unavailable-or-invalid'] };
+  }
+}
+
+async function verifyV5() {
+  const { migrationIdentities, migrationStreams, readMigrationCatalog } = await import('./migrate.js');
+  const { localPort, testLeasePrefix } = await import('./native-db.js');
+  const env = { ...process.env };
+  delete env.OPENAI_API_KEY;
+  delete env.OPENAI_ORG_ID;
+  delete env.OPENAI_PROJECT_ID;
+  delete env.NO_COLOR;
+  const source = sourceIdentity(env);
+  const runId = new Date().toISOString().replace(/[:.]/g, '-') + '-' + process.pid;
+  const evidence = resolve('.evidence', source.evidenceKey, 'V5', runId);
+  mkdirSync(evidence, { recursive: true, mode: 0o700 });
+  const commands: ReturnType<typeof commandResult>[] = [];
+  const diagnostics: string[] = [];
+  let chromium: string | undefined;
+  let runtime;
+  let contract;
+  let configuration;
+  let migrations;
+  let temp: string | undefined;
+
+  try {
+    const missing = registry.V5.filter(file => !existsSync(file) || !lstatSync(file).isFile());
+    if (missing.length) diagnostics.push('required-test-files-missing');
+    for (const file of missing) console.error('V5 required test file unavailable: ' + file);
+
+    try {
+      runtime = {
+        node: process.version, npm: capture('npm', ['--version'], env),
+        postgres: capture('postgres', ['--version'], env),
+        packageLockHash: hashBytes(readFileSync('package-lock.json')),
+      };
+      contract = { version: 1, sha256: hashBytes(readFileSync('docs/superpowers/plans/2026-11-08-contract-freeze.md')) };
+      configuration = {
+        host: '127.0.0.1', postgresPort: localPort('EAPR_PG_PORT', 55432), webPort: localPort('EAPR_WEB_PORT', 5173),
+        controlPort: localPort('EAPR_CONTROL_PORT', 3001), workerPort: localPort('EAPR_WORKER_PORT', 3002),
+        demoNamespace: process.env.EAPR_DEMO_NAMESPACE ?? 'eapr_v0',
+        testPrefix: testLeasePrefix(),
+      };
+      const catalog = readMigrationCatalog();
+      migrations = migrationStreams.flatMap(stream => migrationIdentities(catalog[stream]).map(({ version, sha256 }) => ({
+        stream, expectedVersion: version, sha256,
+      })));
+    } catch {
+      diagnostics.push('run-metadata-unavailable');
+    }
+
+    if (!diagnostics.length) {
+      mkdirSync('.local', { recursive: true, mode: 0o700 });
+      temp = mkdtempSync(resolve('.local', 'verify-v5-'));
+      const browserOutput = join(temp, 'browser');
+      for (const [index, { script, file }] of v5Commands.entries()) {
+        const report = join(temp, 'report-' + index + '.json');
+        const args = ['run', script];
+        const browser = script === 'test:e2e';
+        if (file) {
+          args.push('--', file, '--reporter=json');
+          args.push(browser ? '--trace=off' : '--outputFile=' + report);
+        }
+        const command = ['npm', ...args.map(arg => arg === '--outputFile=' + report
+          ? '--outputFile=<private-report>' : arg)].join(' ');
+        const child = spawnSync('npm', args, {
+          env: { ...env, EAPR_TRACE_DIR: browserOutput, PLAYWRIGHT_JSON_OUTPUT_FILE: report },
+          encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 8 * 1024 * 1024, timeout: 600_000,
+        });
+        const result = commandResult(command, child, file ? readV5Report(report, browser, file) : undefined);
+        commands.push(result);
+        console.log('V5 ' + result.result + ' ' + command +
+          (result.diagnostics.length ? ' (' + result.diagnostics.join(', ') + ')' : ''));
+      }
+
+      chromium = chromiumVersion(spawnSync(process.execPath, ['--input-type=module', '-e', chromiumProbe], {
+        env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024, timeout: 10_000,
+      }));
+      if (!chromium) diagnostics.push('chromium-version-unavailable');
+    }
+  } catch {
+    diagnostics.push('verification-setup-or-evidence-error');
+  } finally {
+    if (temp) {
+      try {
+        rmSync(temp, { recursive: true, force: true });
+      } catch {
+        diagnostics.push('private-output-cleanup-failed');
+      }
+    }
+  }
+
+  const exitCode = v5ExitCode(commands, diagnostics, chromium);
+  const packet = {
+    schemaVersion: 1, runId, slice: 'V5', source, jointAcceptance: 'pending',
+    result: exitCode === 0 ? 'passed' : 'failed',
+    mode: { sourceFixtures: 'development-only', model: 'disabled', database: 'native' },
+    runtime: { ...runtime, chromium: chromium ? [chromium] : [] },
+    contract, configuration, migrations,
+    requiredTests: registry.V5, requiredCases: requiredV5Cases, commands, screenshots: [], diagnostics,
+    authenticatedTrace: 'disabled',
+    limitations: [
+      'Development sources only',
+      'Monetary apply / Connections UI and joint G5 acceptance remain pending',
+      'Independent review pending',
+    ],
+  };
+  const write = (file: string, value: unknown) =>
+    writeFileSync(join(evidence, file), JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
+  write('commands.json', commands);
+  write('assertions.json', commands.flatMap(command => command.cases));
+  write('manifest.json', packet);
+  console.log('V5 verification ' + packet.result + '. Evidence: ' + relative(process.cwd(), evidence));
+  if (diagnostics.length) console.error('V5 diagnostics: ' + diagnostics.join(', '));
+  process.exitCode = exitCode;
+}
+
+const requiredV6Cases = {
+  'tests/integration/v6-recovery.test.ts': [
+    'exact activation replay and capture restart preserve committed financial rows',
+    'revoke fences stale epochs while replaying earlier pause and leaving financial rows intact',
+  ],
+  'tests/integration/v6-drift.test.ts': [
+    'schema-renamed capture stays out of committed financial rows while peer authority stays active',
+    'semantic drift blocks resume while independent peer connection remains active',
+  ],
+  'tests/e2e/v6-containment.spec.ts': [
+    'containment surfaces stay ready without model credentials or financial writes',
+  ],
+  'tests/integration/v5-sync.test.ts': requiredV5Cases['tests/integration/v5-sync.test.ts'],
+  'apps/worker/test/sync-dependencies.test.ts': requiredV5Cases['apps/worker/test/sync-dependencies.test.ts'],
+  'tests/e2e/v5-ai-off.spec.ts': requiredV5Cases['tests/e2e/v5-ai-off.spec.ts'],
+  'tests/integration/v5-runtime-isolation.test.ts': requiredV5Cases['tests/integration/v5-runtime-isolation.test.ts'],
+} satisfies Record<typeof registry.V6[number], string[]>;
+
+const v6Commands = [
+  { script: 'test:integration', file: 'tests/integration/v6-recovery.test.ts' as const },
+  { script: 'test:integration', file: 'tests/integration/v6-drift.test.ts' as const },
+  { script: 'test:e2e', file: 'tests/e2e/v6-containment.spec.ts' as const },
+  { script: 'test:integration', file: 'tests/integration/v5-sync.test.ts' as const },
+  { script: 'test:unit', file: 'apps/worker/test/sync-dependencies.test.ts' as const },
+  { script: 'test:e2e', file: 'tests/e2e/v5-ai-off.spec.ts' as const },
+  { script: 'test:integration', file: 'tests/integration/v5-runtime-isolation.test.ts' as const },
+  { script: 'typecheck', file: undefined },
+] as const;
+
+function readV6Report(report: string, browser: boolean, file: typeof registry.V6[number]) {
+  try {
+    const stat = lstatSync(report);
+    if (!stat.isFile() || stat.size > 8 * 1024 * 1024) throw new Error();
+    return normalizeReport(
+      browser ? 'playwright' : 'vitest', JSON.parse(readFileSync(report, 'utf8')),
+      process.cwd(), file, requiredV6Cases[file],
+    );
+  } catch {
+    return { cases: [], diagnostics: ['report-unavailable-or-invalid'] };
+  }
+}
+
+async function verifyV6() {
+  const { migrationIdentities, migrationStreams, readMigrationCatalog } = await import('./migrate.js');
+  const { localPort, testLeasePrefix } = await import('./native-db.js');
+  const env = { ...process.env };
+  delete env.OPENAI_API_KEY;
+  delete env.OPENAI_ORG_ID;
+  delete env.OPENAI_PROJECT_ID;
+  delete env.NO_COLOR;
+  const source = sourceIdentity(env);
+  const runId = new Date().toISOString().replace(/[:.]/g, '-') + '-' + process.pid;
+  const evidence = resolve('.evidence', source.evidenceKey, 'V6', runId);
+  mkdirSync(evidence, { recursive: true, mode: 0o700 });
+  const commands: ReturnType<typeof commandResult>[] = [];
+  const diagnostics: string[] = [];
+  let chromium: string | undefined;
+  let runtime;
+  let contract;
+  let configuration;
+  let migrations;
+  let temp: string | undefined;
+
+  try {
+    const missing = registry.V6.filter(file => !existsSync(file) || !lstatSync(file).isFile());
+    if (missing.length) diagnostics.push('required-test-files-missing');
+    for (const file of missing) console.error('V6 required test file unavailable: ' + file);
+
+    try {
+      runtime = {
+        node: process.version, npm: capture('npm', ['--version'], env),
+        postgres: capture('postgres', ['--version'], env),
+        packageLockHash: hashBytes(readFileSync('package-lock.json')),
+      };
+      contract = { version: 1, sha256: hashBytes(readFileSync('docs/superpowers/plans/2026-11-08-contract-freeze.md')) };
+      configuration = {
+        host: '127.0.0.1', postgresPort: localPort('EAPR_PG_PORT', 55432), webPort: localPort('EAPR_WEB_PORT', 5173),
+        controlPort: localPort('EAPR_CONTROL_PORT', 3001), workerPort: localPort('EAPR_WORKER_PORT', 3002),
+        demoNamespace: process.env.EAPR_DEMO_NAMESPACE ?? 'eapr_v0',
+        testPrefix: testLeasePrefix(),
+      };
+      const catalog = readMigrationCatalog();
+      migrations = migrationStreams.flatMap(stream => migrationIdentities(catalog[stream]).map(({ version, sha256 }) => ({
+        stream, expectedVersion: version, sha256,
+      })));
+    } catch {
+      diagnostics.push('run-metadata-unavailable');
+    }
+
+    if (!diagnostics.length) {
+      mkdirSync('.local', { recursive: true, mode: 0o700 });
+      temp = mkdtempSync(resolve('.local', 'verify-v6-'));
+      const browserOutput = join(temp, 'browser');
+      for (const [index, { script, file }] of v6Commands.entries()) {
+        const report = join(temp, 'report-' + index + '.json');
+        const args = ['run', script];
+        const browser = script === 'test:e2e';
+        if (file) {
+          args.push('--', file, '--reporter=json');
+          args.push(browser ? '--trace=off' : '--outputFile=' + report);
+        }
+        const command = ['npm', ...args.map(arg => arg === '--outputFile=' + report
+          ? '--outputFile=<private-report>' : arg)].join(' ');
+        const child = spawnSync('npm', args, {
+          env: { ...env, EAPR_TRACE_DIR: browserOutput, PLAYWRIGHT_JSON_OUTPUT_FILE: report },
+          encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 8 * 1024 * 1024, timeout: 600_000,
+        });
+        const result = commandResult(command, child, file ? readV6Report(report, browser, file) : undefined);
+        commands.push(result);
+        console.log('V6 ' + result.result + ' ' + command +
+          (result.diagnostics.length ? ' (' + result.diagnostics.join(', ') + ')' : ''));
+      }
+
+      chromium = chromiumVersion(spawnSync(process.execPath, ['--input-type=module', '-e', chromiumProbe], {
+        env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024, timeout: 10_000,
+      }));
+      if (!chromium) diagnostics.push('chromium-version-unavailable');
+    }
+  } catch {
+    diagnostics.push('verification-setup-or-evidence-error');
+  } finally {
+    if (temp) {
+      try {
+        rmSync(temp, { recursive: true, force: true });
+      } catch {
+        diagnostics.push('private-output-cleanup-failed');
+      }
+    }
+  }
+
+  const exitCode = v6ExitCode(commands, diagnostics, chromium);
+  const packet = {
+    schemaVersion: 1, runId, slice: 'V6', source, jointAcceptance: 'pending',
+    result: exitCode === 0 ? 'passed' : 'failed',
+    mode: { sourceFixtures: 'development-only', model: 'disabled', database: 'native' },
+    runtime: { ...runtime, chromium: chromium ? [chromium] : [] },
+    contract, configuration, migrations,
+    requiredTests: registry.V6, requiredCases: requiredV6Cases, commands, screenshots: [], diagnostics,
+    authenticatedTrace: 'disabled',
+    limitations: [
+      'Development sources only',
+      'Monetary apply / Connections UI and joint G6 acceptance remain pending',
+      'Independent review pending',
+    ],
+  };
+  const write = (file: string, value: unknown) =>
+    writeFileSync(join(evidence, file), JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
+  write('commands.json', commands);
+  write('assertions.json', commands.flatMap(command => command.cases));
+  write('manifest.json', packet);
+  console.log('V6 verification ' + packet.result + '. Evidence: ' + relative(process.cwd(), evidence));
+  if (diagnostics.length) console.error('V6 diagnostics: ' + diagnostics.join(', '));
+  process.exitCode = exitCode;
+}
+
 const requested = process.argv[2];
 if (requested === 'live') {
   console.error('Use npm run test:live -- <tests/live/*.test.ts> (scripts/live-build.ts).');
@@ -888,13 +1197,17 @@ if (requested === 'live') {
   await verifyV3();
 } else if (requested === 'V4') {
   await verifyV4();
+} else if (requested === 'V5') {
+  await verifyV5();
+} else if (requested === 'V6') {
+  await verifyV6();
 } else if (requested === 'V7') {
   await verifyV7();
 } else if (requested !== 'V0') {
   const required = Object.hasOwn(registry, requested) ? registry[requested as keyof typeof registry] : undefined;
   const missing = required?.filter(file => !existsSync(file));
   if (missing?.length) console.error('Mandatory test files unavailable: ' + missing.join(', '));
-  console.error(required ? requested + ' verification is unavailable in the foundation slice.' : 'Usage: npm run verify:slice -- <V0|V1|V2|V3|V4|V7>');
+  console.error(required ? requested + ' verification is unavailable in the foundation slice.' : 'Usage: npm run verify:slice -- <V0|V1|V2|V3|V4|V5|V6|V7>');
   process.exitCode = 1;
 } else {
   await verifyV0();
