@@ -31,7 +31,7 @@ import { createWorkerActivation } from '../../apps/worker/src/activation.js';
 import { composeWorkerParentReads } from '../../apps/worker/src/parent-read-composition.js';
 import { launchWorker } from '../../apps/worker/src/server.js';
 import { selectedProfile } from '../../apps/worker/src/activation-validation.js';
-import { createSyncApplier, SyncApplyError } from '../../apps/worker/src/sync/apply.js';
+import { createSyncApplier } from '../../apps/worker/src/sync/apply.js';
 import { createRuntimeCapture } from '../../apps/worker/src/sync/capture.js';
 import {
   createCurrentAuthority, type AuthorityAdmissionGrants,
@@ -41,6 +41,7 @@ import { createScenarioAdmin } from '../../packages/sources/src/scenario-admin.j
 import { migrate, migrationIdentities, migrationStreams, readMigrationCatalog } from '../../scripts/migrate.js';
 import { dropTest, provisionTest, startNativeDb } from '../../scripts/native-db.js';
 import { issueActivationProofs, verifyOriginals } from '../fixtures/activation-proof.js';
+import { createSyncApplyFixture, syncApplyClock, syncApplyInstant } from '../fixtures/sync-apply.js';
 import { testNamespace } from '../fixtures/harness.js';
 import {
   assertModelCredentialsAbsent, createModelCallTrap, scrubModelCredentials,
@@ -249,50 +250,41 @@ test('captures a fresh post-activation API page without parent writes or model c
   assertModelCredentialsAbsent();
 });
 
-test('applies a fresh invoice once, replays the receipt and fences stale input', async () => {
-  const stored = await withTransaction(runtime, client => readStoredActivation(client, committed.identity.scope));
-  if (!stored) throw new Error('No A5 activation');
-  const { artifact } = stored.bundle;
-  const profile = selectedProfile(stored.bundle);
-  const target = await withTransaction(runtime, client => readStoredTarget(client, committed.identity.scope));
-  if (!target) throw new Error('No target');
-  const [sourceAccountId] = profile.sourceAccountIds;
-  for (const id of ['v5-apply-invoice-1', 'v5-apply-invoice-2']) {
-    await operator.freshInvoiceA(operatorToken, {
-      id, accountId: sourceAccountId, amount: '12.00', dueDate: '2026-10-31', effectiveDate: '2026-10-02', observedAt: approvedAt,
-    });
+test('applies a captured invoice once, recovers its receipt and fences stale input', async () => {
+  // This lane starts at its approved baseline. The previous capture-only test deliberately
+  // retained an unknown-account event, which would block all application on that lane.
+  const data = await createSyncApplyFixture();
+  try {
+    const { db, identity, source, stored } = data;
+    const { manifest, artifact } = stored.bundle;
+    const profile = selectedProfile(stored.bundle);
+    const target = stored.approvedTarget.records;
+    const streamId = 'a-finance';
+    const baseline = manifest.streams.find(stream => stream.streamId === streamId)!.resumeAfter;
+    const bound = await createRuntimeCapture({ db, clock: syncApplyClock }).openCommitted(identity);
+    const apply = createSyncApplier({ db, clock: syncApplyClock, identity, observe: source.readCurrentSemantics });
+    await data.addInvoice('v5-apply-invoice-1', profile.sourceAccountIds[0]!);
+    const page = await source.fetchChanges(manifest.sourceRef, streamId, baseline);
+    expect(await bound.capturePage(page)).toMatchObject({ captured: 1 });
+    const { plan } = await apply.prepare(syncApplyInstant);
+    if (!plan) throw new Error('Expected a new invoice plan');
+
+    const first = await apply.applyBatch(plan, 1);
+    expect(first.replayed).toBe(false);
+    expect(first.receipt.afterBalanceCents - first.receipt.beforeBalanceCents).toBe(1200);
+    expect(first.receipt.targetRecordIds).toHaveLength(1);
+    const moved = await withTransaction(db, client => readStoredTarget(client, identity.scope));
+    expect(moved?.records.version).toBe(target.version + 1);
+
+    await data.addInvoice('v5-apply-invoice-2', profile.sourceAccountIds[0]!);
+    const pending = await source.fetchChanges(manifest.sourceRef, streamId, page.next);
+    expect(await bound.capturePage(pending)).toMatchObject({ captured: 1 });
+    const stale = planBatch(artifact, profile, pending.events, { ...target, asOf: syncApplyInstant }).plans[0]!;
+    await expect(apply.applyBatch(stale, 1)).rejects.toMatchObject({ code: 'SYNC_TARGET_STALE' });
+    await expect(apply.applyBatch(stale, 2)).rejects.toMatchObject({ code: 'AUTHORITY_STALE' });
+    expect(await apply.applyBatch(plan, 1)).toEqual({ receipt: first.receipt, replayed: true });
+    expect((await db.query('SELECT receipt_id FROM runtime_sync_receipts')).rows).toEqual([{ receipt_id: first.receipt.id }]);
+  } finally {
+    await data.close();
   }
-  const streamId = 'a-finance';
-  const cursor = committed.manifest.streams.find(stream => stream.streamId === streamId)!.resumeAfter;
-  const page = await source.fetchChanges(committed.manifest.sourceRef, streamId, cursor);
-  const fresh = page.events.filter(event => event.recordId.includes(':v5-apply-invoice-'));
-  expect(fresh).toHaveLength(2);
-  const planner = { ...target.records, asOf: approvedAt };
-  const latePaymentA = [fresh[0]];
-  const outcome = planBatch(artifact, profile, latePaymentA, planner);
-  expect(outcome.holds).toEqual([]);
-  const [plan] = outcome.plans;
-  const apply = createSyncApplier({ db: runtime, clock, artifact, profile, identity: committed.identity });
-  const before = await parentFinancialFingerprint();
-
-  const first = await apply(plan, latePaymentA, 1);
-  expect(first.replayed).toBe(false);
-  expect(first.receipt.afterBalanceCents - first.receipt.beforeBalanceCents).toBe(1200);
-  expect(first.receipt.targetRecordIds).toHaveLength(1);
-  const moved = await withTransaction(runtime, client => readStoredTarget(client, committed.identity.scope));
-  expect(moved?.records.version).toBe(target.records.version + 1);
-  expect(await parentFinancialFingerprint()).not.toEqual(before);
-
-  const after = await parentFinancialFingerprint();
-  const again = await apply(plan, latePaymentA, 1);
-  expect(again).toEqual({ receipt: first.receipt, replayed: true });
-  expect(await parentFinancialFingerprint()).toEqual(after);
-
-  const stale = [fresh[1]];
-  const stalePlan = planBatch(artifact, profile, stale, planner).plans[0];
-  expect(stalePlan).toBeDefined();
-  await expect(apply(stalePlan, stale, 1)).rejects.toMatchObject({ code: 'SYNC_TARGET_STALE' });
-  await expect(apply(stalePlan, stale, 2)).rejects.toMatchObject({ code: 'AUTHORITY_STALE' });
-  expect(await parentFinancialFingerprint()).toEqual(after);
-  expect(SyncApplyError.name).toBe('SyncApplyError');
-});
+}, 120_000);

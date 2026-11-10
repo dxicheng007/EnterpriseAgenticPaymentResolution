@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { HashSchema, IdSchema, NonnegativeIntegerSchema, VersionSchema, strict } from './common.js';
+import { HashSchema, IdSchema, IdSetSchema, NonnegativeIntegerSchema, VersionSchema, strict, unique } from './common.js';
 import { canonicalJson } from './canonical.js';
 import { ConnectorSpecSchema, CustomerProfileSchema } from './connector.js';
 import {
@@ -275,13 +275,16 @@ export const RequestInvestigationInputSchema = strict({
   dependencyFindingRefs: DiscoveryProposalV2Schema.out.shape.findingRefs,
 }).refine(fitsProposalBytes, 'Invalid canonical input or input exceeds 65,536 UTF-8 bytes');
 
-export const DiscoveryInvestigationToolFailureSchema = strict({
+export const DiscoveryCompletionToolFailureSchema = strict({
   ok: z.literal(false),
   code: z.enum([
     'DISCOVERY_INVALID', 'DISCOVERY_FORBIDDEN', 'DISCOVERY_CONFLICT', 'DISCOVERY_PAUSED',
     'SOURCE_UNAVAILABLE', 'TOOL_RESULT_LIMIT', 'TOOL_FORBIDDEN', 'TOOL_UNAVAILABLE',
+    'PROPOSAL_REVISION_CONFLICT', 'REPAIR_DIAGNOSTICS_REQUIRED', 'REPAIR_LIMIT', 'INVESTIGATION_REQUEST_LIMIT',
   ]),
-});
+}).refine(fitsProposalBytes, 'Tool result exceeds 65,536 UTF-8 bytes');
+
+export const DiscoveryInvestigationToolFailureSchema = DiscoveryCompletionToolFailureSchema;
 
 export const RequestInvestigationResultSchema = z.union([
   strict({ ok: z.literal(true), requestId: IdSchema }),
@@ -296,4 +299,96 @@ export const discoveryInvestigationToolSchemas = [
   { name: 'requestInvestigation',
     description: 'Persist a bounded coordinator investigation request for a pinned source or captured tuple. Does not spawn a task or widen grants.',
     inputSchema: z.toJSONSchema(RequestInvestigationInputSchema, { io: 'input', reused: 'ref', unrepresentable: 'any' }) },
+];
+
+export const DiscoveryRepairDiagnosticRefSchema = z.union([
+  strict({ code: IdSchema, kind: z.literal('compile'), toolStepId: IdSchema, assessmentRevision: VersionSchema }),
+  strict({
+    code: IdSchema, kind: z.literal('verification'), requestKey: IdSchema, jobId: IdSchema,
+    assessmentRevision: VersionSchema,
+  }),
+]);
+
+export const BeginRepairInputSchema = strict({
+  investigationId: IdSchema,
+  proposalId: IdSchema,
+  expectedProposalRevision: VersionSchema,
+  diagnosticCodes: IdSetSchema.min(1).meta({ uniqueItems: true }).transform(codes => [...codes].sort()),
+}).refine(fitsProposalBytes, 'Invalid canonical input or input exceeds 65,536 UTF-8 bytes');
+
+export const BeginRepairResultSchema = z.union([
+  strict({
+    ok: z.literal(true),
+    investigationId: IdSchema,
+    proposalId: IdSchema,
+    proposalRevision: VersionSchema,
+    repairRound: z.literal([1, 2]),
+    diagnosticRefs: z.array(DiscoveryRepairDiagnosticRefSchema).min(1)
+      .refine(refs => unique(refs, ref => ref.code), 'Duplicate diagnostic code')
+      .transform(refs => [...refs].sort((a, b) => a.code < b.code ? -1 : a.code > b.code ? 1 : 0)),
+  }),
+  DiscoveryCompletionToolFailureSchema,
+]).refine(fitsProposalBytes, 'Tool result exceeds 65,536 UTF-8 bytes');
+
+export const FinishRunInputSchema = strict({})
+  .refine(fitsProposalBytes, 'Invalid canonical input or input exceeds 65,536 UTF-8 bytes');
+
+const FinishRunBlockerCodeSchema = z.enum([
+  'TASK_GRAPH_INCOMPLETE', 'TASK_DEPENDENCIES_UNRESOLVED', 'NO_CURRENT_COMPILED_PROPOSAL',
+  'DISCOVERY_ASSESSMENT_UNRESOLVED', 'DISCOVERY_WORK_IN_FLIGHT',
+]);
+
+export const FinishRunResultSchema = z.union([
+  strict({
+    ok: z.literal(true),
+    runId: IdSchema,
+    status: z.literal('completed'),
+    observedRunRevision: VersionSchema,
+    revision: VersionSchema,
+  }).refine(({ observedRunRevision, revision }) => revision === observedRunRevision + 1, {
+    path: ['revision'], message: 'Completion revision must follow the observed run revision',
+  }),
+  strict({
+    ok: z.literal(false),
+    code: z.literal('DISCOVERY_INCOMPLETE'),
+    blockerCodes: z.array(FinishRunBlockerCodeSchema).min(1)
+      .refine(codes => unique(codes, code => code), 'Duplicate blocker code')
+      .transform(codes => [...codes].sort()),
+  }),
+  DiscoveryCompletionToolFailureSchema,
+]).refine(fitsProposalBytes, 'Tool result exceeds 65,536 UTF-8 bytes');
+
+export const DelegateTaskInputSchema = strict({
+  subject: DiscoverySubjectSchema,
+  role: z.enum(['identity', 'contract', 'receivables', 'connector']),
+  question: z.string().min(1).max(8192)
+    .refine(question => Buffer.byteLength(question) <= 8192, 'Question exceeds 8192 UTF-8 bytes')
+    .describe('At most 8192 UTF-8 bytes.'),
+  dependencyIds: IdSetSchema.meta({ uniqueItems: true }).transform(ids => [...ids].sort()),
+  requestId: IdSchema.optional(),
+}).refine(fitsProposalBytes, 'Invalid canonical input or input exceeds 65,536 UTF-8 bytes');
+
+export type DiscoveryCompletionToolFailure = z.infer<typeof DiscoveryCompletionToolFailureSchema>;
+export type DiscoveryRepairDiagnosticRef = z.infer<typeof DiscoveryRepairDiagnosticRefSchema>;
+export type BeginRepairInput = z.infer<typeof BeginRepairInputSchema>;
+export type BeginRepairResult = z.infer<typeof BeginRepairResultSchema>;
+export type FinishRunInput = z.infer<typeof FinishRunInputSchema>;
+export type FinishRunResult = z.infer<typeof FinishRunResultSchema>;
+export type DelegateTaskInput = z.infer<typeof DelegateTaskInputSchema>;
+
+// JSON Schema cannot express the canonical envelope byte limit, UTF-8 question
+// byte limit or normalization. The runtime parsers enforce those constraints.
+export const discoveryCompletionToolSchemas = [
+  { name: 'beginRepair',
+    description: 'Begin a bounded repair for the exact proposal revision using current diagnostic codes.',
+    inputSchema: z.toJSONSchema(BeginRepairInputSchema, { io: 'input', unrepresentable: 'any' }) },
+  { name: 'finishRun',
+    description: 'Complete discovery after the run meets its completion requirements.',
+    inputSchema: z.toJSONSchema(FinishRunInputSchema, { io: 'input', unrepresentable: 'any' }) },
+];
+
+export const discoveryDelegationToolSchemas = [
+  { name: 'delegateTask',
+    description: 'Assign a bounded specialist investigation, optionally handling an existing request.',
+    inputSchema: z.toJSONSchema(DelegateTaskInputSchema, { io: 'input', unrepresentable: 'any' }) },
 ];

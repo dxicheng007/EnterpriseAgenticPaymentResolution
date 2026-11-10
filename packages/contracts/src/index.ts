@@ -21,3 +21,14 @@ export * from './discovery-tools.js';
 export * from './sync-capture.js';
 export * from './current-authority.js';
 export * from './connection-state.js';
+export {
+  DiscoveryCompletionToolFailureSchema, DiscoveryRepairDiagnosticRefSchema,
+  BeginRepairInputSchema, BeginRepairResultSchema, FinishRunInputSchema, FinishRunResultSchema,
+  RequestInvestigationInputSchema, RequestInvestigationResultSchema, DiscoveryInvestigationToolFailureSchema,
+  DelegateTaskInputSchema, discoveryCompletionToolSchemas, discoveryDelegationToolSchemas,
+  discoveryInvestigationToolSchemas,
+  type DiscoveryCompletionToolFailure, type DiscoveryRepairDiagnosticRef,
+  type BeginRepairInput, type BeginRepairResult, type FinishRunInput, type FinishRunResult,
+  type RequestInvestigationInput, type RequestInvestigationResult, type DiscoveryInvestigationToolFailure,
+  type DelegateTaskInput,
+} from './discovery-construction-tools.js';

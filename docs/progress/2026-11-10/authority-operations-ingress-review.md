@@ -1,0 +1,59 @@
+# Independent design review: bounded authority operations ingress
+
+Review scope: DESIGN ONLY, nextPlatformP3. Reviewed `/Users/devincheng/.codex/worktrees/platform-activation-integration/EnterpriseAgenticPaymentResolution/docs/progress/2026-11-10/authority-operations-ingress-design.md`, initial SHA-256 `d06b5aaa44a6bd4293c6846fdcdf93128d39d70d4caeff9a4ec88a2a9ba634aa`. After the author corrected the two findings, re-read the complete successor and verified final SHA-256 `53b42ecc85ece726742e76745d20341da0e65e10964a1a4e60b68e0710be1edd`. No implementation/mounting approval or machine-verification claim.
+
+## Verdict
+
+**Architecture and bounded specification quality: approved.** The author resolved both minor wording findings; no unresolved critical, important or minor findings remain in final SHA `53b42ecc85ece726742e76745d20341da0e65e10964a1a4e60b68e0710be1edd`. No absent financial/product rule, new permission policy requirement, or need for DDL was identified. The final design is ready for Platform implementation planning and publication as the bounded Platform → Experience contract. This needs no user decision or architectural redesign.
+
+**Consumable-contract readiness:** The final route/request/result/retry contract is concrete and ready for Experience client/UI planning and scoped consumption after root publishes it. It does not make endpoints available or authorize speculative backend implementation. Platform owns all trusted control and worker ingress. Experience owns the browser client/UI only. Production mounting remains behind independent plan/candidate review and the stated integration/browser evidence.
+
+## Resolved findings from the initial SHA
+
+Both corrections were verified in the final file; the descriptions below retain the original review rationale.
+
+### Resolved minor 1 — Narrow “changed grants” to loss of required permission
+
+Location: design line 44, “changed actor/grants ... is 403”; related lines 32–36 and 63.
+
+The accepted service plan requires the same reviewer/session and fresh permission for the actual account/source. `apps/worker/src/sync/current-authority.ts` refresh checks those requirements; it does not require equality of entire grant arrays. The ticket also intentionally does not retain a grants snapshot. The current phrase can be read as rejecting an unrelated account/source addition/removal or ordering change, creating an unnecessary new admission rule.
+
+Clarify that changed reviewer/session or loss of the required current account/source grant is 403; unrelated grant-array changes alone are not a rejection. The callback checks the original operation account, and worker/service checks the committed actual source. Preserve a test where required permission removal blocks completion, and one where an unrelated change leaves required permission intact. **Resolution verified:** final lines 44 and 63 now state these exact boundaries.
+
+### Resolved minor 2 — Assign full identity response validation to the component that knows it
+
+Location: design line 50, “Worker client checks ... exact response identity/account/action/key/expected beforeEpoch”; related lines 24, 32, 35–38.
+
+The control-to-worker request carries only the account and operation body; control has no independently known full committed scope/activationId/bundleHash to compare against. Requiring that client to check an unspecified expected full identity risks adding an unwanted registry lookup or relying on a response to validate itself.
+
+Clarify that the worker compares the service result/read to the exact committed identity it derived, while control strictly decodes the result, checks internal result/state identity consistency and requested account/action/key/beforeEpoch bindings. Control trusts the authenticated worker for the rest of the committed identity. Do not add a mutable-registry dependency or another public identity input to satisfy this wording. Response substitution tests should exercise both boundaries accordingly. **Resolution verified:** final line 50 explicitly assigns these checks to worker and control respectively, without a registry dependency or new identity input.
+
+## Basis and strengths
+
+- The accepted current-authority design/plan, implementation report and ad13e2f independent review were examined alongside the actual contracts, service, repository and error definitions. PRD local process/customer approval/acceptance boundaries and frozen F1/F4/F5/F7 support the proposed scope. This is an adapter for accepted behavior, not a new status engine.
+- Fresh callback admission meets the accepted plan’s explicit re-invocation requirement. The map ticket is bound to one original request and canonical operation; neither a digest nor retained WeakMap token is misrepresented as continuing session authority. Required actor/session equality and actual account/source checks remain with the existing service. Frozen forwarded grants alone would not meet this contract.
+- Authentication and parsing responsibilities are appropriately ordered. The public server-managed session rejects credential masquerading; mutation Origin/CSRF checks use the original request. Separate control→worker and worker→control credentials prevent making the source-read capability an admission capability. Fixed origins, bounded decoding, no redirects and no caller callback URL preserve existing transport constraints.
+- The committed identity lookup is justified and bounded. Runtime002 has `UNIQUE(account_id)` on immutable A5 imports; `readStoredActivation` verifies canonical contents, indexed identity, bundle/receipt/plan relationships and the approved snapshot. The ingress lookup does not turn the scalar row into authority, expose protected proof, or use the mutable registry as customer permission. The service independently validates the derived identity afterward. Reenrollment remains expressly outside the two-field command contract.
+- Existing current-authority service sequencing preserves fresh admission before replay, actual-source authorization before occupied-key conflict, refresh after awaited resume observation, and refresh before concurrent-winner recovery on observation failure. The adapter must keep these paths unchanged rather than introduce a route-side audit shortcut.
+- Registry/new-activation-policy independence is necessary, not excess scope. The accepted design explicitly requires pause/revoke/no-op/replay to survive missing new-activation files or source availability. Current parent/overview composition depends on the registry, so reusing that resolver would violate the accepted behavior. Authority and overview can therefore have different availability without conflicting authority.
+- Historical replay is clearly separated from current status. Same-reviewer fresh-session retries preserve original immutable results; changed reviewer conflicts. Stable command keys, refetch and nondecreasing current epochs prevent response arrival ordering from reviving an old status. No control success row overrules runtime commit.
+- Ticket cancellation, transport timeout, map capacity and cleanup are resource/lifetime controls, not an invented source-observation TTL or authority lease. The explicit post-final-admission boundary correctly preserves the accepted short-transaction/bounded-retry trust assumption and disclaims cross-DB atomicity or mid-transaction undo.
+- Existing strict current-authority DTOs omit reviewer audit/session, protected proofs, source evidence and financial receipts. Safe fixed error mappings, empty diagnostics, private-header rejection and no-store responses are appropriate. Shared export changes must preserve protected build closure if any are needed; no new schema leaf is implied merely by reusing existing wire results.
+
+## Implementation-plan and verification obligations
+
+These are implementation details and required proof, not additional product policy or independent architecture blockers:
+
+1. Pin exact owned files and shared-path reservations for framework-error hooks, supervisor secrets, composition and any contract exports. Preserve the accepted internal service/store and runtime004. Reserve no new DDL. Keep worker dependency/import closure free of control services, models and evaluator code.
+2. Define the private descriptor schema/hash preimage exactly as proposed, including action-to-mode mapping and null read body. Keep opaque worker contexts request-bound and nonforgeable by structural JSON. Authenticate the callback before parsing ticket data, and reject mismatched hash, mode, account/action/body and cross-operation reuse.
+3. Test a real control+worker HTTP session chain, not only a trusted fake adapter. Include unauthenticated/malformed requests, browser private-header injection, service/task/operator masquerading, wrong Origin/CSRF, foreign account/source, no HEAD/body/query acceptance, media/size/prototype-key limits, and malformed URL/overlong-path authentication at framework level.
+4. Use deterministic barriers around resume and final callback: missing session, changed actor/session, lost required account/source permission, observed disconnect, expiry and failed-observation concurrent-winner recovery must prevent unauthorized commit/disclosure. A normal completed request body must not be mistaken for a caller disconnect. Define the callback’s final liveness decision so a cancellation during awaited authorization is handled consistently with the documented final-check boundary. Do not claim cancellation after that final admission undoes runtime work.
+5. Instrument every admission callback and source observation to prove zero external I/O under runtime transaction locks, including bounded SQL retry paths. Keep the ingress identity client released before calling the existing service.
+6. Exercise ticket map capacity, timely deletion on success/error/abort/deadline/shutdown, repeated matching callback checks, new-ticket retry after control restart, callback timeout/invalid/oversized responses and mismatched error status/code. Verify credentials/tickets/cookies/CSRF are absent from response bodies, logs and persisted data.
+7. With genuine A5 storage, test missing/corrupt identity and bindings, no imported account, missing/mismatched registry, absent current activation policy/evaluator files, unavailable source, source grant denial and lost admission wiring. Read/pause/revoke/no-op/replay must remain usable where specified; only genuine paused→active resume needs successful semantic observation. Original activation, receipt and financial rows remain unchanged.
+8. Test post-commit lost response, duplicate delivery, historical replay after revoke, stale/no-op/revoked/max-epoch cases, fresh same-reviewer session recovery and other-reviewer conflict. Assert one command/effect and appropriate activity count, byte-identical replay result and authoritative current GET.
+9. Experience tests must retain the exact unresolved command, refetch after success/replay/conflict, avoid overview/initial-receipt authority fallback, show unavailable versus unknown outcome correctly and prevent out-of-order current reads from decreasing epoch. Retain byte-compatible overview output. Run focused contract/client/route checks, typecheck, leased isolated DB/HTTP integration and separately coordinated bounded browser proof before mounting claims.
+
+## Review limits
+
+Static read-only review only. No Git commands, source edits, test execution, DB access, browser/provider operations or subagents were used. Only this requested report was written under `/private/tmp`. Existing implementer/reviewer evidence was read as context, not rerun or re-certified. This review does not establish live source coverage, future apply’s atomic epoch fence, financial sync, V5/V6, production availability or joint user acceptance.
