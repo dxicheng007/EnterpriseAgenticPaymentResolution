@@ -3,13 +3,13 @@ import {
   ActivationBundleV2Schema, BootstrapManifestSchema, CaptureStreamSchema, ChangePageSchema,
   CommittedAuthorityIdentityV1Schema, CurrentAuthorityV1Schema, CustomerActivationSchema, IsoInstantSchema,
   RawSourceEventSchema, SyncReceiptSchema, hashCanonical, hashTargetSnapshot, setOf, targetRecordId,
-  type CommittedAuthorityIdentityV1,
+  type CommittedAuthorityIdentityV1, type CompiledArtifact, type CustomerActivation, type CustomerProfile, type RawSourceEvent,
 } from '@eapr/contracts';
 import { classifyBatch, type TypedPrerequisite } from '@eapr/compiler/plan-batch';
 import { fundingIdFor, invoiceIdFor } from '@eapr/finance/allocations';
 import { financialRecords, referenceId, type FinancialRecord } from '@eapr/finance/validate';
 import { readStoredActivation } from '@eapr/parent/activation-store';
-import { decodeCanonical, readStoredTarget, readVersion, scopeOf, scopeValues, type ScopeRow } from '@eapr/parent/snapshots';
+import { decodeCanonical, readStoredTarget, readVersion, scopeOf, scopeValues, type ScopeRow, type StoredTarget } from '@eapr/parent/snapshots';
 import {
   CoverageCutSchema, SyncEventOutcomeSchema, readFinancialOrigins, readSyncUnit, syncEventRef,
   type CoverageCut, type ReceiptOrigin, type SyncUnitAudit,
@@ -396,11 +396,13 @@ function prerequisiteLinks(record: FinancialRecord): [TypedPrerequisite['relatio
   return [];
 }
 
-function classifyGroup(
-  cut: Awaited<ReturnType<typeof readCut>>, target: NonNullable<Awaited<ReturnType<typeof readStoredTarget>>>, asOf: string,
+export function classifyCapturedGroup(
+  { activation, artifact, profile, identity, events }: {
+    activation: Pick<CustomerActivation, 'allowedKinds' | 'limits'>; artifact: CompiledArtifact; profile: CustomerProfile;
+    identity: CommittedAuthorityIdentityV1; events: RawSourceEvent[];
+  },
+  target: StoredTarget, asOf: string,
 ) {
-  const { activation, bundle: { artifact }, profile, coverage, selected } = cut;
-  const { events } = selected;
   const limits = artifact.normalizedPlan.limits;
   requireSync(artifact.compilerVersion === '1' && artifact.runtimeVersion === '1' &&
     events.length <= limits.maxRecordsPerCycle && events.length <= activation.limits.maxRecordsPerCycle &&
@@ -413,13 +415,13 @@ function classifyGroup(
     details.items.length === events.length &&
     equal(details.groups[0]!.inputIndexes, events.map((_, index) => index)), 'SYNC_COVERAGE_UNSUPPORTED');
   requireSync(equal(details.binding, {
-    scope: coverage.identity.scope, artifactHash: artifact.hash, profileHash: profile.hash,
+    scope: identity.scope, artifactHash: artifact.hash, profileHash: profile.hash,
     expectedTargetVersion: target.records.version, targetSnapshotHash: hashTargetSnapshot(inputTarget), asOf,
   }), 'SYNC_INVALID_PLAN');
   const plan = outcome.plans[0] ?? null;
   if (plan) {
     requireSync(plan.artifactHash === artifact.hash && plan.profileHash === profile.hash, 'SYNC_INVALID_PLAN');
-    validatePlanIndexes(plan, { identity: coverage.identity, expectedTargetVersion: target.records.version, asOf, events });
+    validatePlanIndexes(plan, { identity, expectedTargetVersion: target.records.version, asOf, events });
   }
 
   const existing = new Map(financialRecords(target.records).map(record => [record.id, record]));
@@ -431,9 +433,9 @@ function classifyGroup(
       item.disposition === 'financial_coalesced', 'SYNC_COVERAGE_UNSUPPORTED');
     const { mapped } = item;
     requireSync(item.inputIndex === inputIndex && item.groupIndex === 0 && equal(item.event, syncEventRef(event)) &&
-      equal(mapped.scope, coverage.identity.scope) &&
+      equal(mapped.scope, identity.scope) &&
       equal(mapped.identity, {
-        sourceRef: event.sourceRef, sellerEntityId: coverage.identity.scope.sellerEntityId, kind: event.kind, recordId: event.recordId,
+        sourceRef: event.sourceRef, sellerEntityId: identity.scope.sellerEntityId, kind: event.kind, recordId: event.recordId,
       }) && mapped.targetRecordId === targetRecordId(mapped.identity), 'SYNC_INVALID_PLAN');
     let record;
     if (item.disposition === 'financial_replay') {
@@ -461,7 +463,7 @@ function classifyGroup(
       requireSync(Number.isSafeInteger(record.amountCents) && record.amountCents <= limits.maxTransactionCents &&
         record.amountCents <= activation.limits.maxTransactionCents, 'SYNC_INVALID_PLAN');
     }
-    return { mapped, record };
+    return { mapped, record, disposition: item.disposition };
   });
   requireSync(newIndexes.size === (plan?.operations.length ?? 0) &&
     (plan !== null || details.items.every(item => item.disposition === 'financial_replay')), 'SYNC_INVALID_PLAN');
@@ -487,7 +489,7 @@ function classifyGroup(
         equal(prerequisite.presence, prior ? { kind: 'target' } : { kind: 'candidate', providerInputIndexes }), 'SYNC_INVALID_PLAN');
     }
   }
-  return { plan, replayRecords: [...replayRecords.values()] };
+  return { plan, replayRecords: [...replayRecords.values()], items: indexed };
 }
 
 /** Observe and classify the whole captured suffix without acquiring locks or issuing writes. */
@@ -512,7 +514,9 @@ export async function prepareCapturedUnit(
     const target = await readStoredTarget(client, identity.scope, pointer.hash);
     requireSync(target && target.records.version === selected.beforeVersion && target.snapshotHash === selected.beforeHash);
     requireSync(selected.events.length > 0, 'SYNC_NO_PENDING');
-    const { plan, replayRecords } = classifyGroup(cut, target, asOf.data);
+    const { plan, replayRecords } = classifyCapturedGroup({
+      activation: cut.activation, artifact: cut.bundle.artifact, profile: cut.profile, identity, events: selected.events,
+    }, target, asOf.data);
     await readFinancialOrigins(client, identity.scope, replayRecords);
     return freezeJson(PreparedSyncUnitSchema.parse({
       identity, lane: coverage.lane, streamId: selected.streamId, expectedEpoch, expectedTargetVersion: selected.beforeVersion,

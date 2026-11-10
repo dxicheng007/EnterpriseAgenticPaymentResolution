@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Pool } from 'pg';
 import { expect } from 'vitest';
-import { LocalSessionResponseSchema, ReviewPackageSchema } from '@eapr/contracts';
+import { hashEvent, LocalSessionResponseSchema, ReviewPackageSchema, type RawSourceEvent } from '@eapr/contracts';
 import { readStoredActivation } from '@eapr/parent/activation-store';
 import { createSourceService } from '@eapr/sources';
 import { loadActivationPolicy } from '@eapr/storage/activation-policy';
@@ -17,9 +17,12 @@ import { createLocalSessionService } from '../../apps/control/src/local-session.
 import { createParentReadClient } from '../../apps/control/src/parent-read-client.js';
 import { createReviewRepository } from '../../apps/control/src/review-repository.js';
 import { buildControl, createWorkerClient } from '../../apps/control/src/server.js';
+import { selectedProfile } from '../../apps/worker/src/activation-validation.js';
 import { createWorkerActivation } from '../../apps/worker/src/activation.js';
 import { composeWorkerParentReads } from '../../apps/worker/src/parent-read-composition.js';
+import { createRuntimeCapture } from '../../apps/worker/src/sync/capture.js';
 import { launchWorker } from '../../apps/worker/src/server.js';
+import { eventA, type RecordA } from '../../packages/sources/src/company-a.js';
 import { createScenarioAdmin } from '../../packages/sources/src/scenario-admin.js';
 import { migrate, migrationIdentities, readMigrationCatalog } from '../../scripts/migrate.js';
 import { dropTest, provisionTest, startNativeDb } from '../../scripts/native-db.js';
@@ -143,4 +146,49 @@ export async function createSyncApplyFixture(runtimeThrough?: number) {
     await close();
     throw error;
   }
+}
+
+export type SyncApplyFixture = Awaited<ReturnType<typeof createSyncApplyFixture>>;
+export const applyFinancialStream = 'a-finance';
+export const applySemanticStream = 'a-semantics';
+
+export function applyBaseline(data: SyncApplyFixture, streamId = applyFinancialStream) {
+  return data.stored.bundle.manifest.streams.find(stream => stream.streamId === streamId)!.resumeAfter;
+}
+
+export function applyEvent(event: RawSourceEvent, changes: Partial<RawSourceEvent>) {
+  const updated = { ...event, ...changes };
+  return { ...updated, contentHash: hashEvent(updated) };
+}
+
+export async function captureApplyEvents(data: SyncApplyFixture, after: string, input: RawSourceEvent[]) {
+  const capture = await createRuntimeCapture({ db: data.db, clock: syncApplyClock }).openCommitted(data.identity);
+  const events = input.map((event, index) => applyEvent(event, { sequence: Number(after) + index + 1 }));
+  const page = { sourceRef: capture.lane.sourceRef, streamId: applyFinancialStream, after,
+    next: String(Number(after) + events.length), complete: true, events };
+  expect(await capture.capturePage(page)).toEqual({
+    disposition: 'captured', captured: events.length, cursor: page.next, replayed: false,
+  });
+  return { capture, page };
+}
+
+export function partialAllocationEvents(data: SyncApplyFixture) {
+  const sourceAccountId = selectedProfile(data.stored.bundle).sourceAccountIds[0]!;
+  const { approvedTarget, bundle } = data.stored;
+  const suffix = sourceAccountId + '-2026-09-01';
+  const invoice = approvedTarget.records.invoices.find(record => record.identity.recordId === 'inv-a:' + suffix)!;
+  const payment = approvedTarget.records.payments.find(record => record.identity.recordId === 'pay-a:' + suffix)!;
+  const allocation = approvedTarget.records.allocations.find(record => record.identity.recordId === 'alloc-payment-a:' + suffix)!;
+  const originalEvent = (record: { sourceEventId: string }) => bundle.bootstrapEvents.find(event => event.id === record.sourceEventId)!;
+  const fresh = (record: Omit<RecordA, 'sourceAccountId'>) => eventA({ ...record, sourceAccountId }, 1, syncApplyInstant);
+  const p1 = fresh({ kind: 'payment', recordId: 'pay-a:sync-apply-partial', effectiveDate: '2026-10-02', fields: { amount: '40.00' } });
+  const allocate = (n: 1 | 2, amount: string, effectiveDate: string) => fresh({
+    kind: 'allocation', recordId: 'alloc-a:sync-apply-partial-' + n, effectiveDate,
+    fields: { amount, funding_kind: 'payment', funding_id: p1.recordId, invoice_id: invoice.identity.recordId },
+  });
+  return {
+    invoice, payment, allocation,
+    invoiceEvent: originalEvent(invoice), paymentEvent: originalEvent(payment), allocationEvent: originalEvent(allocation),
+    p1, a1: allocate(1, '20.00', '2026-10-02'), a2: allocate(2, '10.00', '2026-10-03'),
+  };
 }

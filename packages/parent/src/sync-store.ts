@@ -5,7 +5,7 @@ import {
   MutationPlanSchema, RawSourceEventSchema, ScopeSchema, SyncReceiptSchema, canonicalJson, hashCanonical, hashEvent,
   hashPlan, hashTargetSnapshot, targetRecordId, unique,
   type CommittedAuthorityIdentityV1, type MutationPlan, type RawSourceEvent, type ReceiptResponse,
-  type Scope, type SyncReceipt, type TargetState,
+  type Scope, type SyncReceipt, type TargetState, type EconomicIdentity,
 } from '@eapr/contracts';
 import { computeBalance } from '@eapr/finance/balance';
 import { financialRecords, sameScope, type FinancialRecord } from '@eapr/finance/validate';
@@ -17,24 +17,22 @@ import {
   type ScopeRow, type SnapshotRow, type StoredTarget,
 } from './snapshots.js';
 import { projectTarget, type FinancialMutation } from './state.js';
-import { ReceiptOriginSchema, SyncEventOutcomeSchema, SyncUnitAuditSchema, syncEventRef, type ReceiptOrigin, type SyncUnitAudit, type UnitMember } from './sync-types.js';
+import { ReceiptOriginSchema, SyncEventOutcomeSchema, SyncUnitAuditSchema, syncEventRef, type CoverageCut, type ReceiptOrigin, type ReplayResponse, type SyncUnitAudit, type UnitMember } from './sync-types.js';
 
 export * from './sync-types.js';
 
-export type SyncCommit = {
-  scope: Scope; plan: MutationPlan; receipt: SyncReceipt; previous: StoredTarget; next: TargetState;
-  records: FinancialRecord[]; events: RawSourceEvent[]; identityLocks: ImportIdentityLocks;
+export type SyncUnitCommit = {
+  audit: SyncUnitAudit; previous: StoredTarget; next: TargetState;
+  plan: MutationPlan | null; receipt: SyncReceipt | null; members: UnitMember[];
+  identities: readonly EconomicIdentity[]; identityLocks: ImportIdentityLocks;
+  expectedHeads: CoverageCut['applicationHeads'];
 };
 
 export class SyncStoreError extends Error {
-  constructor(readonly code: 'SYNC_STORE_CONFLICT' | 'SYNC_STORE_INVALID', message: string) {
+  constructor(readonly code: 'SYNC_STORE_INVALID', message: string) {
     super(message);
     this.name = 'SyncStoreError';
   }
-}
-
-function require(condition: unknown, message: string): asserts condition {
-  if (!condition) throw new SyncStoreError('SYNC_STORE_CONFLICT', message);
 }
 
 function valid(condition: unknown): asserts condition {
@@ -548,16 +546,121 @@ export async function readLatestSyncVersion(client: PoolClient, scope: Scope): P
   return row?.version ? readVersion(row.version) : 0;
 }
 
-/**
- * Stores one validated ongoing batch in the caller's transaction. Caller holds the scope, target and
- * identity locks and has recomputed the plan; this only appends facts and moves the target pointer.
- */
-export async function persistSyncBatch(client: PoolClient, input: SyncCommit): Promise<SyncReceipt> {
-  const { scope, plan, receipt, previous, identityLocks } = input;
-  const next = validateSnapshot(input.next);
-  require(next.version === previous.records.version + 1, 'next target version');
-  requireImportIdentityLocks(client, identityLocks, input.records.map(record => record.identity), input.events);
-  const values = scopeValues(scope);
+/** Verify relational target membership and original ownership after identity locks. */
+export async function readSyncTargetOrigins(client: PoolClient, scope: Scope, target: StoredTarget) {
+  return storageRead(async () => {
+    const records = financialRecords(target.records);
+    const { rows: [row] } = await client.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM parent_financial_records
+       WHERE (account_id, company_id, seller_entity_id) = ($1, $2, $3)`, scopeValues(scope),
+    );
+    valid(row && readVersion(row.count) === records.length);
+    const origins = await readFinancialOrigins(client, scope, records);
+    return new Map(origins.map(origin => [origin.recordId, origin]));
+  });
+}
+
+function unitBinding(identity: CommittedAuthorityIdentityV1, lane: SyncUnitAudit['lane']) {
+  return [...scopeValues(identity.scope), identity.activationId, identity.bundleHash, lane.sourceRef, lane.manifestHash];
+}
+
+export function replayResponse(audit: SyncUnitAudit, replayed: boolean): ReplayResponse {
+  const receipts = new Map(audit.members.map(({ origin }) =>
+    [canonicalJson([origin.kind, origin.receipt.id]), origin.receipt] as const));
+  return {
+    unitHash: audit.unitHash, replayed,
+    receipts: [...receipts.values()].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+    appliedThrough: audit.coverage.checkpoints.map(checkpoint => ({
+      streamId: checkpoint.streamId, cursor: checkpoint.streamId === audit.streamId ? audit.throughCursor : checkpoint.baselineCursor,
+    })),
+  };
+}
+
+async function lockApplicationHeads(client: PoolClient, audit: SyncUnitAudit, expected: SyncUnitCommit['expectedHeads']) {
+  type Head = ScopeRow & {
+    activation_id: string; bundle_hash: string; source_ref: string; manifest_hash: string;
+    stream_id: string; baseline_cursor: string; applied_through: string; last_unit_hash: string | null;
+  };
+  const { rows } = await client.query<Head>(`
+    SELECT * FROM runtime_sync_application_heads WHERE account_id = $1 OR activation_id = $2
+    ORDER BY stream_id COLLATE "C" FOR UPDATE
+  `, [audit.identity.scope.accountId, audit.identity.activationId]);
+  const binding = unitBinding(audit.identity, audit.lane);
+  valid(rows.every(row => equal(
+    [...scopeValues(scopeOf(row)), row.activation_id, row.bundle_hash, row.source_ref, row.manifest_hash], binding,
+  )));
+  valid(equal(rows.map(row => ({
+    streamId: row.stream_id, baselineCursor: row.baseline_cursor, appliedThrough: row.applied_through, lastUnitHash: row.last_unit_hash,
+  })), expected));
+  return binding;
+}
+
+async function advanceApplicationHeads(client: PoolClient, audit: SyncUnitAudit, binding: string[]) {
+  for (const { streamId, baselineCursor } of audit.coverage.checkpoints) {
+    if (!audit.coverage.applicationHeads.some(head => head.streamId === streamId)) {
+      await client.query(`
+        INSERT INTO runtime_sync_application_heads (account_id, company_id, seller_entity_id, activation_id, bundle_hash,
+          source_ref, manifest_hash, stream_id, baseline_cursor, applied_through, last_unit_hash)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,NULL)
+      `, [...binding, streamId, baselineCursor]);
+    }
+  }
+  const previous = audit.coverage.applicationHeads.find(head => head.streamId === audit.streamId);
+  const advanced = await client.query(`
+    UPDATE runtime_sync_application_heads SET applied_through = $9, last_unit_hash = $10
+    WHERE (account_id, company_id, seller_entity_id, activation_id, bundle_hash, source_ref, manifest_hash, stream_id)
+      = ($1,$2,$3,$4,$5,$6,$7,$8) AND applied_through = $11 AND last_unit_hash IS NOT DISTINCT FROM $12
+  `, [...binding, audit.streamId, audit.throughCursor, audit.unitHash, audit.fromCursor, previous?.lastUnitHash ?? null]);
+  valid(advanced.rowCount === 1);
+}
+
+async function validateUnitDeliveries(client: PoolClient, audit: SyncUnitAudit, events: RawSourceEvent[]) {
+  const { identity, lane, unitHash, members } = audit;
+  const { rows } = await client.query<DeliveryRow>(`
+    SELECT * FROM runtime_deliveries
+    WHERE (source_ref, event_id) IN (SELECT * FROM unnest($1::text[], $2::text[]))
+  `, [events.map(event => event.sourceRef), events.map(event => event.id)]);
+  const deliveries = new Map(rows.map(row => [row.event_id, readDelivery(row)]));
+  valid(deliveries.size === events.length && events.every(event => equal(deliveries.get(event.id), event)));
+  await verifyOldAssociations(client, identity.scope, members.map(({ event, origin }) => ({ ...event, origin })));
+
+  const { rows: outcomes } = await client.query<ScopeRow & {
+    activation_id: string; bundle_hash: string; source_ref: string; manifest_hash: string;
+    stream_id: string; sequence: string; event_id: string; record_id: string; unit_hash: string;
+    disposition: string; canonical: string; digest: string;
+  }>(`
+    SELECT * FROM runtime_sync_event_outcomes
+    WHERE (source_ref, event_id) IN (SELECT * FROM unnest($1::text[], $2::text[]))
+  `, [events.map(event => event.sourceRef), events.map(event => event.id)]);
+  const byEvent = new Map(members.map(member => [member.event.eventId, member]));
+  for (const row of outcomes) {
+    const member = byEvent.get(row.event_id);
+    valid(member && equal(decodeCanonical(SyncEventOutcomeSchema, row.canonical, row.digest), { identity, lane, unitHash, ...member }) &&
+      equal(scopeOf(row), identity.scope) && row.activation_id === identity.activationId && row.bundle_hash === identity.bundleHash &&
+      row.source_ref === lane.sourceRef && row.manifest_hash === lane.manifestHash && row.stream_id === member.event.streamId &&
+      readVersion(row.sequence) === member.event.sequence && row.record_id === member.recordId &&
+      row.unit_hash === unitHash && row.disposition === member.disposition);
+  }
+  return new Set(outcomes.map(row => row.event_id));
+}
+
+async function requireUnclaimedRecords(client: PoolClient, records: FinancialRecord[]) {
+  if (records.length === 0) return;
+  const { rowCount } = await client.query(`
+    SELECT 1 FROM parent_financial_records WHERE record_id = ANY($1::text[])
+       OR (source_ref, seller_entity_id, kind, source_record_id) IN (
+         SELECT * FROM unnest($2::text[], $3::text[], $4::text[], $5::text[])
+       ) LIMIT 1
+  `, [records.map(record => record.id), records.map(record => record.identity.sourceRef),
+    records.map(record => record.identity.sellerEntityId), records.map(record => record.kind),
+    records.map(record => record.identity.recordId)]);
+  valid(rowCount === 0);
+}
+
+async function appendFinancialRecords(
+  client: PoolClient, previous: StoredTarget, next: TargetState, plan: MutationPlan, receipt: SyncReceipt, records: FinancialRecord[],
+) {
+  const values = scopeValues(receipt.scope);
   const hash = hashTargetSnapshot(next);
   await client.query(
     `INSERT INTO parent_snapshots (account_id, company_id, seller_entity_id, target_version, snapshot_hash, recorded_as_of, canonical, digest)
@@ -569,7 +672,7 @@ export async function persistSyncBatch(client: PoolClient, input: SyncCommit): P
      WHERE account_id = $1 AND company_id = $2 AND seller_entity_id = $3 AND target_version = $6 AND snapshot_hash = $7`,
     [...values, next.version, hash, previous.records.version, previous.snapshotHash],
   );
-  require(moved.rowCount === 1, 'stored target changed during sync');
+  valid(moved.rowCount === 1);
   await client.query(
     `INSERT INTO runtime_sync_receipts
        (account_id, company_id, seller_entity_id, receipt_id, plan_hash, activation_id, epoch, before_version, after_version,
@@ -578,14 +681,8 @@ export async function persistSyncBatch(client: PoolClient, input: SyncCommit): P
     [...values, receipt.id, plan.hash, receipt.activationId, receipt.epoch, previous.records.version, next.version, hash,
       ...encodeCanonical(receipt), ...encodeCanonical(plan)],
   );
-  for (const record of input.records) {
+  for (const record of records) {
     const { identity } = record;
-    const existing = await client.query(
-      `SELECT 1 FROM parent_financial_records
-       WHERE record_id = $1 OR (source_ref, seller_entity_id, kind, source_record_id) = ($2, $3, $4, $5)`,
-      [record.id, identity.sourceRef, identity.sellerEntityId, identity.kind, identity.recordId],
-    );
-    require(!existing.rowCount, 'global economic identity already exists');
     await client.query(
       `INSERT INTO parent_financial_records
          (account_id, company_id, seller_entity_id, source_ref, kind, source_record_id, record_id,
@@ -599,31 +696,71 @@ export async function persistSyncBatch(client: PoolClient, input: SyncCommit): P
       [...values, record.id, receipt.id],
     );
   }
-  for (const input_event of input.events) {
-    const event = RawSourceEventSchema.parse(input_event);
-    const key = [event.sourceRef, event.id];
-    const prior = await client.query(
-      `SELECT 1 FROM runtime_delivery_outcomes WHERE source_ref = $1 AND event_id = $2
-       UNION ALL SELECT 1 FROM runtime_sync_delivery_outcomes WHERE source_ref = $1 AND event_id = $2`, key,
-    );
-    require(!prior.rowCount, 'delivery already acknowledged');
-    const [canonical, digest] = encodeCanonical(event);
-    const { rows: [stored] } = await client.query<{ canonical: string; digest: string; content_hash: string }>(
-      'SELECT canonical, digest, content_hash FROM runtime_deliveries WHERE source_ref = $1 AND event_id = $2', key,
-    );
-    if (stored) {
-      require(stored.canonical === canonical && stored.digest === digest && stored.content_hash === event.contentHash,
-        'existing delivery bytes');
+}
+
+/** Append a captured unit and its exact frontier in the caller's locked transaction. */
+export async function persistSyncUnit(client: PoolClient, input: SyncUnitCommit): Promise<ReceiptResponse | ReplayResponse> {
+  return storageRead(async () => {
+    const { audit, previous, members, expectedHeads, plan, receipt } = input;
+    const { identity, lane, streamId, unitHash } = audit;
+    const { scope } = identity;
+    valid(SyncUnitAuditSchema.safeParse(audit).success && equal(audit.members, members) &&
+      equal(audit.coverage.applicationHeads, expectedHeads) && sameScope(previous.records.scope, scope) &&
+      audit.expectedTargetVersion === previous.records.version && audit.beforeSnapshotHash === previous.snapshotHash &&
+      hashTargetSnapshot(previous.records) === previous.snapshotHash);
+    const suffix = audit.coverage.deliveries.slice(audit.coverage.historyOutcomes.length).map(row => row.event);
+    requireImportIdentityLocks(client, input.identityLocks, input.identities, suffix);
+    valid(suffix.every((event, index) => recordForEvent(scope, event) === members[index]?.recordId));
+
+    const next = validateSnapshot(input.next);
+    valid(audit.afterTargetVersion === next.version && audit.afterSnapshotHash === hashTargetSnapshot(next));
+    const operations = plan?.operations.filter((operation): operation is FinancialMutation => 'identity' in operation.record) ?? [];
+    const records = operations.map(operation => operation.record);
+    const requiredRecords = new Map(financialRecords(next).map(record => [record.id, record]));
+    requireImportIdentityLocks(client, input.identityLocks, members.map(member => {
+      const record = requiredRecords.get(member.recordId);
+      valid(record);
+      return record.identity;
+    }), suffix);
+    if (plan && receipt) {
+      valid(receipt.id === audit.receiptId && plan.hash === audit.planHash && hashPlan(plan) === plan.hash &&
+        sameScope(plan.scope, scope) && sameScope(receipt.scope, scope) && receipt.planHash === plan.hash &&
+        receipt.epoch === audit.expectedEpoch && receipt.activationId === identity.activationId &&
+        receipt.artifactHash === plan.artifactHash && receipt.committedAt === audit.committedAt &&
+        plan.expectedTargetVersion === previous.records.version && plan.asOf === audit.asOf &&
+        records.length > 0 && records.length === plan.operations.length &&
+        equal(plan.eventIds, members.map(member => member.event.eventId)) && equal(receipt.eventIds, plan.eventIds) &&
+        equal(receipt.targetRecordIds, records.map(record => record.id)) &&
+        equal([...receipt.targetRecordIds].sort(), members.filter(member => member.disposition === 'new').map(member => member.recordId).sort()) &&
+        members.every(member => member.disposition === 'replay' || equal(member.origin.receipt, receipt)) &&
+        equal(next, { ...projectTarget({ ...previous.records, asOf: plan.asOf }, operations), version: audit.afterTargetVersion }) &&
+        receipt.beforeBalanceCents === computeBalance(previous.records, plan.asOf) &&
+        receipt.afterBalanceCents === computeBalance(next, plan.asOf) && receipt.afterBalanceCents === plan.expectedBalanceCents);
     } else {
-      await client.query(
-        'INSERT INTO runtime_deliveries (source_ref, event_id, content_hash, canonical, digest) VALUES ($1, $2, $3, $4, $5)',
-        [...key, event.contentHash, canonical, digest],
-      );
+      valid(plan === null && receipt === null && audit.receiptId === null && equal(next, previous.records));
     }
-    await client.query(
-      `INSERT INTO runtime_sync_delivery_outcomes (account_id, company_id, seller_entity_id, source_ref, event_id, receipt_id)
-       VALUES ($1, $2, $3, $4, $5, $6)`, [...values, ...key, receipt.id],
-    );
-  }
-  return receipt;
+
+    await requireUnclaimedRecords(client, records);
+    const occupied = await validateUnitDeliveries(client, audit, suffix);
+    const binding = await lockApplicationHeads(client, audit, expectedHeads);
+    if (plan && receipt) await appendFinancialRecords(client, previous, next, plan, receipt, records);
+    await client.query(`
+      INSERT INTO runtime_sync_units (account_id, company_id, seller_entity_id, activation_id, bundle_hash,
+        source_ref, manifest_hash, stream_id, unit_hash, epoch, from_cursor, through_cursor, before_version,
+        before_snapshot_hash, after_version, after_snapshot_hash, receipt_id, audit, audit_digest)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+    `, [...binding, streamId, unitHash, audit.expectedEpoch, audit.fromCursor, audit.throughCursor, audit.expectedTargetVersion,
+      audit.beforeSnapshotHash, audit.afterTargetVersion, audit.afterSnapshotHash, audit.receiptId, ...encodeCanonical(audit)]);
+    for (const member of members) {
+      if (occupied.has(member.event.eventId)) continue;
+      await client.query(`
+        INSERT INTO runtime_sync_event_outcomes (account_id, company_id, seller_entity_id, activation_id, bundle_hash,
+          source_ref, manifest_hash, stream_id, sequence, event_id, record_id, unit_hash, disposition, canonical, digest)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+      `, [...binding, streamId, member.event.sequence, member.event.eventId, member.recordId, unitHash, member.disposition,
+        ...encodeCanonical({ identity, lane, unitHash, ...member })]);
+    }
+    await advanceApplicationHeads(client, audit, binding);
+    return receipt ? { receipt, replayed: false } : replayResponse(audit, false);
+  });
 }
