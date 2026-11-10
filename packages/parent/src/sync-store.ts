@@ -763,4 +763,4 @@ export async function persistSyncUnit(client: PoolClient, input: SyncUnitCommit)
     await advanceApplicationHeads(client, audit, binding);
     return receipt ? { receipt, replayed: false } : replayResponse(audit, false);
   });
-  }
+}
