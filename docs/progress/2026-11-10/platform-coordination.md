@@ -362,3 +362,6 @@ Nine-A candidate `0deb7ab` passes typecheck and all four final qualification cas
 
 
 Nine-A `0deb7ab` passes [fresh independent review](sync-selection-catalog-nine-review.md), spec and quality approved with no findings. All50 artifact hashes and115 source inventory entries match. Its historical repair provenance is narrower than the narrative: the initial suite body/repair patch was not retained, so only the changed-file identity is independently established. The final exact candidate is verified; no evidence was reconstructed. C2 genuine B/CSV is released next, with all incidental A proof inputs retained but no A selecting authority.
+
+
+The [journal integration clarification](sync-dependency-journal-integration-clarification.md), hash4cc857d0, passes [fresh scoped review](sync-dependency-journal-integration-review.md), with no findings. Root accepts one shared accounting budget with closed admission rules, bounded authority/recovery pre-admission, and explicit durable COMMIT outcomes: confirmed late success remains committed; uncertainty requires a safe unknown-outcome error and same-key recovery. This is a later-plan contract, not journal implementation. Exact reader exports, schema/envelope cap, error shapes and real protocol proofs still follow accepted selector source; no migration or selected-writer scope is released.
