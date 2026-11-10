@@ -444,3 +444,11 @@ The useful near-term reduction is the work sequence: reuse accepted P1 for one C
 ## PR54 merge conflict resolved
 
 Latest main `fc79e94` adds the frozen T0 [demo contract](../../demo/demo-contract.md) via PR55. The sole conflict was the shared task board's T0 status. Resolution retains the newly frozen identities,80000→50000 current-balance beat and construction labels, marks the T0 documentation delivered/merged, and preserves the branch's accepted implementation progress. No production source, tests, database schema or original demo state changes in this merge; later implementation/rehearsal acceptance remains separate.
+
+## Company A demo continuation begins
+
+The designated integration worktree was clean at `7de9366c8543ba4ae9c455006e55c70af16e33fd`; `git pull --ff-only origin main` reported already current. New branch: `codex/platform-company-a-demo-mount`. PR54 is merged, superseding its earlier draft/pending statements. Original demo checkout and database remain untouched.
+
+Fresh Astra `t1_t2_design` is read-only against that base, preparing actual composition seams, narrow operator transport, exact owned paths and test criteria. No source/SQL/service implementation lease is released. Integrator owns only this coordination file and the shared board during design. Sol implementation and fresh Astra candidate review follow the accepted design. General selector, scheduling, grants and live construction remain deferred.
+
+Latest PR44/46 comments contain no new owner replies. Latest CI runs `42873005041`, `42872902546`, `42872595578` all report startup failure; no CI acceptance.
