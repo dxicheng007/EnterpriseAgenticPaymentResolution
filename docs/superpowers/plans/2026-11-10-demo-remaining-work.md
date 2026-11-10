@@ -37,7 +37,7 @@ This keeps the PRD operating half of the thesis ([`prdv2.md`](../../../prdv2.md)
 | Activation backend | Partial / not V3-accepted | Review prep, durable intents, worker first import/receipt recovery, package-detail reads |
 | Sync capture | Partial | Internal API/semantic capture accepted in reviews; unmounted for product demo; CSV lanes rejected |
 | Sync classification / selection | Partial | Compiler classification and four pure selector tasks are accepted. Catalog `74cd969` passes focused checks and independent spec/quality review; no substantial safe immediate simplification was identified. General capture/history inspection is follow-on, not a prerequisite silently added to the single-customer demo. |
-| Atomic apply | Implemented and independently reviewed; not product-mounted | Bounded P1 writer/storage/coverage/race proof accepted at `7e49e552`; PR48 is on main. The demo mount remains T1; no scheduler or full V5 acceptance is implied. |
+| Atomic apply | Private trigger mount candidate; review/merge pending | Bounded P1 writer/storage/coverage/race proof accepted at `7e49e552`; PR48 is on main. Branch `platform/t1-sync-apply-mount` mounts the existing applier for an authenticated one-account trigger; no scheduler or full V5/V6 acceptance is implied. |
 | Authority head / trusted ingress | Implemented and independently reviewed; demo/browser proof separate | P3 source `d8e2833` and its final review pass. PR50 merged into its former stack base; the continuation branch carries it toward main. |
 
 Authoritative status claims also live in root [`AGENTS.md`](../../../AGENTS.md), [`docs/progress/2026-11-08/README.md`](../../progress/2026-11-08/README.md), and the [team expansion handoff](2026-11-08-team-expansion-handoff.md). Prefer those for exact SHAs and review links.
@@ -68,7 +68,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T1 — Platform: mount post-activation apply for one authorized customer
 
-**Status:** partial — atomic writer prerequisites are accepted at `7e49e552` (PR48/main); product/demo mount and isolated end-to-end proof remain. Platform continuation base `2dab8e9`. Do not rebuild P1 or require the general multi-customer selector/journal merely to stage the bounded one-customer demo.
+**Status:** delivered on branch `platform/t1-sync-apply-mount`; pending review/merge. Atomic writer prerequisites remain accepted at `7e49e552` (PR48/main). Candidate mounts worker-private `POST /internal/apply` and proves 80000→50000 with cutover preserved and `no_work` on a second trigger (partial: money test uses in-process observe; production HTTP composition is wired in `scripts/dev.ts`; applyReplay-only route branch still relies on unmounted suite coverage). Not full V5/V6. Do not rebuild P1 or require the general multi-customer selector/journal merely to stage the bounded one-customer demo.
 **Lane:** Platform  
 **Depends on:** accepted activation grant (A5 import), classification pin, current-authority fence, capture inbox facts for the chosen transport  
 **Outcome:** Worker can take already-captured conforming deliveries for one enrolled customer and atomically apply a nonempty financial unit with an authoritative sync receipt, without model calls.  
