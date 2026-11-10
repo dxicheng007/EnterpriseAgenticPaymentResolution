@@ -12,7 +12,10 @@ import {
   LocalSessionResponseSchema, ReviewPackageSchema, type BootstrapManifest, type CommittedCaptureIdentityV1,
   type RawSourceEvent,
 } from '@eapr/contracts';
+import { hashEvent } from '@eapr/contracts';
+import { planBatch } from '@eapr/compiler/plan-batch';
 import { readStoredActivation } from '@eapr/parent/activation-store';
+import { readStoredTarget } from '@eapr/parent/snapshots';
 import { createSourceService } from '@eapr/sources';
 import { loadActivationPolicy } from '@eapr/storage/activation-policy';
 import { readActivationBundle } from '@eapr/storage/activation-registry';
@@ -28,6 +31,8 @@ import { buildControl, createWorkerClient } from '../../apps/control/src/server.
 import { createWorkerActivation } from '../../apps/worker/src/activation.js';
 import { composeWorkerParentReads } from '../../apps/worker/src/parent-read-composition.js';
 import { launchWorker } from '../../apps/worker/src/server.js';
+import { selectedProfile } from '../../apps/worker/src/activation-validation.js';
+import { createSyncApplier, SyncApplyError } from '../../apps/worker/src/sync/apply.js';
 import { createRuntimeCapture } from '../../apps/worker/src/sync/capture.js';
 import {
   createCurrentAuthority, type AuthorityAdmissionGrants,
@@ -38,6 +43,7 @@ import { migrate, migrationIdentities, migrationStreams, readMigrationCatalog } 
 import { dropTest, provisionTest, startNativeDb } from '../../scripts/native-db.js';
 import { issueActivationProofs, verifyOriginals } from '../fixtures/activation-proof.js';
 import { testNamespace } from '../fixtures/harness.js';
+import { latePaymentA } from '../fixtures/index.js';
 import {
   assertModelCredentialsAbsent, createModelCallTrap, scrubModelCredentials,
 } from '../fixtures/v5-ai-off.js';
@@ -177,6 +183,7 @@ async function parentFinancialFingerprint() {
   const tables = [
     'parent_financial_records', 'parent_targets', 'parent_snapshots',
     'runtime_economic_outcomes', 'runtime_delivery_outcomes', 'runtime_import_lineage',
+    'runtime_sync_receipts', 'runtime_sync_economic_outcomes', 'runtime_sync_delivery_outcomes',
   ];
   return Object.fromEntries(await Promise.all(tables.map(async table => [
     table, (await runtime.query('SELECT to_jsonb(t)::text AS row FROM ' + table + ' t ORDER BY to_jsonb(t)::text')).rows,
@@ -242,4 +249,42 @@ test('captures a fresh post-activation API page without parent writes or model c
   expect(progress.streams.find(stream => stream.streamId === streamId)?.captureCursor).toBe(page.next);
   expect(await parentFinancialFingerprint()).toEqual(before);
   assertModelCredentialsAbsent();
+});
+
+test('applies a fresh payment and allocation once, replays the receipt and fences stale input', async () => {
+  const stored = await withTransaction(runtime, client => readStoredActivation(client, committed.identity.scope));
+  if (!stored) throw new Error('No A5 activation');
+  const { artifact } = stored.bundle;
+  const profile = selectedProfile(stored.bundle);
+  const target = await withTransaction(runtime, client => readStoredTarget(client, committed.identity.scope));
+  if (!target) throw new Error('No target');
+  const planner = { ...target.records, asOf: latePaymentA[0].observedAt };
+  const [plan] = planBatch(artifact, profile, latePaymentA, planner).plans;
+  expect(plan).toBeDefined();
+  const apply = createSyncApplier({ db: runtime, clock, artifact, profile, identity: committed.identity });
+  const before = await parentFinancialFingerprint();
+
+  const first = await apply(plan, latePaymentA, 1);
+  expect(first.replayed).toBe(false);
+  expect([first.receipt.beforeBalanceCents, first.receipt.afterBalanceCents]).toEqual([80000, 50000]);
+  expect(first.receipt.targetRecordIds).toHaveLength(2);
+  const moved = await withTransaction(runtime, client => readStoredTarget(client, committed.identity.scope));
+  expect(moved?.records.version).toBe(target.records.version + 1);
+  expect(await parentFinancialFingerprint()).not.toEqual(before);
+
+  const after = await parentFinancialFingerprint();
+  const again = await apply(plan, latePaymentA, 1);
+  expect(again).toEqual({ receipt: first.receipt, replayed: true });
+  expect(await parentFinancialFingerprint()).toEqual(after);
+
+  const base = latePaymentA[0];
+  const otherPayload = { ...base.payload, id: 'pay-a-3' };
+  const other = { ...base, id: 'evt-a-pay-3', recordId: 'pay-a-3', sequence: 8, payload: otherPayload };
+  const fresh = [{ ...other, contentHash: hashEvent(other) }];
+  const stalePlan = planBatch(artifact, profile, fresh, planner).plans[0];
+  expect(stalePlan).toBeDefined();
+  await expect(apply(stalePlan, fresh, 1)).rejects.toMatchObject({ code: 'SYNC_TARGET_STALE' });
+  await expect(apply(stalePlan, fresh, 2)).rejects.toMatchObject({ code: 'AUTHORITY_STALE' });
+  expect(await parentFinancialFingerprint()).toEqual(after);
+  expect(SyncApplyError.name).toBe('SyncApplyError');
 });
