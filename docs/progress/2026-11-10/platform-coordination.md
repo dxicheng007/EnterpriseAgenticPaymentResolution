@@ -2,9 +2,18 @@
 
 ## Current integration checkpoint
 
-Developer 0 resumed at `15bb421945bcfd1366e63ef497929737a2995bab`, integrating externally merged PR41–45 into the clean isolated Platform worktree. New work is on `codex/platform-sync-apply-repair`. The user authorized publishing dependency requests and periodically checking upstream. The November 10 team handoff remains the roadmap; newer exact reviews supersede its historical findings when verified.
+Current published Platform checkpoint is `9a44e1ceac20600c4a2f61a10d548654fc4a57ce` on `codex/platform-sync-apply-repair`, draft [PR48](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/48). Main `f409805` is integrated. Storage, complete captured preparation and the atomic writer have each passed exact independent review; Task4 is the sole source writer and database lease holder for ordered concurrency, rollback, retry and recovery proof. Whole-branch review follows. The service is internal and unmounted.
 
-PR42 browser evidence, PR43 Discovery corrections, PR44 connection reads/UI and PR45 rehearsal documentation are under fresh exact review. Open PR46 was observed at `d717aa90691cb884a3f6de0cca3e5cfc71131416`; it is reviewed separately from merged PR43. Do not infer closure or acceptance from merge status. No source writer is active until its bounded permit is issued.
+Remaining work by owner:
+
+- **Platform:** finish Task4 and final apply review; implement the reviewed Discovery completion contracts/control010 and offline model-policy representation; implement authenticated authority ingress; proceed through separately reviewed selection, dependency application and source scheduling increments, then genuine V5–V7 proof. A read-only selection implementation plan is being prepared against accepted P1 interfaces; source release waits for final P1 reconciliation.
+- **Discovery:** R1–R5 recovery/admission corrections and bounded truthful transport; consume the reviewed repair/finish/request contracts and model-policy seam after producer release; publish the private API/semantic/CSV original-byte capture contract. Exact requests and delivery links follow below.
+- **Experience:** shared-lane visibility, honest runtime model metric and rehearsal reset wording; consume the reviewed authority operations API after mounting; remaining browser/public-packet and rehearsal proof.
+- **User decision pending:** new generated-account read/verification grant authority. Existing trusted allowlists remain in effect; independent work continues without inventing new permission policy.
+
+The latest fetch still shows no new owner corrections and only PR48 open. CI run [42801891819](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/actions/runs/42801891819) at `9a44e1c` ended `startup_failure` with **zero jobs**. Local checks are recorded at their exact candidates; there is no CI pass or V4–V7 acceptance. The owner chats are not separately exposed in the available chat inventory, so dependency requests have been delivered through the owners' GitHub PR comments. No unrelated chat was messaged.
+
+The sections below preserve the chronological evidence and earlier intermediate states. Newer exact reviews supersede older status statements; merge status, machine checks, independent review and user acceptance remain separate facts.
 
 ## Platform ownership reservation
 
