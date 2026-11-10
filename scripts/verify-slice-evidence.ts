@@ -202,3 +202,10 @@ export function v4ExitCode(
   return commands.length === 4 && commands.every(command => command.result === 'passed') &&
     diagnostics.length === 0 && chromium ? 0 : 1;
 }
+
+export function v7ExitCode(
+  commands: readonly ReturnType<typeof commandResult>[], diagnostics: readonly string[], chromium?: string,
+) {
+  return commands.length === 3 && commands.every(command => command.result === 'passed') &&
+    diagnostics.length === 0 && chromium ? 0 : 1;
+}
