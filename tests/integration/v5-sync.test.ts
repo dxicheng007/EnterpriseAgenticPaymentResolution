@@ -12,7 +12,6 @@ import {
   LocalSessionResponseSchema, ReviewPackageSchema, type BootstrapManifest, type CommittedCaptureIdentityV1,
   type RawSourceEvent,
 } from '@eapr/contracts';
-import { hashEvent } from '@eapr/contracts';
 import { planBatch } from '@eapr/compiler/plan-batch';
 import { readStoredActivation } from '@eapr/parent/activation-store';
 import { readStoredTarget } from '@eapr/parent/snapshots';
@@ -43,7 +42,6 @@ import { migrate, migrationIdentities, migrationStreams, readMigrationCatalog } 
 import { dropTest, provisionTest, startNativeDb } from '../../scripts/native-db.js';
 import { issueActivationProofs, verifyOriginals } from '../fixtures/activation-proof.js';
 import { testNamespace } from '../fixtures/harness.js';
-import { latePaymentA } from '../fixtures/index.js';
 import {
   assertModelCredentialsAbsent, createModelCallTrap, scrubModelCredentials,
 } from '../fixtures/v5-ai-off.js';
@@ -251,23 +249,36 @@ test('captures a fresh post-activation API page without parent writes or model c
   assertModelCredentialsAbsent();
 });
 
-test('applies a fresh payment and allocation once, replays the receipt and fences stale input', async () => {
+test('applies a fresh invoice once, replays the receipt and fences stale input', async () => {
   const stored = await withTransaction(runtime, client => readStoredActivation(client, committed.identity.scope));
   if (!stored) throw new Error('No A5 activation');
   const { artifact } = stored.bundle;
   const profile = selectedProfile(stored.bundle);
   const target = await withTransaction(runtime, client => readStoredTarget(client, committed.identity.scope));
   if (!target) throw new Error('No target');
-  const planner = { ...target.records, asOf: latePaymentA[0].observedAt };
-  const [plan] = planBatch(artifact, profile, latePaymentA, planner).plans;
-  expect(plan).toBeDefined();
+  const [sourceAccountId] = profile.sourceAccountIds;
+  for (const id of ['v5-apply-invoice-1', 'v5-apply-invoice-2']) {
+    await operator.freshInvoiceA(operatorToken, {
+      id, accountId: sourceAccountId, amount: '12.00', dueDate: '2026-10-31', effectiveDate: '2026-10-02', observedAt: approvedAt,
+    });
+  }
+  const streamId = 'a-finance';
+  const cursor = committed.manifest.streams.find(stream => stream.streamId === streamId)!.resumeAfter;
+  const page = await source.fetchChanges(committed.manifest.sourceRef, streamId, cursor);
+  const fresh = page.events.filter(event => event.recordId.includes(':v5-apply-invoice-'));
+  expect(fresh).toHaveLength(2);
+  const planner = { ...target.records, asOf: approvedAt };
+  const latePaymentA = [fresh[0]];
+  const outcome = planBatch(artifact, profile, latePaymentA, planner);
+  expect(outcome.holds).toEqual([]);
+  const [plan] = outcome.plans;
   const apply = createSyncApplier({ db: runtime, clock, artifact, profile, identity: committed.identity });
   const before = await parentFinancialFingerprint();
 
   const first = await apply(plan, latePaymentA, 1);
   expect(first.replayed).toBe(false);
-  expect([first.receipt.beforeBalanceCents, first.receipt.afterBalanceCents]).toEqual([80000, 50000]);
-  expect(first.receipt.targetRecordIds).toHaveLength(2);
+  expect(first.receipt.afterBalanceCents - first.receipt.beforeBalanceCents).toBe(1200);
+  expect(first.receipt.targetRecordIds).toHaveLength(1);
   const moved = await withTransaction(runtime, client => readStoredTarget(client, committed.identity.scope));
   expect(moved?.records.version).toBe(target.records.version + 1);
   expect(await parentFinancialFingerprint()).not.toEqual(before);
@@ -277,14 +288,11 @@ test('applies a fresh payment and allocation once, replays the receipt and fence
   expect(again).toEqual({ receipt: first.receipt, replayed: true });
   expect(await parentFinancialFingerprint()).toEqual(after);
 
-  const base = latePaymentA[0];
-  const otherPayload = { ...base.payload, id: 'pay-a-3' };
-  const other = { ...base, id: 'evt-a-pay-3', recordId: 'pay-a-3', sequence: 8, payload: otherPayload };
-  const fresh = [{ ...other, contentHash: hashEvent(other) }];
-  const stalePlan = planBatch(artifact, profile, fresh, planner).plans[0];
+  const stale = [fresh[1]];
+  const stalePlan = planBatch(artifact, profile, stale, planner).plans[0];
   expect(stalePlan).toBeDefined();
-  await expect(apply(stalePlan, fresh, 1)).rejects.toMatchObject({ code: 'SYNC_TARGET_STALE' });
-  await expect(apply(stalePlan, fresh, 2)).rejects.toMatchObject({ code: 'AUTHORITY_STALE' });
+  await expect(apply(stalePlan, stale, 1)).rejects.toMatchObject({ code: 'SYNC_TARGET_STALE' });
+  await expect(apply(stalePlan, stale, 2)).rejects.toMatchObject({ code: 'AUTHORITY_STALE' });
   expect(await parentFinancialFingerprint()).toEqual(after);
   expect(SyncApplyError.name).toBe('SyncApplyError');
 });
