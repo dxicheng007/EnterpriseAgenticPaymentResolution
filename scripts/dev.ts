@@ -6,8 +6,10 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { createServer } from 'vite';
 import { launchControl, createWorkerClient, type ControlServices } from '../apps/control/src/server.js';
+import { createAuthorityWorkerClient } from '../apps/control/src/authority-worker-client.js';
 import type { ActivationWorkerClient } from '../apps/control/src/activation-worker-client.js';
 import { createParentReadClient } from '../apps/control/src/parent-read-client.js';
+import { composeWorkerAuthority } from '../apps/worker/src/authority-composition.js';
 import { composeWorkerActivation } from '../apps/worker/src/activation-composition.js';
 import { composeWorkerParentReads } from '../apps/worker/src/parent-read-composition.js';
 import { launchWorker } from '../apps/worker/src/server.js';
@@ -33,6 +35,7 @@ const registryRoot = fileURLToPath(new URL('../.local/artifacts', import.meta.ur
 async function localFeaturePlugins(
   db: ControlServices['db'], clock: ControlServices['clock'], expectedMigrations: ReturnType<typeof migrationIdentities>,
   parentReads: ReturnType<typeof createParentReadClient>, worker: ActivationWorkerClient,
+  authorityWorker: ReturnType<typeof createAuthorityWorkerClient>,
 ) {
   const { safeVerificationPins } = await import('../apps/control/src/verification-composition.js');
   const { createLocalComposition } = await import('../apps/control/src/composition.js');
@@ -68,9 +71,10 @@ async function localFeaturePlugins(
       verificationSetupDiagnostic = 'VERIFICATION_FIXTURE_CONFLICT';
     }
   }
-  return (await createLocalComposition({ db, clock, store }, {
+  const { featurePlugins, authorityInvalidRequest } = await createLocalComposition({ db, clock, store }, {
     webOrigin, captures, verification, verificationSetupDiagnostic, parentReads,
     sourceReadToken: required('EAPR_SOURCE_READ_TOKEN'),
+    authorityOperations: { worker: authorityWorker, admissionToken: required('EAPR_AUTHORITY_ADMISSION_TOKEN') },
     activationReview: {
       registryRoot,
       policyPath, worker,
@@ -81,7 +85,8 @@ async function localFeaturePlugins(
       },
     },
     registry: createCandidateRegistry(db, registryRoot),
-  })).featurePlugins;
+  });
+  return { featurePlugins, authorityInvalidRequest };
 }
 
 async function serve(role: 'worker' | 'control') {
@@ -95,24 +100,34 @@ async function serve(role: 'worker' | 'control') {
   try {
     const expectedMigrations = migrationIdentities(readMigrationCatalog()[role === 'worker' ? 'runtime' : 'control']);
     const workerOrigin = 'http://127.0.0.1:' + workerPort;
+    const controlPort = localPort('EAPR_CONTROL_PORT', 3001);
+    const controlOrigin = 'http://127.0.0.1:' + controlPort;
+    async function launchRuntime() {
+      const sourceReadToken = required('EAPR_SOURCE_READ_TOKEN');
+      const sourceRefs = z.array(z.string()).parse(JSON.parse(required('EAPR_SOURCE_READ_REFS')));
+      return launchWorker({
+        db: pool, clock, serviceToken, expectedMigrations, featurePlugins: [
+          composeWorkerParentReads(registryRoot),
+          composeWorkerActivation({
+            registryRoot, policyPath, sourceOrigin: controlOrigin, sourceReadToken, sourceRefs,
+          }),
+          composeWorkerAuthority({
+            admissionOrigin: controlOrigin, admissionToken: required('EAPR_AUTHORITY_ADMISSION_TOKEN'),
+            source: { origin: controlOrigin, token: sourceReadToken, sourceRefs },
+          }),
+        ],
+      }, workerPort);
+    }
     const app = role === 'worker'
-      ? await launchWorker({
-          db: pool, clock, serviceToken, expectedMigrations, featurePlugins: [
-            composeWorkerParentReads(registryRoot),
-            composeWorkerActivation({
-              registryRoot, policyPath, sourceOrigin: 'http://127.0.0.1:' + localPort('EAPR_CONTROL_PORT', 3001),
-              sourceReadToken: required('EAPR_SOURCE_READ_TOKEN'),
-              sourceRefs: z.array(z.string()).parse(JSON.parse(required('EAPR_SOURCE_READ_REFS'))),
-            }),
-          ],
-        }, workerPort)
+      ? await launchRuntime()
       : await launchControl({
           db: pool, clock, expectedMigrations,
-          featurePlugins: await localFeaturePlugins(pool, clock, expectedMigrations,
+          ...await localFeaturePlugins(pool, clock, expectedMigrations,
             createParentReadClient(workerOrigin, serviceToken, registryRoot),
-            (await import('../apps/control/src/activation-worker-client.js')).createActivationWorkerClient(workerOrigin, serviceToken)),
+            (await import('../apps/control/src/activation-worker-client.js')).createActivationWorkerClient(workerOrigin, serviceToken),
+            createAuthorityWorkerClient(workerOrigin, serviceToken)),
           workerClient: createWorkerClient(workerOrigin, serviceToken),
-        }, localPort('EAPR_CONTROL_PORT', 3001));
+        }, controlPort);
     try {
       process.send?.('ready');
       await shutdown;
@@ -176,6 +191,10 @@ async function runLocal() {
 
   const sourceReadToken = randomBytes(32).toString('hex');
   const serviceToken = randomBytes(32).toString('hex');
+  const authorityAdmissionToken = randomBytes(32).toString('hex');
+  if (new Set([serviceToken, sourceReadToken, authorityAdmissionToken]).size !== 3) {
+    throw new Error('Local service capabilities must be distinct');
+  }
   const controlPort = localPort('EAPR_CONTROL_PORT', 3001);
   const workerPort = localPort('EAPR_WORKER_PORT', 3002);
   const webPort = localPort('EAPR_WEB_PORT', 5173);
@@ -197,7 +216,10 @@ async function runLocal() {
     if (await Promise.race([exited, ready, shutdown]) !== 'ready') throw new Error(role + ' could not bind its leased port');
   }
   try {
-    const workerAccess = { EAPR_SERVICE_TOKEN: serviceToken, EAPR_WORKER_PORT: String(workerPort) };
+    const workerAccess = {
+      EAPR_SERVICE_TOKEN: serviceToken, EAPR_WORKER_PORT: String(workerPort),
+      EAPR_AUTHORITY_ADMISSION_TOKEN: authorityAdmissionToken,
+    };
     await start('worker', {
       ...workerAccess, RUNTIME_DATABASE_URL: db.runtime.appUrl, EAPR_CONTROL_PORT: String(controlPort),
       EAPR_SOURCE_READ_TOKEN: sourceReadToken,

@@ -8,6 +8,8 @@ import {
   companyA, companyB, createSourceService, readDossier, readEvidence, readManifest,
   SourceError, type EvidenceAuthorization, type SourceDefinition, type UploadDependencies,
 } from '@eapr/sources';
+import { composeAuthorityOperations } from './authority-composition.js';
+import type { AuthorityWorkerClient } from './authority-worker-client.js';
 import { composeActivationReview, type LocalActivationOptions } from './activation-composition.js';
 import { composeSourceSemantics } from './source-semantics-composition.js';
 import { composeDiscovery } from './discovery-composition.js';
@@ -36,6 +38,7 @@ export async function createLocalComposition(dependencies: UploadDependencies, o
   verification?: LocalVerificationOptions;
   sourceReadToken?: string;
   activationReview?: LocalActivationOptions;
+  authorityOperations?: { worker: AuthorityWorkerClient; admissionToken: string };
   verificationSetupDiagnostic?: VerificationSetupCode;
 }) {
   const { db, store } = dependencies;
@@ -91,6 +94,7 @@ export async function createLocalComposition(dependencies: UploadDependencies, o
     allowedAccountIds: catalog.candidates.map(candidate => candidate.scope.accountId),
   };
   const session = createLocalSessionService({ webOrigin: options.webOrigin, ...reviewer });
+  const authority = composeAuthorityOperations({ session, ...options.authorityOperations });
 
   const authorizeSource: AuthorizeSource = async (request, { companyId, sourceRef, operation }) => {
     try {
@@ -231,9 +235,11 @@ export async function createLocalComposition(dependencies: UploadDependencies, o
 
   return {
     authorizeReviewer: session.authorizeReviewer,
+    authorityInvalidRequest: authority.invalidRequest,
     authorizeSource,
     featurePlugins: [
       session.plugin,
+      authority.plugin,
       composeDiscovery({
         catalog: localSourceCatalog, store, reviewer, authorizeReviewer: session.authorizeReviewer,
         registerCandidate: registry?.registerCandidate.bind(registry),
