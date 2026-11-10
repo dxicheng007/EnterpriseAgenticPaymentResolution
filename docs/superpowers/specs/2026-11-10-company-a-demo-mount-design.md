@@ -2,6 +2,10 @@
 
 Design only, prepared 2026-11-10. Source inspected at 7de9366c8543ba4ae9c455006e55c70af16e33fd on codex/platform-company-a-demo-mount, integration worktree /Users/devincheng/.codex/worktrees/platform-activation-integration/EnterpriseAgenticPaymentResolution. During inspection coordinator advanced HEAD to 1370a3c4611aaf512022a9ba379e02b220903823 with board/coordination documentation only. No source, database, service, original checkout, or Git state was changed by this author. No tests were run. This document is not implementation acceptance.
 
+## PR56 integration amendment
+
+PR56 now mounts generic worker `/internal/apply` and remains unchanged. The binding [PR56 delta](../../progress/2026-11-10/company-a-pr56-design-delta.md) supersedes Task A fixture/path/interface wording below: reuse existing sync-apply fixture with optional seed, no new demo fixture. Task A is remaining T2 capture/exact receipt recovery, not a replacement generic apply mount. All prior recovery and drain corrections remain.
+
 ## Scope and decision
 
 Mount a fixed, operator-triggered Company A demonstration: introduce the frozen payment/allocation in the source simulator, fetch actual source pages into the accepted durable runtime capture, then run the accepted atomic applier under the existing customer approval. Each operator invocation performs one bounded attempt; it is not a polling scheduler. A retry recovers the original authoritative receipt or retries still-pending captured input. No second reviewer approval is required or manufactured.
