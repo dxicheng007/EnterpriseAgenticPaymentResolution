@@ -35,10 +35,10 @@ This keeps the PRD operating half of the thesis ([`prdv2.md`](../../../prdv2.md)
 | V2 preview + independent checks | Machine gate passing | Fixture connectors, protected evaluator, empty-target preview, zero parent writes |
 | Discovery scaffolding | Partial | Lifecycle/delegation, monitor, findings/proposals, compilation/replay paths; default composition has **no model client** |
 | Activation backend | Partial / not V3-accepted | Review prep, durable intents, worker first import/receipt recovery, package-detail reads |
-| Sync capture | Partial | Internal API/semantic capture accepted in reviews; unmounted for product demo; CSV lanes rejected |
+| Sync capture | Fixed Company A path mounted and independently reviewed | Private API/semantic feed, fixed operator injection and deterministic capture/apply at `158ce06`; general capture and CSV remain outside this demo path. |
 | Sync classification / selection | Partial | Compiler classification and four pure selector tasks are accepted. Catalog `74cd969` passes focused checks and independent spec/quality review; no substantial safe immediate simplification was identified. General capture/history inspection is follow-on, not a prerequisite silently added to the single-customer demo. |
-| Atomic apply | Private trigger mount candidate; review/merge pending | Bounded P1 writer/storage/coverage/race proof accepted at `7e49e552`; PR48 is on main. Branch `platform/t1-sync-apply-mount` mounts the existing applier for an authenticated one-account trigger; no scheduler or full V5/V6 acceptance is implied. |
-| Authority head / trusted ingress | Implemented and independently reviewed; demo/browser proof separate | P3 source `d8e2833` and its final review pass. PR50 merged into its former stack base; the continuation branch carries it toward main. |
+| Atomic apply | Generic PR56 trigger and exact Company A operator path delivered | Accepted P1 writer reused; fixed source `158ce06` independently proves fresh80000→50000, cutover80000 and original receipt replay through actual processes. Bounded gate `8468b7e` machine-passing; full V5/V6 and browser/joint acceptance separate. |
+| Authority head / trusted ingress | Implemented and independently reviewed; demo/browser proof separate | P3 source `d8e2833` and its final review pass. PR54 merged the accepted authority ingress into main at `7de9366`; browser acceptance remains separate. |
 
 Authoritative status claims also live in root [`AGENTS.md`](../../../AGENTS.md), [`docs/progress/2026-11-08/README.md`](../../progress/2026-11-08/README.md), and the [team expansion handoff](2026-11-08-team-expansion-handoff.md). Prefer those for exact SHAs and review links.
 
@@ -68,7 +68,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T1 — Platform: mount post-activation apply for one authorized customer
 
-**Status:** delivered on branch `platform/t1-sync-apply-mount`; pending review/merge. Atomic writer prerequisites remain accepted at `7e49e552` (PR48/main). Candidate mounts worker-private `POST /internal/apply` and proves 80000→50000 with cutover preserved and `no_work` on a second trigger (partial: money test uses in-process observe; production HTTP composition is wired in `scripts/dev.ts`; applyReplay-only route branch still relies on unmounted suite coverage). Not full V5/V6. Do not rebuild P1 or require the general multi-customer selector/journal merely to stage the bounded one-customer demo.
+**Status:** worker-private `POST /internal/apply` merged in PR56 at `49245de`; existing P1 is reused. Upstream focused proof shows 80000→50000, preserved cutover and second-trigger `no_work`, with in-process observe/capture and non-T0 fixture seed; exact frozen operator chain and receipt recovery remain T2/T6 work. Platform continuation `codex/platform-company-a-demo-mount` integrated PR56 before implementation: Fresh Astra reconciliation retains only T2 fixed capture/receipt recovery; Sol Task 1 candidate `98bcc46` adds fixed T2 capture/recovery using the existing fixture; fresh Astra specification, quality and scoped verification review passes with no findings. Generic mount remains unchanged. No general selector/journal prerequisite or full V5/V6 claim.
 **Lane:** Platform  
 **Depends on:** accepted activation grant (A5 import), classification pin, current-authority fence, capture inbox facts for the chosen transport  
 **Outcome:** Worker can take already-captured conforming deliveries for one enrolled customer and atomically apply a nonempty financial unit with an authoritative sync receipt, without model calls.  
@@ -78,7 +78,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T2 — Platform: post-activation injection + capture path for the demo event
 
-**Status:** not started as a mounted demo path; existing internal capture is reusable. Exact Company A event/injection/composition scope follows T0.
+**Status:** Task 1 candidate `98bcc46` (base `f860564`) passes typecheck, 698 unit tests, 12 exact Company A integrations and 10 fixture/mount compatibility cases; independent review passes with independent5 unit/2 integration reruns. Task 2 private HTTP candidate `0c3bcaf` passes typecheck,701 units and3 real HTTP/PG integrations; fresh Astra spec/quality/security and scoped verification passes (independent3 units/3 integrations). Task 3 source `158ce06` mounts normal startup/CLI and passes fresh Astra review with independent3 process/security +12 CLI checks. T2 bounded path complete; full V5/V6/browser/joint remain separate. Exact Company A event is frozen by T0; fixed operator HTTP transport and owned paths are specified by the bounded plan; transport implementation waits for Task 1 acceptance. No implementation acceptance yet.
 **Lane:** Platform (sources/worker composition as reserved)  
 **Depends on:** T1 or a jointly agreed temporary harness seam owned by Integrator  
 **Outcome:** A controlled way to introduce one new Company A API (and optionally later Company B) event after activation and durably capture it into the inbox the applier consumes.  
@@ -106,7 +106,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T5 — Integrator: make V5 machine gate prove ongoing application
 
-**Status:** not started
+**Status:** bounded `demo-company-a-ai-off` gate passes on clean source `8468b7e`: six mounted transport cases, twelve CLI cases, three app unit cases and typecheck;24 parser regressions also pass. Initial `3951388` failed an evidence-only source-ID/target-ID comparison and was corrected; failed packet retained. Fresh exact-candidate independent execution passed. Whole-branch review found one missing authenticated Connections assertion, closed in source `85023c8`; clean bounded gate and independent three-case success/containment rerun pass. Original full V5/V6 remain fail-closed and unchanged.
 **Lane:** Integrator  
 **Depends on:** T1 + T2 minimum proofs  
 **Outcome:** `verify:slice -- V5` cannot pass on capture/authority/health alone; mandatory observations include fresh conforming apply, updated money, preserved cutover, and receipt.  
@@ -115,7 +115,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T6 — Platform: minimum containment for the demo path
 
-**Status:** partial — accepted P1 storage/writer/race cases provide backend evidence; the chosen mounted demo still needs its own replay/crash/out-of-scope observations. Broader cross-stream and dependency-release proofs remain follow-on.
+**Status:** bounded minimum proof accepted at `158ce06` with Task2/3 reviews: exact receipt replay, response loss, durable capture before apply and worker-process reconstruction, foreign input held without money. Full crash/race/drift matrix remains separate. Broader cross-stream and dependency-release proofs remain follow-on.
 **Lane:** Platform  
 **Depends on:** T1  
 **Outcome:** Enough V6 behavior that the demo (and gate) can show: exact delivery replay is harmless; crash/retry around apply does not double-count; unknown/out-of-scope input does not corrupt enrolled money.  
@@ -133,7 +133,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T8 — Experience + Integrator: two-company or single-company rehearsal packet
 
-**Status:** not started
+**Status:** assigned to the successor Experience MVP agent under the exclusive handoff; three timed rehearsals remain outstanding. Platform verification lease released; successor owns next isolated lease.
 **Lane:** Experience leads; Integrator records  
 **Depends on:** T3 + T1–T5; T6 for replay beat  
 **Outcome:** One rehearsable runbook and evidence packet for the hackathon-style walkthrough in §3. Prefer one Company A happy path first; add Company B only when CSV/file capture apply is actually available.  
@@ -198,8 +198,12 @@ Parallelism that is usually safe after T0:
 
 ## 8. Current integrator checkpoint and preserved follow-on work
 
-Main `088f719` was integrated into continuation branch `codex/platform-sync-selection-readers` at `2dab8e9`; latest main `fc79e94` is now integrated with the frozen T0 demo contract from PR55. Source is byte-identical to catalog candidate `74cd969` across apps/packages/scripts/tests/db; the merge adds the shared board and documentation links. PR48 is on main; PR50/PR52 were externally merged into their former stack bases, so the continuation carries those reviewed trees without claiming they are already on main.
+PR54 merged at `7de9366c8543ba4ae9c455006e55c70af16e33fd`; its complete tree equals reviewed continuation head `01bc534`. PR55/T0 is already merged. On November 10 the integrator checked the clean designated worktree and pulled main (already current), then created `codex/platform-company-a-demo-mount`. The original demo checkout and database remain preserved.
 
-The user requested behavior-preserving simplification, including fixed choices where useful. New implementation is held while the exact catalog task review assesses correctness and concrete simplifications. Current source/SQL lease is with Integrator; no other task may start from this board. The catalog review is accepted; next feature dispatch still requires its own narrow demo scope. Catalog checks:14/14 complete run,65 selector units, final three affected test cases and typecheck pass; independent source review passes. All six fixture tasks and their combined review pass.
+Fresh Astra design and independent review freeze the narrow T1/T2 mount; required receipt recovery corrections are incorporated. Integrator owns board/coordination documents; PR56 is integrated; the sole Sol Task 1 writer resumes the revised T2 scope and isolated test lease after fresh Astra reconciliation. Once design and paths are frozen, one Sol implementer will own the source and isolated tests, followed by fresh Astra exact-candidate review. Latest inspected CI runs `42873005041`, `42872902546`, and `42872595578` report startup failure; no green CI claim is made.
 
 General multi-customer capture/history selection, dependency journal/application scheduling, Discovery Gate J/live construction, and the explicit proposed-scope grant workflow remain preserved follow-on work, with their accepted designs/reviews and unresolved owner contracts. They are not new blocking requirements for this board's one-customer pregenerated AI-off demo. The user's explicit read/verification grant decision remains binding if that workflow is later implemented; no automatic grant is permitted. See [Platform coordination](../../progress/2026-11-10/platform-coordination.md) for exact source ownership, reviews, policy decision and delivered requests.
+
+## 9. User-directed MVP ownership split
+
+Developer 0 retains Platform source, bounded verification, shared board and integration. The successor Experience agent owns the exact UI/client/browser paths and T3/T4/T8 delivery in [Experience MVP handoff](../../progress/2026-11-10/experience-mvp-handoff.md), starting from Platform source85023c8. No overlapping implementation ownership is authorized. Three timed rehearsals and independent browser evidence remain required; the new agent returns a draft PR and completion report for Developer 0 to integrate.

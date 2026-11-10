@@ -444,3 +444,59 @@ The useful near-term reduction is the work sequence: reuse accepted P1 for one C
 ## PR54 merge conflict resolved
 
 Latest main `fc79e94` adds the frozen T0 [demo contract](../../demo/demo-contract.md) via PR55. The sole conflict was the shared task board's T0 status. Resolution retains the newly frozen identities,80000→50000 current-balance beat and construction labels, marks the T0 documentation delivered/merged, and preserves the branch's accepted implementation progress. No production source, tests, database schema or original demo state changes in this merge; later implementation/rehearsal acceptance remains separate.
+
+## Company A demo continuation begins
+
+The designated integration worktree was clean at `7de9366c8543ba4ae9c455006e55c70af16e33fd`; `git pull --ff-only origin main` reported already current. New branch: `codex/platform-company-a-demo-mount`. PR54 is merged, superseding its earlier draft/pending statements. Original demo checkout and database remain untouched.
+
+Fresh Astra `t1_t2_design` is read-only against that base, preparing actual composition seams, narrow operator transport, exact owned paths and test criteria. No source/SQL/service implementation lease is released. Integrator owns only this coordination file and the shared board during design. Sol implementation and fresh Astra candidate review follow the accepted design. General selector, scheduling, grants and live construction remain deferred.
+
+Latest PR44/46 comments contain no new owner replies. Latest CI runs `42873005041`, `42872902546`, `42872595578` all report startup failure; no CI acceptance.
+
+## PR56 arrives at the Task 1 boundary
+
+Periodic fetch found externally merged PR56 at `49245de4832d4d41f9cb9d28ac74fda42e92cfb4`, adding authenticated worker-private `/internal/apply` and supervisor mount. Sol Task1 was held immediately; only an empty untracked `apps/worker/src/demo-sync.ts` exists, with no tests/DB/commits or source content changes. Main is integrated before resetting the implementation base; the sole board conflict preserves PR56's partial proof and existing PR54 acceptance. Fresh Astra is reconciling remaining T2 orchestration to reuse PR56. Upstream uses non-T0 activation-policy seed and in-process observe/capture; exact operator chain, durable receipt recovery and full V5/V6 are not implied.
+
+Owner communications: Experience T3/T4/T8 request comment6775785377 and exact read-model agreement6775915071 on PR44; source-wrapper notification6775854070 on PR46.
+
+## T2 fixed orchestration candidate
+
+Candidate `98bcc469d204785e34e2d0c44a3d164c43f5f718` on base `f8605642bb391f2bb5c7ec348a03494f3fc20253` changes exactly six reserved source/test paths. It reuses genuine `local-demo-v1` activation through the existing fixture, accepted capture/P1 and validated receipt/unit recovery; PR56's generic mount remains unchanged. Typecheck, five focused unit cases, full unit suite698, twelve real Company A integration cases and ten default-seed fixture/mount compatibility cases passed. Behavioral RED/setup limitations are retained in the ignored Task1 report.
+
+Fresh Astra `demo_task1_review` owns the serial test lease in a separate exact-candidate checkout. No dependent source writer is released. Runtime compiled artifact binds actual approved specHash; connector display ID/version is asserted in fixture registration rather than adding a runtime metadata port. This candidate remains unmounted T2 service proof, not full V5/V6 or joint acceptance.
+
+## T2 service accepted; private transport release
+
+Fresh Astra review of exact source `98bcc469d204785e34e2d0c44a3d164c43f5f718` passes specification, quality and scoped verification with no actionable findings. Independent five unit cases and two real integration cases (positive/recovery plus conflicting history) passed in a separate exact checkout/owned55442 cluster. An initial PGDATA symlink setup rejection was corrected before those tests; reviewer stopped only its own55442 cluster. Integration55441 and original demo remain untouched. [Review](company-a-task1-review.md).
+
+Task 1 is complete as an internal fixed service, not a mounted operator path. Release Task 2's private source/worker transports to the next sole Sol writer with the existing isolated integration test lease; no dependent supervisor/CLI/gate release yet.
+
+## Private transports accepted; supervisor release
+
+Source `0c3bcafe27a38d43c54c9e209c33b9d3a3d971c4` passes fresh Astra spec/quality/security and scoped verification, no findings. Independent3 app unit cases and all3 real HTTP/PG cases pass in the separate review checkout; reviewer stopped only its own55442 cluster. [Review](company-a-task2-review.md). Task3 now owns only the plan-listed supervisor/control-composition/CLI/process-proof/setup paths; existing source/capture/apply behavior remains accepted and unchanged.
+
+Periodic fetch found PR58 (`5605513`) independently replacing the same Task1 paths, materially different from accepted98bcc46. [Reconciliation request](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/58#issuecomment-6777775735) asks its owner to avoid merging competing source over the accepted service and preserve dependent transports. PR59 Experience controls (`f04bb07`) receives separate read-only Astra inspection; no UI paths are taken. Main remains49245de.
+
+## Experience PR59 source gate
+
+Fresh independent Astra inspection of `f04bb07819fb1e0e35be4fc2de6c2cab09d263c9` requests changes: dedicated authority GET, immutable unresolved command retry, terminal409 refresh/new deliberate attempt, and nondecreasing same-identity epochs. No machine/browser rerun occurred. [Source review](experience-pr59-source-review.md); [concrete owner request](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/59#issuecomment-6777833710). Existing T3 public proof, T4 unmeasured posture/shared-lane and observation work remain separate. PR59 is not integrated or accepted by Platform.
+
+## Supervisor/CLI and bounded recovery accepted
+
+Exact `158ce0695a3ecd498cfac64fcf745ec3d261b2f4` passes fresh Astra specification/quality/security review, with independent3 mounted process/security and12 CLI cases. [Review](company-a-task3-review.md). Normal startup now optionally mounts the fixed operator command with separate capability; real role launcher/env construction is used by isolated process proof. Tests show pre-apply capture survives interruption, fresh apply80000→50000, cutover80000, and original receipt after further process reconstruction. Runtime claim is bounded inspected worker global-fetch path, not all-egress. Original demo remains untouched.
+
+T1/T2 fixed path and minimum T6 proof are delivered at those exact candidates. Task4 is released for separate `demo-company-a-ai-off` evidence gate, preserving original full V5/V6 unavailable semantics. No browser/T8/joint acceptance follows from process tests.
+
+## Bounded evidence gate machine checkpoint
+
+Task4 source `3951388245e78f9b38cf6574b4d072f3c048a68e` failed closed when its new observer compared allocation source funding identity with derived parent record ID. Fresh independent [initial review](company-a-task4-initial-review.md) confirmed the evidence-only P1. Narrow repair `8468b7e0b4de8c0034de633d897c110844065642` compares the source identity and retains separate receipt parent-ID checks. No product financial behavior changed.
+
+Clean repaired candidate passes the actual `demo-company-a-ai-off` selector:6 transport,12 CLI,3 app unit and typecheck, zero diagnostics;24 parser regressions pass. Public packet is retained at `.evidence/8468b7e0b4de8c0034de633d897c110844065642/demo-company-a-ai-off/2026-11-10T20-27-39-297Z-42773/manifest.json`; initial failed packet also retained. Automatic approval review rejected the shared55441 invocation; a separate clean temporary checkout/owned55443 cluster supplied evidence and was stopped/cleaned afterward. Original/shared demo state untouched. Fresh repaired-candidate Astra execution and whole-branch source review are pending at this checkpoint.
+
+Periodic fetch: main remains49245de; PR58/59 unchanged with owner requests pending. PR60 `c626582` fixes a legacy V5 title mismatch without unlocking V5. [Shared-file coordination](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/60#issuecomment-6778352495) preserves this gate review base; PR60 is not integrated here. Experience browser observation/authority fixes and three timed rehearsals remain outstanding, not replaced by process evidence.
+
+## Platform implementation complete; Experience MVP handoff
+
+Fresh Task4 [independent review](company-a-task4-review.md) passes exact8468b7e with24 parser regressions, trailing-argument rejection and full bounded gate. Whole-branch [review](company-a-final-review.md) found only a missing authenticated Connections readback assertion. Single Sol fix wave `85023c899367f2e93eead74b5bcd9513ef51fac1` adds that proof before observation-only branching, with no production change. Clean exact gate again passes6 transport/12 CLI/3 app units/typecheck; retained manifest `.evidence/85023c899367f2e93eead74b5bcd9513ef51fac1/demo-company-a-ai-off/2026-11-10T20-36-11-316Z-48512/manifest.json`. Fresh Astra scoped re-review reports no findings and independently passes mounted success plus disabled/unapproved and foreign-source containment (3 selected;3 intentionally unselected). Owned55442 stopped, service ports clear, source checkout clean. Full V5/V6 and joint acceptance remain unestablished.
+
+The user requested a separate agent to finish the MVP. [Exclusive Experience handoff](experience-mvp-handoff.md) reserves UI/client/browser paths and T3/T4/T8 for that successor, with next serial service lease on isolated55444/3251/3252/5184. Developer 0 retains Platform/gates/shared board/integration and will not edit Experience-owned files. PR59 predecessor notified in [ownership comment](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/59#issuecomment-6778707001). No browser or rehearsal acceptance is implied; three timed rehearsals remain required. Original checkout remains atc8ed642 with only its original handoff untracked; its database was not operated.

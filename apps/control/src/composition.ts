@@ -12,6 +12,7 @@ import { composeAuthorityOperations } from './authority-composition.js';
 import type { AuthorityWorkerClient } from './authority-worker-client.js';
 import { composeActivationReview, type LocalActivationOptions } from './activation-composition.js';
 import { composeSourceSemantics } from './source-semantics-composition.js';
+import { composeDemoSource } from './demo-source-composition.js';
 import { composeDiscovery } from './discovery-composition.js';
 import { buildDemoCandidate, type DemoCapture } from './demo-candidates.js';
 import { createLocalSessionService, LocalSessionError } from './local-session.js';
@@ -37,12 +38,18 @@ export async function createLocalComposition(dependencies: UploadDependencies, o
   fixtureTarget?: TargetReader;
   verification?: LocalVerificationOptions;
   sourceReadToken?: string;
+  demoOperator?: { serviceToken: string; operator: { enabled: false } | { enabled: true; token: string } };
   activationReview?: LocalActivationOptions;
   authorityOperations?: { worker: AuthorityWorkerClient; admissionToken: string };
   verificationSetupDiagnostic?: VerificationSetupCode;
 }) {
   const { db, store } = dependencies;
   const service = createSourceService(dependencies, localSourceCatalog);
+  const demoConfig = options.demoOperator;
+  const demoSource = demoConfig && composeDemoSource({
+    source: service, sourceToken: options.sourceReadToken ?? '', serviceToken: demoConfig.serviceToken,
+    operator: demoConfig.operator.enabled ? { ...demoConfig.operator, dependencies } : demoConfig.operator,
+  });
   const captureIds = new Map<Id, DemoCapture>();
   const captureBindings: CaptureBinding[] = [];
   const registrations: CandidateRegistration[] = [];
@@ -253,6 +260,7 @@ export async function createLocalComposition(dependencies: UploadDependencies, o
       }),
       candidatePlugin,
       ...(semantics ? [semantics.plugin] : []),
+      ...(demoSource ? [demoSource] : []),
       ...activation,
       ...(options.parentReads ? [createParentProxyPlugin(options.parentReads, session.authorizeReviewer)] : []),
       ...(verification ? [verification.plugin] : []),

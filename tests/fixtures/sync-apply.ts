@@ -1,6 +1,6 @@
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { Pool } from 'pg';
 import { expect } from 'vitest';
 import { hashEvent, hashTargetSnapshot, LocalSessionResponseSchema, ReviewPackageSchema, type RawSourceEvent, type TargetState } from '@eapr/contracts';
@@ -38,7 +38,7 @@ export const syncApplyClock = () => new Date(syncApplyInstant);
 
 async function activate(
   db: Pool, proofs: Awaited<ReturnType<typeof issueActivationProofs>>,
-  source: ReturnType<typeof createSourceService>, runtimeThrough?: number,
+  source: ReturnType<typeof createSourceService>, runtimeThrough?: number, seed?: string,
 ) {
   const { registryRoot, dependencies } = proofs;
   const catalog = readMigrationCatalog();
@@ -98,7 +98,7 @@ async function activate(
       const { receipt } = await workerActivation.activate({ idempotencyKey, bundleHash: intent.bundleHash });
       const stored = await withTransaction(db, client => readStoredActivation(client, receipt.scope));
       if (!stored) throw new Error('No fixture activation');
-      verifyOriginals(stored.approvedTarget.records, 'a');
+      verifyOriginals(stored.approvedTarget.records, 'a', seed);
       return { stored, identity: { scope: receipt.scope, activationId: receipt.activationId, bundleHash: intent.bundleHash } };
     } finally {
       await control.close();
@@ -108,7 +108,7 @@ async function activate(
   }
 }
 
-export async function createSyncApplyFixture(runtimeThrough?: number, baselineVersion?: number) {
+export async function createSyncApplyFixture(runtimeThrough?: number, baselineVersion?: number, { seed }: { seed?: string } = {}) {
   const cleanupActions: Array<() => Promise<void>> = [];
   let closePromise: Promise<void> | undefined;
   function close(): Promise<void> {
@@ -144,7 +144,7 @@ export async function createSyncApplyFixture(runtimeThrough?: number, baselineVe
     await migrate(pair, ['control', 'runtime'], {
       ...catalog, runtime: catalog.runtime.filter(row => row.version <= (runtimeThrough ?? Infinity)),
     });
-    const proofs = await issueActivationProofs(root, control);
+    const proofs = await issueActivationProofs(root, control, seed);
     const source = createSourceService(proofs.dependencies, localSourceCatalog);
     const operator = createScenarioAdmin(proofs.dependencies, {
       DEMO_OPERATOR_ENABLED: 'true', DEMO_OPERATOR_TOKEN: operatorToken,
@@ -170,7 +170,7 @@ export async function createSyncApplyFixture(runtimeThrough?: number, baselineVe
         `, [...values, baselineVersion, snapshotHash]);
       });
     }
-    const activation = await activate(db, proofs, source, runtimeThrough);
+    const activation = await activate(db, proofs, source, runtimeThrough, seed);
     const addInvoice = (id: string, sourceAccountId: string) => operator.freshInvoiceA(operatorToken, {
       id, accountId: sourceAccountId, amount: '12.00', dueDate: '2026-10-31',
       effectiveDate: '2026-10-02', observedAt: syncApplyInstant,
@@ -183,7 +183,18 @@ export async function createSyncApplyFixture(runtimeThrough?: number, baselineVe
     });
     return {
       db, owner, pair, close, source, operator, operatorToken, registryRoot: proofs.registryRoot,
-      addInvoice, addPayment, addSemantic, scopeReader: proofs.scopeReader, ...activation,
+      addInvoice, addPayment, addSemantic, dependencies: proofs.dependencies, scopeReader: proofs.scopeReader, ...activation,
+      processSetup: {
+        captures: [proofs.a.capture, proofs.b.capture],
+        evidenceRoot: join(root, 'originals'),
+        selectionPath: proofs.selectionPath,
+        workerPaths: { registryRoot: proofs.registryRoot, policyPath: proofs.policyPath },
+        controlPaths: {
+          registryRoot: proofs.registryRoot, policyPath: proofs.policyPath,
+          evidencePinRoot: proofs.bootstrapRoots.evidencePinRoot, sidecarRoot: proofs.bootstrapRoots.sidecarRoot,
+          visibleRoot: join(root, 'visible'), webRoot: resolve('apps/web'),
+        },
+      },
     };
   } catch (error) {
     try {
