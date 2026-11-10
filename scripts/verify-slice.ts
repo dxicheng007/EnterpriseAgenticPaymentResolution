@@ -4,8 +4,8 @@ import { join, relative, resolve } from 'node:path';
 import { z } from 'zod';
 import { hashBytes, hashCanonical } from '../packages/contracts/src/canonical.js';
 import {
-  chromiumVersion, collectScreenshots, commandResult, normalizeReport, v1ExitCode, v3ExitCode, v4ExitCode,
-  v5ExitCode, v6ExitCode, v7ExitCode,
+  chromiumVersion, collectScreenshots, commandResult, normalizeReport, v1ExitCode, v3ExitCode,
+  syncGateOutcome, v4GateOutcome, v7GateOutcome,
 } from './verify-slice-evidence.js';
 
 const registry = {
@@ -421,6 +421,7 @@ const requiredV3Cases = {
   ],
   'tests/e2e/v3-review.spec.ts': [
     'binds one-customer approval, reuses the saved key, gates stale packages, and keeps parent reads GET-only',
+    'retries a failed details read and offers earlier unresolved approvals only as an explicit action',
   ],
   'tests/integration/v3-corrections.test.ts': [
     'unsupported invented money stays blocked with no invented resolution write',
@@ -560,7 +561,7 @@ async function verifyV3() {
   process.exitCode = exitCode;
 }
 
-const requiredV4Cases = {
+const v4PrerequisiteCases = {
   'tests/integration/v4-agent-tools.test.ts': [
     'denies unknown and role-incompatible tools while keeping repair/finish unavailable',
     'stops at attempt and tool-round budgets without accepting further tool steps',
@@ -571,25 +572,21 @@ const requiredV4Cases = {
     'default local discovery reports unavailable model and start',
     'monitors durable scripted activity and persists pause, resume, and usage across reload',
   ],
-  'tests/live/v4-build-connectors.test.ts': [
-    'fails closed when live provider configuration is missing',
-  ],
-} satisfies Record<typeof registry.V4[number], string[]>;
+} satisfies Partial<Record<typeof registry.V4[number], string[]>>;
 
-const v4Commands = [
+const v4PrerequisiteCommands = [
   { script: 'test:integration', file: 'tests/integration/v4-agent-tools.test.ts' as const },
   { script: 'test:e2e', file: 'tests/e2e/v4-monitor.spec.ts' as const },
-  { script: 'test:live', file: 'tests/live/v4-build-connectors.test.ts' as const },
   { script: 'typecheck', file: undefined },
 ] as const;
 
-function readV4Report(report: string, kind: 'vitest' | 'playwright' | 'live', file: typeof registry.V4[number]) {
+function readV4Report(report: string, browser: boolean, file: keyof typeof v4PrerequisiteCases) {
   try {
     const stat = lstatSync(report);
     if (!stat.isFile() || stat.size > 8 * 1024 * 1024) throw new Error();
     return normalizeReport(
-      kind === 'playwright' ? 'playwright' : 'vitest', JSON.parse(readFileSync(report, 'utf8')),
-      process.cwd(), file, requiredV4Cases[file],
+      browser ? 'playwright' : 'vitest', JSON.parse(readFileSync(report, 'utf8')),
+      process.cwd(), file, v4PrerequisiteCases[file],
     );
   } catch {
     return { cases: [], diagnostics: ['report-unavailable-or-invalid'] };
@@ -618,7 +615,7 @@ async function verifyV4() {
   let temp: string | undefined;
 
   try {
-    const missing = registry.V4.filter(file => !existsSync(file) || !lstatSync(file).isFile());
+    const missing = Object.keys(v4PrerequisiteCases).filter(file => !existsSync(file) || !lstatSync(file).isFile());
     if (missing.length) diagnostics.push('required-test-files-missing');
     for (const file of missing) console.error('V4 required test file unavailable: ' + file);
 
@@ -647,17 +644,13 @@ async function verifyV4() {
       mkdirSync('.local', { recursive: true, mode: 0o700 });
       temp = mkdtempSync(resolve('.local', 'verify-v4-'));
       const browserOutput = join(temp, 'browser');
-      for (const [index, { script, file }] of v4Commands.entries()) {
+      for (const [index, { script, file }] of v4PrerequisiteCommands.entries()) {
         const report = join(temp, 'report-' + index + '.json');
         const args = ['run', script];
         const browser = script === 'test:e2e';
-        const live = script === 'test:live';
         if (file) {
-          if (live) args.push('--', '--evidence', file, '--reporter=json', '--outputFile=' + report);
-          else {
-            args.push('--', file, '--reporter=json');
-            args.push(browser ? '--trace=off' : '--outputFile=' + report);
-          }
+          args.push('--', file, '--reporter=json');
+          args.push(browser ? '--trace=off' : '--outputFile=' + report);
         }
         const command = ['npm', ...args.map(arg => arg === '--outputFile=' + report
           ? '--outputFile=<private-report>' : arg)].join(' ');
@@ -669,10 +662,9 @@ async function verifyV4() {
           },
           encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 8 * 1024 * 1024, timeout: 600_000,
         });
-        const reportKind = browser ? 'playwright' as const : live ? 'live' as const : 'vitest' as const;
-        const result = commandResult(command, child, file ? readV4Report(report, reportKind, file) : undefined);
+        const result = commandResult(command, child, file ? readV4Report(report, browser, file) : undefined);
         commands.push(result);
-        console.log('V4 ' + result.result + ' ' + command +
+        console.log('V4 prerequisite ' + result.result + ' ' + command +
           (result.diagnostics.length ? ' (' + result.diagnostics.join(', ') + ')' : ''));
       }
 
@@ -693,20 +685,19 @@ async function verifyV4() {
     }
   }
 
-  const exitCode = v4ExitCode(commands, diagnostics, chromium);
+  const { exitCode, ...outcome } = v4GateOutcome(commands, diagnostics, chromium);
   const packet = {
-    schemaVersion: 1, runId, slice: 'V4', source, jointAcceptance: 'pending',
-    result: exitCode === 0 ? 'passed' : 'failed',
-    mode: { sourceFixtures: 'development-only', model: 'live-fail-closed-proof', database: 'native' },
+    schemaVersion: 1, runId, slice: 'V4', source, independentReview: 'pending', jointAcceptance: 'pending',
+    ...outcome,
+    mode: { sourceFixtures: 'development-only', model: 'scripted-prerequisites', database: 'native' },
     runtime: { ...runtime, chromium: chromium ? [chromium] : [] },
     contract, configuration, migrations,
-    requiredTests: registry.V4, requiredCases: requiredV4Cases, commands, screenshots: [], diagnostics,
+    requiredTests: registry.V4, prerequisiteCases: v4PrerequisiteCases, commands, screenshots: [],
     authenticatedTrace: 'disabled',
     limitations: [
       'Development sources only',
-      'Successful live connector builds and joint G4 acceptance remain pending',
+      'Genuine live connector builds and holdout verification are unavailable',
       'Blocker D product live composition mount remains unmounted',
-      'Independent review pending',
     ],
   };
   const write = (file: string, value: unknown) =>
@@ -715,32 +706,28 @@ async function verifyV4() {
   write('assertions.json', commands.flatMap(command => command.cases));
   write('manifest.json', packet);
   console.log('V4 verification ' + packet.result + '. Evidence: ' + relative(process.cwd(), evidence));
-  if (diagnostics.length) console.error('V4 diagnostics: ' + diagnostics.join(', '));
+  console.error('V4 diagnostics: ' + packet.diagnostics.join(', '));
   process.exitCode = exitCode;
 }
 
-const requiredV7Cases = {
+const v7PrerequisiteCases = {
   'tests/e2e/v7-demo.spec.ts': [
     'deterministic fixture wires both demo companies on sources and preview',
   ],
-  'tests/live/v7-holdout.test.ts': [
-    'fails closed when live provider configuration is missing',
-  ],
-} satisfies Record<typeof registry.V7[number], string[]>;
+} satisfies Partial<Record<typeof registry.V7[number], string[]>>;
 
-const v7Commands = [
+const v7PrerequisiteCommands = [
   { script: 'test:e2e', file: 'tests/e2e/v7-demo.spec.ts' as const },
-  { script: 'test:live', file: 'tests/live/v7-holdout.test.ts' as const },
   { script: 'typecheck', file: undefined },
 ] as const;
 
-function readV7Report(report: string, kind: 'playwright' | 'live', file: typeof registry.V7[number]) {
+function readV7Report(report: string, file: keyof typeof v7PrerequisiteCases) {
   try {
     const stat = lstatSync(report);
     if (!stat.isFile() || stat.size > 8 * 1024 * 1024) throw new Error();
     return normalizeReport(
-      kind === 'playwright' ? 'playwright' : 'vitest', JSON.parse(readFileSync(report, 'utf8')),
-      process.cwd(), file, requiredV7Cases[file],
+      'playwright', JSON.parse(readFileSync(report, 'utf8')),
+      process.cwd(), file, v7PrerequisiteCases[file],
     );
   } catch {
     return { cases: [], diagnostics: ['report-unavailable-or-invalid'] };
@@ -769,7 +756,7 @@ async function verifyV7() {
   let temp: string | undefined;
 
   try {
-    const missing = registry.V7.filter(file => !existsSync(file) || !lstatSync(file).isFile());
+    const missing = Object.keys(v7PrerequisiteCases).filter(file => !existsSync(file) || !lstatSync(file).isFile());
     if (missing.length) diagnostics.push('required-test-files-missing');
     for (const file of missing) console.error('V7 required test file unavailable: ' + file);
 
@@ -798,20 +785,11 @@ async function verifyV7() {
       mkdirSync('.local', { recursive: true, mode: 0o700 });
       temp = mkdtempSync(resolve('.local', 'verify-v7-'));
       const browserOutput = join(temp, 'browser');
-      for (const [index, { script, file }] of v7Commands.entries()) {
+      for (const [index, { script, file }] of v7PrerequisiteCommands.entries()) {
         const report = join(temp, 'report-' + index + '.json');
         const args = ['run', script];
-        const browser = script === 'test:e2e';
-        const live = script === 'test:live';
-        if (file) {
-          if (live) args.push('--', '--evidence', file, '--reporter=json', '--outputFile=' + report);
-          else {
-            args.push('--', file, '--reporter=json');
-            args.push(browser ? '--trace=off' : '--outputFile=' + report);
-          }
-        }
-        const command = ['npm', ...args.map(arg => arg === '--outputFile=' + report
-          ? '--outputFile=<private-report>' : arg)].join(' ');
+        if (file) args.push('--', file, '--reporter=json', '--trace=off');
+        const command = ['npm', ...args].join(' ');
         const child = spawnSync('npm', args, {
           env: {
             ...env,
@@ -820,12 +798,9 @@ async function verifyV7() {
           },
           encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 8 * 1024 * 1024, timeout: 600_000,
         });
-        const reportKind = browser ? 'playwright' as const : live ? 'live' as const : undefined;
-        const result = commandResult(
-          command, child, file && reportKind ? readV7Report(report, reportKind, file) : undefined,
-        );
+        const result = commandResult(command, child, file ? readV7Report(report, file) : undefined);
         commands.push(result);
-        console.log('V7 ' + result.result + ' ' + command +
+        console.log('V7 prerequisite ' + result.result + ' ' + command +
           (result.diagnostics.length ? ' (' + result.diagnostics.join(', ') + ')' : ''));
       }
 
@@ -846,20 +821,18 @@ async function verifyV7() {
     }
   }
 
-  const exitCode = v7ExitCode(commands, diagnostics, chromium);
+  const { exitCode, ...outcome } = v7GateOutcome(commands, diagnostics, chromium);
   const packet = {
-    schemaVersion: 1, runId, slice: 'V7', source, jointAcceptance: 'pending',
-    result: exitCode === 0 ? 'passed' : 'failed',
-    mode: { sourceFixtures: 'development-only', model: 'live-fail-closed-proof', database: 'native' },
+    schemaVersion: 1, runId, slice: 'V7', source, independentReview: 'pending', jointAcceptance: 'pending',
+    ...outcome,
+    mode: { sourceFixtures: 'development-only', model: 'disabled', database: 'native' },
     runtime: { ...runtime, chromium: chromium ? [chromium] : [] },
     contract, configuration, migrations,
-    requiredTests: registry.V7, requiredCases: requiredV7Cases, commands, screenshots: [], diagnostics,
+    requiredTests: registry.V7, prerequisiteCases: v7PrerequisiteCases, commands, screenshots: [],
     authenticatedTrace: 'disabled',
     limitations: [
       'Development sources only',
-      'Successful live holdouts and joint G7 acceptance remain pending',
-      'Blocker D product live composition mount remains unmounted',
-      'Independent review pending',
+      'Full V7 requires G0–G6 machine evidence, genuine live construction, an unseen holdout, and three live rehearsals',
     ],
   };
   const write = (file: string, value: unknown) =>
@@ -868,7 +841,7 @@ async function verifyV7() {
   write('assertions.json', commands.flatMap(command => command.cases));
   write('manifest.json', packet);
   console.log('V7 verification ' + packet.result + '. Evidence: ' + relative(process.cwd(), evidence));
-  if (diagnostics.length) console.error('V7 diagnostics: ' + diagnostics.join(', '));
+  console.error('V7 diagnostics: ' + packet.diagnostics.join(', '));
   process.exitCode = exitCode;
 }
 
@@ -876,11 +849,27 @@ const requiredV5Cases = {
   'tests/integration/v5-sync.test.ts': [
     'admits standing authority for the activated customer and denies unknown accounts',
     'captures a fresh post-activation API page without parent writes or model credentials',
+    'applies a fresh invoice once, replays the receipt and fences stale input',
   ],
   'apps/worker/test/sync-dependencies.test.ts': [
     'orders providers before consumers and reports missing prerequisites',
     'cycles are explicit exceptions',
     'selection never splits a group and keeps stable order',
+    'rejects a provider index absent from the materialized dependency graph',
+    'rejects duplicate materialized input indexes',
+    'rejects invalid materialized input index -1',
+    'rejects invalid materialized input index 0.5',
+    'rejects invalid materialized input index NaN',
+    'rejects invalid materialized input index Infinity',
+    'rejects invalid materialized input index 9007199254740992',
+    'orders held provider candidates from the real classifier without releasing the hold',
+    'rejects invalid group selection limit 0',
+    'rejects invalid group selection limit -1',
+    'rejects invalid group selection limit 0.5',
+    'rejects invalid group selection limit NaN',
+    'rejects invalid group selection limit Infinity',
+    'rejects invalid group selection limit 1001',
+    'accepts a whole 1000-event group at the default and explicit limit',
     'third unresolved examination quarantines and transport backoff is bounded',
   ],
   'tests/e2e/v5-ai-off.spec.ts': [
@@ -980,7 +969,7 @@ async function verifyV5() {
         });
         const result = commandResult(command, child, file ? readV5Report(report, browser, file) : undefined);
         commands.push(result);
-        console.log('V5 ' + result.result + ' ' + command +
+        console.log('V5 prerequisite ' + result.result + ' ' + command +
           (result.diagnostics.length ? ' (' + result.diagnostics.join(', ') + ')' : ''));
       }
 
@@ -1001,19 +990,18 @@ async function verifyV5() {
     }
   }
 
-  const exitCode = v5ExitCode(commands, diagnostics, chromium);
+  const { exitCode, ...outcome } = syncGateOutcome('V5', commands, diagnostics, chromium);
   const packet = {
-    schemaVersion: 1, runId, slice: 'V5', source, jointAcceptance: 'pending',
-    result: exitCode === 0 ? 'passed' : 'failed',
+    schemaVersion: 1, runId, slice: 'V5', source, independentReview: 'pending', jointAcceptance: 'pending',
+    ...outcome,
     mode: { sourceFixtures: 'development-only', model: 'disabled', database: 'native' },
     runtime: { ...runtime, chromium: chromium ? [chromium] : [] },
     contract, configuration, migrations,
-    requiredTests: registry.V5, requiredCases: requiredV5Cases, commands, screenshots: [], diagnostics,
+    requiredTests: registry.V5, prerequisiteCases: requiredV5Cases, commands, screenshots: [],
     authenticatedTrace: 'disabled',
     limitations: [
       'Development sources only',
-      'Monetary apply / Connections UI and joint G5 acceptance remain pending',
-      'Independent review pending',
+      'End-to-end AI-off synchronization across both source modes remains unverified',
     ],
   };
   const write = (file: string, value: unknown) =>
@@ -1022,7 +1010,7 @@ async function verifyV5() {
   write('assertions.json', commands.flatMap(command => command.cases));
   write('manifest.json', packet);
   console.log('V5 verification ' + packet.result + '. Evidence: ' + relative(process.cwd(), evidence));
-  if (diagnostics.length) console.error('V5 diagnostics: ' + diagnostics.join(', '));
+  console.error('V5 diagnostics: ' + packet.diagnostics.join(', '));
   process.exitCode = exitCode;
 }
 
@@ -1135,7 +1123,7 @@ async function verifyV6() {
         });
         const result = commandResult(command, child, file ? readV6Report(report, browser, file) : undefined);
         commands.push(result);
-        console.log('V6 ' + result.result + ' ' + command +
+        console.log('V6 prerequisite ' + result.result + ' ' + command +
           (result.diagnostics.length ? ' (' + result.diagnostics.join(', ') + ')' : ''));
       }
 
@@ -1156,19 +1144,18 @@ async function verifyV6() {
     }
   }
 
-  const exitCode = v6ExitCode(commands, diagnostics, chromium);
+  const { exitCode, ...outcome } = syncGateOutcome('V6', commands, diagnostics, chromium);
   const packet = {
-    schemaVersion: 1, runId, slice: 'V6', source, jointAcceptance: 'pending',
-    result: exitCode === 0 ? 'passed' : 'failed',
+    schemaVersion: 1, runId, slice: 'V6', source, independentReview: 'pending', jointAcceptance: 'pending',
+    ...outcome,
     mode: { sourceFixtures: 'development-only', model: 'disabled', database: 'native' },
     runtime: { ...runtime, chromium: chromium ? [chromium] : [] },
     contract, configuration, migrations,
-    requiredTests: registry.V6, requiredCases: requiredV6Cases, commands, screenshots: [], diagnostics,
+    requiredTests: registry.V6, prerequisiteCases: requiredV6Cases, commands, screenshots: [],
     authenticatedTrace: 'disabled',
     limitations: [
       'Development sources only',
-      'Monetary apply / Connections UI and joint G6 acceptance remain pending',
-      'Independent review pending',
+      'Application crash recovery, concurrent authority fencing, and operating drift containment remain unverified',
     ],
   };
   const write = (file: string, value: unknown) =>
@@ -1177,7 +1164,7 @@ async function verifyV6() {
   write('assertions.json', commands.flatMap(command => command.cases));
   write('manifest.json', packet);
   console.log('V6 verification ' + packet.result + '. Evidence: ' + relative(process.cwd(), evidence));
-  if (diagnostics.length) console.error('V6 diagnostics: ' + diagnostics.join(', '));
+  console.error('V6 diagnostics: ' + packet.diagnostics.join(', '));
   process.exitCode = exitCode;
 }
 

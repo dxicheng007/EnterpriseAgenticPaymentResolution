@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import {
-  chromiumVersion, collectScreenshots, commandResult, normalizeReport, v1ExitCode,
+  chromiumVersion, collectScreenshots, commandResult, normalizeReport, syncGateOutcome, v1ExitCode, v4GateOutcome, v7GateOutcome,
 } from '../../scripts/verify-slice-evidence.js';
 
 const root = '/repo';
@@ -22,7 +22,7 @@ const vitest = () => ({
 });
 const execution = () => ({
   status: 'expected', expectedStatus: 'passed',
-  results: [{ status: 'passed', retry: 0, attachments: [{ body: secret }] }],
+  results: [{ status: 'passed', retry: 0, attachments: [{ body: secret }], stdout: [{ text: secret }] }],
 });
 const playwright = () => ({
   errors: [],
@@ -45,6 +45,90 @@ test('normalizes only the expected file, names and statuses', () => {
   expect(normalizeBrowser(playwright())).toEqual({
     cases: [{ file: browser, name: 'mandatory browser case', status: 'passed' }], diagnostics: [],
   });
+});
+
+const multiBrowser = 'tests/e2e/v3-review.spec.ts';
+const multiFile = 'v3-review.spec.ts';
+const browserNames = ['approve one customer', 'recover an earlier approval'];
+const browserProject = { id: 'default', name: 'Default' };
+const multiPlaywright = () => ({
+  config: { projects: [browserProject] },
+  errors: [] as unknown[],
+  stats: { unexpected: 0, skipped: 0, flaky: 0, expected: 2 },
+  suites: [{
+    file: multiFile,
+    specs: [...browserNames].reverse().map(title => ({
+      title, file: multiFile, ok: true,
+      tests: [{ ...execution(), projectId: browserProject.id, projectName: browserProject.name }],
+    })),
+  }],
+});
+const normalizeMultiBrowser = (report: unknown) => normalizeReport('playwright', report, root, multiBrowser, browserNames);
+
+const multiBrowserResult = {
+  cases: [
+    { file: multiBrowser, name: 'approve one customer', status: 'passed' },
+    { file: multiBrowser, name: 'recover an earlier approval', status: 'passed' },
+  ],
+  diagnostics: [],
+};
+
+test('normalizes two mandatory specs in one file in allowlist order', () => {
+  expect(normalizeMultiBrowser(multiPlaywright())).toEqual(multiBrowserResult);
+});
+
+test('normalizes mandatory specs across direct and nested suites of the same file', () => {
+  const report = multiPlaywright();
+  const [suite] = report.suites;
+  const [nested] = suite.specs.splice(0, 1);
+  expect(normalizeMultiBrowser({
+    ...report, suites: [{ ...suite, suites: [{ file: multiFile, specs: [nested] }] }],
+  })).toEqual(multiBrowserResult);
+});
+
+test.each<[string, (report: ReturnType<typeof multiPlaywright>) => unknown]>([
+  ['missing spec', report => report.suites[0].specs.pop()],
+  ['extra spec', report => report.suites[0].specs.push({ ...report.suites[0].specs[0], title: secret })],
+  ['duplicate spec', report => { report.suites[0].specs[0].title = report.suites[0].specs[1].title; }],
+  ['unlisted spec', report => { report.suites[0].specs[0].title = secret; }],
+  ['wrong spec file', report => { report.suites[0].specs[0].file = 'other.spec.ts'; }],
+  ['duplicate file suite', report => report.suites.push(report.suites[0])],
+  ['extra project execution', report => report.suites[0].specs[0].tests.push(report.suites[0].specs[0].tests[0])],
+  ['extra configured project', report => report.config.projects.push({ id: secret, name: secret })],
+  ['different project ID', report => { report.suites[0].specs[0].tests[0].projectId = secret; }],
+  ['different project name', report => { report.suites[0].specs[0].tests[0].projectName = secret; }],
+  ['report error', report => report.errors.push({ message: secret })],
+  ['incorrect expected count', report => { report.stats.expected = 1; }],
+  ['unexpected count', report => { report.stats.unexpected = 1; }],
+  ['skipped count', report => { report.stats.skipped = 1; }],
+  ['flaky count', report => { report.stats.flaky = 1; }],
+])('rejects %s in a multi-spec report without leaking reporter data', (_, mutate) => {
+  const report = multiPlaywright();
+  mutate(report);
+  const result = normalizeMultiBrowser(report);
+  expect(result.diagnostics).not.toEqual([]);
+  expect(JSON.stringify(result)).not.toContain(secret);
+});
+
+test('rejects empty suite branches even with both mandatory specs', () => {
+  const report = multiPlaywright();
+  const result = normalizeMultiBrowser({
+    ...report, suites: [{ ...report.suites[0], suites: [{ file: multiFile, specs: [] }] }],
+  });
+  expect(result.diagnostics).not.toEqual([]);
+});
+
+test('rejects Playwright reports with incomplete summary counters', () => {
+  const report = multiPlaywright();
+  const result = normalizeMultiBrowser({ ...report, stats: { expected: 2 } });
+  expect(result.diagnostics).not.toEqual([]);
+});
+
+test('rejects browser suites deeper than the traversal bound', () => {
+  const report = multiPlaywright();
+  let suite: unknown = report.suites[0];
+  for (let depth = 0; depth < 33; depth++) suite = { file: multiFile, suites: [suite] };
+  expect(normalizeMultiBrowser({ ...report, suites: [suite] }).diagnostics).not.toEqual([]);
 });
 
 test.each([
@@ -80,6 +164,8 @@ test.each([null, '', { testResults: [{}] }])('rejects malformed Vitest and Playw
 
 test.each([
   ['skipped', { status: 'skipped' }],
+  ['failed', { results: [{ status: 'failed', retry: 0 }] }],
+  ['result error', { results: [{ status: 'passed', retry: 0, error: { message: secret } }] }],
   ['expected failure', { expectedStatus: 'failed' }],
   ['unexpected pass', { status: 'unexpected', expectedStatus: 'failed' }],
   ['flaky', { status: 'flaky' }],
@@ -168,9 +254,91 @@ test('requires actual numeric Chromium and every command and evidence result', (
 });
 
 
+test('a V4 run with every prerequisite passing still fails the full gate', () => {
+  const success = { status: 0, signal: null };
+  const commands = [
+    commandResult('npm run test:integration -- tests/integration/v4-agent-tools.test.ts', success),
+    commandResult('npm run test:e2e -- tests/e2e/v4-monitor.spec.ts', success),
+    commandResult('npm run typecheck', success),
+  ];
+  const browser = '123.0.4.5';
+  expect(v4GateOutcome(commands, [], browser)).toEqual({
+    exitCode: 1, result: 'failed', prerequisiteResult: 'passed', diagnostics: ['live-construction-unavailable'],
+  });
+  const negativeProof = commandResult('npm run test:live -- --evidence tests/live/v4-build-connectors.test.ts', success);
+  expect(v4GateOutcome([...commands, negativeProof], [], browser)).toMatchObject({ exitCode: 1, result: 'failed' });
+  const failed = commandResult('npm run typecheck', { ...success, status: 1 });
+  expect(v4GateOutcome([...commands.slice(0, 2), failed], [], browser)).toMatchObject({ prerequisiteResult: 'failed' });
+  expect(v4GateOutcome(commands, ['private-output-cleanup-failed'], browser)).toEqual({
+    exitCode: 1, result: 'failed', prerequisiteResult: 'failed',
+    diagnostics: ['private-output-cleanup-failed', 'live-construction-unavailable'],
+  });
+});
+
+const v5Prerequisites = [
+  'npm run test:integration -- tests/integration/v5-sync.test.ts',
+  'npm run test:unit -- apps/worker/test/sync-dependencies.test.ts',
+  'npm run test:e2e -- tests/e2e/v5-ai-off.spec.ts',
+  'npm run test:integration -- tests/integration/v5-runtime-isolation.test.ts',
+  'npm run typecheck',
+];
+const v6Prerequisites = [
+  'npm run test:integration -- tests/integration/v6-recovery.test.ts',
+  'npm run test:integration -- tests/integration/v6-drift.test.ts',
+  'npm run test:e2e -- tests/e2e/v6-containment.spec.ts',
+  ...v5Prerequisites,
+];
+
+test.each([
+  { slice: 'V5', unavailable: 'ai-off-sync-proof-unavailable', prerequisites: v5Prerequisites },
+  { slice: 'V6', unavailable: 'application-recovery-proof-unavailable', prerequisites: v6Prerequisites },
+] as const)('$slice remains failed with every prerequisite passing', ({ slice, unavailable, prerequisites }) => {
+  const success = { status: 0, signal: null, stdout: secret };
+  const chromium = '123.0.4.5';
+  const commands = prerequisites.map(command => commandResult(command, success));
+  expect(syncGateOutcome(slice, commands, [], chromium)).toEqual({
+    exitCode: 1, result: 'failed', prerequisiteResult: 'passed', diagnostics: [unavailable],
+  });
+
+  const skipped = playwright();
+  skipped.suites[0].suites[0].specs[0].tests[0].results[0].status = 'skipped';
+  const incomplete = commandResult('npm run test:e2e', success, normalizeBrowser(skipped));
+  const failed = commandResult('npm run typecheck', { ...success, status: 1 });
+  for (const invalid of [commands.slice(1), [incomplete, ...commands.slice(1)], [...commands.slice(0, -1), failed]]) {
+    expect(syncGateOutcome(slice, invalid, [], chromium)).toEqual({
+      exitCode: 1, result: 'failed', prerequisiteResult: 'failed', diagnostics: [unavailable],
+    });
+  }
+  expect(JSON.stringify(incomplete)).not.toContain(secret);
+  expect(syncGateOutcome(slice, commands, ['private-output-cleanup-failed'], chromium)).toEqual({
+    exitCode: 1, result: 'failed', prerequisiteResult: 'failed', diagnostics: ['private-output-cleanup-failed', unavailable],
+  });
+  expect(syncGateOutcome(slice, commands, [], undefined)).toMatchObject({ prerequisiteResult: 'failed' });
+});
+
+test('a V7 run with every fixture prerequisite passing still fails the full gate', () => {
+  const success = { status: 0, signal: null };
+  const commands = [
+    commandResult('npm run test:e2e -- tests/e2e/v7-demo.spec.ts', success),
+    commandResult('npm run typecheck', success),
+  ];
+  const chromium = '123.0.4.5';
+  expect(v7GateOutcome(commands, [], chromium)).toEqual({
+    exitCode: 1, result: 'failed', prerequisiteResult: 'passed', diagnostics: ['live-holdout-rehearsal-unavailable'],
+  });
+  const negativeProof = commandResult('npm run test:live -- --evidence tests/live/v7-holdout.test.ts', success);
+  expect(v7GateOutcome([...commands, negativeProof], [], chromium)).toMatchObject({ exitCode: 1, result: 'failed' });
+  const failed = commandResult('npm run typecheck', { ...success, status: 1 });
+  expect(v7GateOutcome([commands[0], failed], [], chromium)).toMatchObject({ prerequisiteResult: 'failed' });
+});
+
 function runVerifier(slice: string, cwd: string) {
+  const env = { ...process.env };
+  delete env.OPENAI_API_KEY;
+  delete env.OPENAI_ORG_ID;
+  delete env.OPENAI_PROJECT_ID;
   return spawnSync(process.execPath, ['--import', import.meta.resolve('tsx'), resolve('scripts/verify-slice.ts'), slice], {
-    cwd, encoding: 'utf8', timeout: 10_000,
+    cwd, env, encoding: 'utf8', timeout: 10_000,
   });
 }
 
@@ -203,4 +371,32 @@ test('CLI routes V2 to its fail-closed preflight', () => {
   expect(result.status).toBe(1);
   expect(result.stderr).toContain('required-test-files-missing');
   expect(result.stdout).toContain('V2 verification failed');
+});
+
+
+test.each([
+  { slice: 'V4', diagnostic: 'live-construction-unavailable' },
+  { slice: 'V5', diagnostic: 'ai-off-sync-proof-unavailable' },
+  { slice: 'V6', diagnostic: 'application-recovery-proof-unavailable' },
+  { slice: 'V7', diagnostic: 'live-holdout-rehearsal-unavailable' },
+])('$slice CLI records unavailable full-slice proof on a failed preflight', ({ slice, diagnostic }) => {
+  expect(spawnSync('git', ['init', '-q'], { cwd: output }).status).toBe(0);
+  expect(spawnSync('git', [
+    '-c', 'user.name=Verifier Test', '-c', 'user.email=verifier@example.invalid',
+    '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', 'Initialize verifier fixture',
+  ], { cwd: output }).status).toBe(0);
+  const result = runVerifier(slice, output);
+  expect(result.status).toBe(1);
+  expect(result.stdout).toContain(slice + ' verification failed');
+  expect(result.stderr).toContain(diagnostic);
+  const evidence = join(output, '.evidence');
+  const [sourceKey] = readdirSync(evidence);
+  const runs = join(evidence, sourceKey, slice);
+  const [run] = readdirSync(runs);
+  const manifest = JSON.parse(readFileSync(join(runs, run, 'manifest.json'), 'utf8'));
+  expect(manifest).toMatchObject({
+    slice, result: 'failed', prerequisiteResult: 'failed',
+    independentReview: 'pending', jointAcceptance: 'pending', commands: [],
+    diagnostics: expect.arrayContaining(['required-test-files-missing', diagnostic]),
+  });
 });

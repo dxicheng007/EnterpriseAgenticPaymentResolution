@@ -1,28 +1,26 @@
 import {
   CompiledArtifactSchema, CustomerProfileSchema, MutationOperationSchema, SourceEventSchema, ValidatorIdSchema,
   canonicalJson, hashArtifact, hashEvent, hashPlan, hashTargetSnapshot, targetRecordId,
-  type CompiledArtifact, type CustomerProfile, type EconomicIdentity, type FieldLineage, type Hold, type MutationPlan,
-  type PlanOutcome, type Scope, type SourceEvent, type TargetState,
+  type CompiledArtifact, type CustomerProfile, type EconomicIdentity, type FieldLineage, type Hash, type Hold, type Id,
+  type IsoInstant, type MutationPlan, type PlanOutcome, type Scope, type SourceEvent, type TargetState,
 } from '@eapr/contracts';
 import { computeBalance } from '@eapr/finance/balance';
-import { fundingIdFor, invoiceIdFor } from '@eapr/finance/allocations';
+import { fundingIdFor } from '@eapr/finance/allocations';
 import { indexReversals } from '@eapr/finance/reversals';
-import { FinanceError, referenceId, sameScope, validateTarget, type FinancialRecord } from '@eapr/finance/validate';
+import { FinanceError, sameScope, validateTarget, type FinancialRecord } from '@eapr/finance/validate';
 import { projectTarget, type FinancialMutation } from '@eapr/parent/state';
 import { compare, sourceContractHashes } from './canonicalize.js';
 import { blocker, executableDiagnostics, profileDiagnostics } from './compile.js';
 import { executeMapping, MappingError, validateSourcePayload } from './operations.js';
 
-type Hash = CompiledArtifact['hash'];
-type Id = SourceEvent['id'];
 type Lineage = Omit<FieldLineage, 'operationIndex'>;
-type Candidate = { event: SourceEvent; operation: FinancialMutation; lineage: Lineage[] };
+type Candidate = { inputIndex: number; event: SourceEvent; operation: FinancialMutation; lineage: Lineage[] };
 
 export type BatchStopReason =
   'artifact_binding' | 'input_limit' | 'target_invalid' | 'target_scope' | 'delivery_conflict' | 'source_guard' | 'plan_invalid';
 export type SourceBlocker = { sourceRef: Id; code: 'IDENTITY_SCOPE' | 'SEMANTIC_VERSION'; causingInputIndexes: number[] };
 export type ClassificationBinding = {
-  artifactHash: Hash; profileHash: Hash; scope: Scope; expectedTargetVersion: number; targetSnapshotHash: Hash; asOf: string;
+  artifactHash: Hash; profileHash: Hash; scope: Scope; expectedTargetVersion: number; targetSnapshotHash: Hash; asOf: IsoInstant;
 };
 export type EventRef = { sourceRef: Id; eventId: Id; streamId: Id; sequence: number; contentHash: Hash };
 export type TypedPrerequisite = {
@@ -32,11 +30,9 @@ export type TypedPrerequisite = {
 };
 export type MappedIdentity = { scope: Scope; identity: EconomicIdentity; targetRecordId: Id; prerequisites: TypedPrerequisite[] };
 export type ExistingRecordRef = { identity: EconomicIdentity; targetRecordId: Id; sourceEventId: Id; sourceRecordVersion: number };
-type DeliveryResult =
-  | { disposition: 'held'; event: EventRef | null; holdIndexes: number[]; mapped: MappedIdentity | null; groupIndex: number | null }
-  | { disposition: 'semantic_observed'; event: EventRef; scope: Scope };
 export type InputClassification = { inputIndex: number } & (
-  | DeliveryResult
+  | { disposition: 'held'; event: EventRef | null; holdIndexes: number[]; mapped: MappedIdentity | null; groupIndex: number | null }
+  | { disposition: 'semantic_observed'; event: EventRef; scope: Scope }
   | { disposition: 'financial_new'; event: EventRef; mapped: MappedIdentity; groupIndex: number; planIndex: number; operationIndex: number }
   | { disposition: 'financial_replay'; event: EventRef; mapped: MappedIdentity; groupIndex: number; existing: ExistingRecordRef }
   | { disposition: 'financial_coalesced'; event: EventRef; mapped: MappedIdentity; groupIndex: number; producerInputIndex: number }
@@ -82,7 +78,7 @@ function compareEvents(a: SourceEvent, b: SourceEvent) {
 }
 
 function materialize(
-  artifact: CompiledArtifact, profile: CustomerProfile, event: SourceEvent,
+  artifact: CompiledArtifact, profile: CustomerProfile, event: SourceEvent, inputIndex: number,
 ): Candidate | null {
   const { normalizedPlan } = artifact;
   const contract = normalizedPlan.sourceContracts.find(value => value.resource === event.resource);
@@ -139,7 +135,7 @@ function materialize(
     operation.data.op === 'ensure_billing_configuration') {
     throw new MappingError('MAPPING_VALUE', 'Mapped record is invalid', '/payload');
   }
-  return { event, operation: operation.data, lineage: lineage.sort((a, b) => compare(a.targetField, b.targetField)) };
+  return { inputIndex, event, operation: operation.data, lineage: lineage.sort((a, b) => compare(a.targetField, b.targetField)) };
 }
 
 function resultPlan(
@@ -155,37 +151,40 @@ function resultPlan(
   return { ...plan, hash: hashPlan(plan) };
 }
 
-type Prerequisite = { targetId: string; sourceId: string };
+type Prerequisite = Pick<TypedPrerequisite, 'relation' | 'identity'> & { targetId: Id; sourceId: Id };
 
 function prerequisites(record: FinancialRecord): Prerequisite[] {
-  if (record.kind === 'allocation') {
-    return [
-      { targetId: fundingIdFor(record), sourceId: record.fundingRecordId },
-      { targetId: invoiceIdFor(record), sourceId: record.invoiceRecordId },
-    ];
+  function reference(relation: TypedPrerequisite['relation'], kind: EconomicIdentity['kind'], recordId: Id): Prerequisite {
+    const identity = { ...record.identity, kind, recordId };
+    return { relation, identity, targetId: targetRecordId(identity), sourceId: recordId };
   }
-  if (record.kind === 'reversal') {
-    return [{
-      targetId: referenceId(record, record.reversedKind, record.reversedRecordId),
-      sourceId: record.reversedRecordId,
-    }];
-  }
-  return [];
-}
-
-function typedPrerequisites(record: FinancialRecord) {
-  const reference = (relation: TypedPrerequisite['relation'], kind: EconomicIdentity['kind'], recordId: string) => {
-    const identity: EconomicIdentity = { ...record.identity, kind, recordId };
-    return { relation, identity, targetId: targetRecordId(identity) };
-  };
   if (record.kind === 'allocation') {
     return [
       reference('allocation_funding', record.fundingKind, record.fundingRecordId),
       reference('allocation_invoice', 'invoice', record.invoiceRecordId),
     ];
   }
-  if (record.kind === 'reversal') return [reference('reversal_original', record.reversedKind, record.reversedRecordId)];
+  if (record.kind === 'reversal') {
+    return [reference('reversal_original', record.reversedKind, record.reversedRecordId)];
+  }
   return [];
+}
+
+function mappedIdentity(
+  record: FinancialRecord, persisted: ReadonlyMap<Id, FinancialRecord>, providers: ReadonlyMap<Id, number[]>,
+): MappedIdentity {
+  const scope = record.scope;
+  const requirements = prerequisites(record).map(({ relation, identity, targetId }): TypedPrerequisite => {
+    const providerInputIndexes = providers.get(targetId);
+    const presence: TypedPrerequisite['presence'] = persisted.has(targetId) ? { kind: 'target' }
+      : providerInputIndexes ? { kind: 'candidate', providerInputIndexes }
+      : { kind: 'missing' };
+    return { relation, scope, identity, targetRecordId: targetId, presence };
+  });
+  return {
+    scope, identity: record.identity, targetRecordId: record.id,
+    prerequisites: requirements.sort((a, b) => compare(a.relation, b.relation) || compare(canonicalJson(a.identity), canonicalJson(b.identity))),
+  };
 }
 
 function dependencyGroups(candidates: Candidate[], existing: ReadonlyMap<string, FinancialRecord>): Candidate[][] {
@@ -288,46 +287,46 @@ function validateGroup(
 }
 
 type Occurrence =
-  | { index: number; kind: 'envelope'; holdIndex: number }
-  | { index: number; kind: 'hash'; event: SourceEvent; holdIndex?: number }
-  | { index: number; kind: 'valid'; event: SourceEvent; key: string };
+  | { kind: 'held'; holdIndex: number }
+  | { kind: 'valid'; event: SourceEvent; key: string };
+
+const deliveryKey = (event: SourceEvent) => event.sourceRef + '/' + event.id;
 
 function parseEvents(inputs: SourceEvent[]) {
   const eventByDelivery = new Map<string, SourceEvent>();
   const seen = new Map<string, SourceEvent>();
   const conflicts = new Map<string, SourceEvent>();
   const holds: Hold[] = [];
-  const invalid: Extract<Occurrence, { kind: 'hash' }>[] = [];
+  const invalid: { event: SourceEvent; index: number }[] = [];
   const occurrences: Occurrence[] = [];
   const firstIndex = new Map<string, number>();
-  inputs.forEach((input, index) => {
+  let inputIndex = 0;
+  for (const input of inputs) {
+    const index = inputIndex++;
     try {
       canonicalJson(input);
       const event = SourceEventSchema.parse(input);
-      const key = event.sourceRef + '/' + event.id;
+      const key = deliveryKey(event);
       const first = seen.get(key);
       if (first && first.contentHash !== event.contentHash) conflicts.set(key, first);
       seen.set(key, event);
       if (hashEvent(event) !== event.contentHash) {
-        const occurrence = { index, kind: 'hash' as const, event };
-        invalid.push(occurrence);
-        occurrences.push(occurrence);
-        return;
+        invalid.push({ event, index });
+        continue;
       }
       eventByDelivery.set(key, event);
       if (!firstIndex.has(key)) firstIndex.set(key, index);
-      occurrences.push({ index, kind: 'valid', event, key });
+      occurrences[index] = { kind: 'valid', event, key };
     } catch {
-      occurrences.push({ index, kind: 'envelope', holdIndex: holds.length });
+      occurrences[index] = { kind: 'held', holdIndex: holds.length };
       holds.push(hold([], 'SOURCE_SCHEMA', 'Invalid source event envelope'));
     }
-  });
-  for (const occurrence of invalid.sort((a, b) => compareEvents(a.event, b.event))) {
-    const { event } = occurrence;
-    const key = event.sourceRef + '/' + event.id;
+  }
+  for (const { event, index } of invalid.sort((a, b) => compareEvents(a.event, b.event))) {
+    const key = deliveryKey(event);
     if (eventByDelivery.has(key)) conflicts.set(key, event);
     else {
-      occurrence.holdIndex = holds.length;
+      occurrences[index] = { kind: 'held', holdIndex: holds.length };
       holds.push(hold([event], 'SOURCE_HASH_CONFLICT', 'Event content hash differs'));
     }
   }
@@ -346,7 +345,7 @@ function bindingIsValid(artifact: CompiledArtifact, profile: CustomerProfile) {
     !profileDiagnostics([profile], artifact.sourceRef).length && !executableDiagnostics(normalized, [profile]).length;
 }
 
-function evaluate(
+function evaluateBatch(
   artifactInput: CompiledArtifact, profileInput: CustomerProfile, inputs: SourceEvent[], targetInput: TargetState,
 ): BatchClassificationV1 {
   const blocked = (
@@ -388,19 +387,17 @@ function evaluate(
   const sameCompany = (event: SourceEvent) =>
     event.sourceRef === profile.sourceRef && event.rawIdentity.companyId === profile.scope.companyId;
   const sourceEvents = events.filter(sameCompany);
-  const unscoped = sourceEvents.filter(event =>
-    !event.rawIdentity.sellerEntityId || event.kind === 'semantic_change' && !event.rawIdentity.sourceAccountId,
-  );
+  const missingGoverningIdentity = (event: SourceEvent) =>
+    !event.rawIdentity.sellerEntityId || event.kind === 'semantic_change' && !event.rawIdentity.sourceAccountId;
+  const unscoped = sourceEvents.filter(missingGoverningIdentity);
   if (unscoped.length) {
     const code = unscoped.some(event => event.kind === 'semantic_change') ? 'SEMANTIC_VERSION' : 'IDENTITY_SCOPE';
-    const causing = (predicate: (event: SourceEvent) => boolean) => occurrences.flatMap(occurrence =>
-      occurrence.kind === 'valid' && sameCompany(occurrence.event) && predicate(occurrence.event) ? [occurrence.index] : []);
-    const sourceBlockers: SourceBlocker[] = [];
-    const identity = causing(event => !event.rawIdentity.sellerEntityId);
-    const semantic = causing(event => event.kind === 'semantic_change' && !event.rawIdentity.sourceAccountId);
-    if (identity.length) sourceBlockers.push({ sourceRef: profile.sourceRef, code: 'IDENTITY_SCOPE', causingInputIndexes: identity });
-    if (semantic.length) sourceBlockers.push({ sourceRef: profile.sourceRef, code: 'SEMANTIC_VERSION', causingInputIndexes: semantic });
-    return blocked('source_guard', code, 'Unscoped identity or semantic revision pauses source application', sourceEvents, undefined, sourceBlockers);
+    const causingInputIndexes = occurrences.flatMap((occurrence, index) =>
+      occurrence.kind === 'valid' && sameCompany(occurrence.event) && missingGoverningIdentity(occurrence.event) ? [index] : [],
+    );
+    return blocked('source_guard', code, 'Unscoped identity or semantic revision pauses source application', sourceEvents, undefined, [{
+      sourceRef: profile.sourceRef, code, causingInputIndexes,
+    }]);
   }
 
   const ownSeller = (event: SourceEvent) => sameCompany(event) && event.rawIdentity.sellerEntityId === profile.scope.sellerEntityId;
@@ -414,162 +411,145 @@ function evaluate(
   const priorDeliveries = new Map([...target.records.values()].map(record =>
     [record.identity.sourceRef + '/' + record.sourceEventId, record.id],
   ));
-  const deliveryKey = (event: SourceEvent) => event.sourceRef + '/' + event.id;
-  const results = new Map<string, DeliveryResult>();
-  const candidateKeys = new Map<Candidate, string>();
-  const heldBy = (event: SourceEvent, next: Hold) => {
-    results.set(deliveryKey(event), { disposition: 'held', event: eventRef(event), holdIndexes: [holds.length], mapped: null, groupIndex: null });
+  const representatives: InputClassification[] = [];
+  const heldBy = (inputIndex: number, event: SourceEvent, next: Hold) => {
+    representatives[inputIndex] = {
+      inputIndex, disposition: 'held', event: eventRef(event), holdIndexes: [holds.length], mapped: null, groupIndex: null,
+    };
     holds.push(next);
   };
   for (const event of events) {
+    const key = deliveryKey(event);
+    const inputIndex = firstIndex.get(key)!;
     if (!ownSeller(event)) {
-      heldBy(event, hold([event], 'IDENTITY_SCOPE', 'Source, company or seller is outside the reviewed profile'));
+      heldBy(inputIndex, event, hold([event], 'IDENTITY_SCOPE', 'Source, company or seller is outside the reviewed profile'));
     } else if (!ownAccount(event)) {
-      heldBy(event, hold([event], 'UNKNOWN_ACCOUNT', 'Source account has no approved identity in this profile'));
+      heldBy(inputIndex, event, hold([event], 'UNKNOWN_ACCOUNT', 'Source account has no approved identity in this profile'));
     } else if (event.semanticVersion !== profile.semanticVersion || changedSemantics.has(event.rawIdentity.sourceAccountId)) {
-      heldBy(event, hold([event], 'SEMANTIC_VERSION', 'Event semantic revision is not reviewed', profile.scope));
+      heldBy(inputIndex, event, hold([event], 'SEMANTIC_VERSION', 'Event semantic revision is not reviewed', profile.scope));
     } else {
       try {
-        const mapped = materialize(artifact, profile, event);
+        const mapped = materialize(artifact, profile, event, inputIndex);
         if (!mapped) {
-          results.set(deliveryKey(event), { disposition: 'semantic_observed', event: eventRef(event), scope: profile.scope });
+          representatives[inputIndex] = { inputIndex, disposition: 'semantic_observed', event: eventRef(event), scope: profile.scope };
           continue;
         }
-        const priorId = priorDeliveries.get(event.sourceRef + '/' + event.id);
+        const priorId = priorDeliveries.get(key);
         if (priorId && priorId !== mapped.operation.record.id) {
           return blocked('delivery_conflict', 'DELIVERY_CONFLICT', 'Delivery identity conflicts with an existing target record', [event], profile.scope);
         }
         candidates.push(mapped);
-        candidateKeys.set(mapped, deliveryKey(event));
       } catch (error) {
         if (!(error instanceof MappingError)) throw error;
-        heldBy(event, hold([event], error.code, error.message, profile.scope, [], [error.path]));
+        heldBy(inputIndex, event, hold([event], error.code, error.message, profile.scope, [], [error.path]));
       }
     }
   }
 
   const accepted: SourceEvent[] = [];
   const inserted: Candidate[] = [];
-  const indexOf = (candidate: Candidate) => firstIndex.get(candidateKeys.get(candidate)!)!;
-  const providers = new Map<string, number[]>();
-  for (const candidate of candidates) {
-    const list = providers.get(candidate.operation.record.id) ?? [];
-    list.push(indexOf(candidate));
-    providers.set(candidate.operation.record.id, list);
-  }
-  const mappedFor = (candidate: Candidate): MappedIdentity => {
-    const record = candidate.operation.record;
-    return {
-      scope: profile.scope, identity: record.identity, targetRecordId: record.id,
-      prerequisites: typedPrerequisites(record).map(requirement => ({
-        relation: requirement.relation, scope: profile.scope, identity: requirement.identity,
-        targetRecordId: requirement.targetId,
-        presence: target.records.has(requirement.targetId) ? { kind: 'target' as const }
-          : providers.has(requirement.targetId)
-            ? { kind: 'candidate' as const, providerInputIndexes: [...new Set(providers.get(requirement.targetId)!)].sort((a, b) => a - b) }
-            : { kind: 'missing' as const },
-      })).sort((a, b) => compare(a.relation, b.relation) || compare(canonicalJson(a.identity), canonicalJson(b.identity))),
-    };
-  };
-  const groups = dependencyGroups(candidates, target.records);
-  const groupDetails: DependencyGroupClassification[] = [];
-  const groupResults: GroupResult[] = [];
-  groups.forEach((group, groupIndex) => {
+  const groups = dependencyGroups(candidates, target.records).map(group => {
     const result = validateGroup(group, target);
-    groupResults.push(result);
-    const inputIndexes = group.map(indexOf).sort((a, b) => a - b);
-    if (!result.ok) {
-      const holdIndex = holds.length;
+    const holdIndexes: number[] = [];
+    if (result.ok) {
+      inserted.push(...result.inserted);
+      accepted.push(...group.map(candidate => candidate.event));
+    } else {
+      holdIndexes.push(holds.length);
       holds.push(result.hold);
-      groupDetails.push({ inputIndexes, disposition: 'held', holdIndexes: [holdIndex] });
-      for (const candidate of group) {
-        results.set(candidateKeys.get(candidate)!, {
-          disposition: 'held', event: eventRef(candidate.event), holdIndexes: [holdIndex],
-          mapped: mappedFor(candidate), groupIndex,
-        });
-      }
-      return;
     }
-    groupDetails.push({ inputIndexes, disposition: 'accepted', holdIndexes: [] });
-    inserted.push(...result.inserted);
-    accepted.push(...group.map(candidate => candidate.event));
+    return { group, result, holdIndexes };
   });
-  const finish = (outcome: PlanOutcome, planned: Candidate[]): BatchClassificationV1 => {
-    const items: InputClassification[] = occurrences.map(occurrence => {
-      if (occurrence.kind === 'envelope') {
-        return { inputIndex: occurrence.index, disposition: 'held', event: null, holdIndexes: [occurrence.holdIndex], mapped: null, groupIndex: null };
+
+  let plans: MutationPlan[] = [];
+  if (inserted.length) {
+    inserted.sort((left, right) =>
+      orderRank[left.operation.op] - orderRank[right.operation.op] || compareEvents(left.event, right.event),
+    );
+    try {
+      plans = [resultPlan(artifact, profile, target.state, inserted, accepted)];
+    } catch (error) {
+      if (!(error instanceof FinanceError)) throw error;
+      const final = hold(accepted, error.code, error.message, profile.scope);
+      return {
+        schemaVersion: '1', outcome: { plans: [], holds: [...holds, final] },
+        details: { kind: 'not_classified', reason: 'plan_invalid', holdIndexes: [holds.length], sourceBlockers: [] },
+      };
+    }
+  }
+
+  const operationIndexes = new Map(inserted.map((candidate, operationIndex) => [candidate, operationIndex]));
+  const providers = new Map<Id, number[]>();
+  for (const { inputIndex, operation } of candidates) {
+    const indexes = providers.get(operation.record.id) ?? [];
+    indexes.push(inputIndex);
+    providers.set(operation.record.id, indexes);
+  }
+  for (const indexes of providers.values()) indexes.sort((a, b) => a - b);
+
+  const groupDetails = groups.map(({ group, result, holdIndexes }, groupIndex): DependencyGroupClassification => {
+    for (const candidate of group) {
+      const { inputIndex, event, operation } = candidate;
+      const trace = { inputIndex, event: eventRef(event), mapped: mappedIdentity(operation.record, target.records, providers), groupIndex };
+      if (!result.ok) {
+        representatives[inputIndex] = { ...trace, disposition: 'held', holdIndexes };
+        continue;
       }
-      if (occurrence.kind === 'hash') {
-        return { inputIndex: occurrence.index, disposition: 'held', event: null, holdIndexes: [occurrence.holdIndex!], mapped: null, groupIndex: null };
-      }
-      const primary = firstIndex.get(occurrence.key)!;
-      if (primary !== occurrence.index) {
-        return { inputIndex: occurrence.index, disposition: 'delivery_repeat', event: eventRef(occurrence.event), primaryInputIndex: primary };
-      }
-      const result = results.get(occurrence.key);
-      if (result) return { inputIndex: occurrence.index, ...result } as InputClassification;
-      const candidate = candidates.find(value => candidateKeys.get(value) === occurrence.key)!;
-      const groupIndex = groups.findIndex(group => group.includes(candidate));
-      const groupResult = groupResults[groupIndex]!;
-      if (!groupResult.ok) throw new Error('Held group candidate was not classified');
-      const mapped = mappedFor(candidate);
-      const operationIndex = planned.indexOf(candidate);
-      if (operationIndex >= 0) {
-        return { inputIndex: occurrence.index, disposition: 'financial_new', event: eventRef(candidate.event), mapped, groupIndex, planIndex: 0, operationIndex };
-      }
-      const existing = groupResult.replays.get(candidate);
+      const existing = result.replays.get(candidate);
+      const producer = result.coalesced.get(candidate);
       if (existing) {
-        return {
-          inputIndex: occurrence.index, disposition: 'financial_replay', event: eventRef(candidate.event), mapped, groupIndex,
+        representatives[inputIndex] = {
+          ...trace, disposition: 'financial_replay',
           existing: {
             identity: existing.identity, targetRecordId: existing.id, sourceEventId: existing.sourceEventId,
             sourceRecordVersion: existing.sourceRecordVersion,
           },
         };
+      } else if (producer) {
+        representatives[inputIndex] = { ...trace, disposition: 'financial_coalesced', producerInputIndex: producer.inputIndex };
+      } else {
+        representatives[inputIndex] = {
+          ...trace, disposition: 'financial_new', planIndex: 0, operationIndex: operationIndexes.get(candidate)!,
+        };
       }
-      const producer = groupResult.coalesced.get(candidate)!;
-      return {
-        inputIndex: occurrence.index, disposition: 'financial_coalesced', event: eventRef(candidate.event), mapped, groupIndex,
-        producerInputIndex: indexOf(producer),
-      };
-    });
+    }
     return {
-      schemaVersion: '1', outcome,
-      details: {
-        kind: 'classified',
-        binding: {
-          artifactHash: artifact.hash, profileHash: profile.hash, scope: target.state.scope,
-          expectedTargetVersion: target.state.version, targetSnapshotHash: hashTargetSnapshot(target.state), asOf: target.state.asOf,
-        },
-        items, groups: groupDetails, sourceBlockers: [],
+      inputIndexes: group.map(candidate => candidate.inputIndex).sort((a, b) => a - b),
+      disposition: result.ok ? 'accepted' : 'held', holdIndexes,
+    };
+  });
+
+  const items = occurrences.map((occurrence, inputIndex): InputClassification => {
+    if (occurrence.kind === 'held') {
+      return { inputIndex, disposition: 'held', event: null, holdIndexes: [occurrence.holdIndex], mapped: null, groupIndex: null };
+    }
+    const primaryInputIndex = firstIndex.get(occurrence.key)!;
+    if (primaryInputIndex === inputIndex) return representatives[inputIndex];
+    return { inputIndex, disposition: 'delivery_repeat', event: eventRef(occurrence.event), primaryInputIndex };
+  });
+
+  return {
+    schemaVersion: '1', outcome: { plans, holds },
+    details: {
+      kind: 'classified',
+      binding: {
+        artifactHash: artifact.hash, profileHash: profile.hash, scope: target.state.scope,
+        expectedTargetVersion: target.state.version, targetSnapshotHash: hashTargetSnapshot(target.state), asOf: target.state.asOf,
       },
-    };
+      items, groups: groupDetails, sourceBlockers: [],
+    },
   };
-  if (!inserted.length) return finish({ plans: [], holds }, []);
-  inserted.sort((left, right) =>
-    orderRank[left.operation.op] - orderRank[right.operation.op] || compareEvents(left.event, right.event),
-  );
-  try {
-    return finish({ plans: [resultPlan(artifact, profile, target.state, inserted, accepted)], holds }, inserted);
-  } catch (error) {
-    if (!(error instanceof FinanceError)) throw error;
-    const final = hold(accepted, error.code, error.message, profile.scope);
-    return {
-      schemaVersion: '1', outcome: { plans: [], holds: [...holds, final] },
-      details: { kind: 'not_classified', reason: 'plan_invalid', holdIndexes: [holds.length], sourceBlockers: [] },
-    };
-  }
 }
 
 export function planBatch(
   artifact: CompiledArtifact, profile: CustomerProfile, inputs: SourceEvent[], target: TargetState,
 ): PlanOutcome {
-  return evaluate(artifact, profile, inputs, target).outcome;
+  return evaluateBatch(artifact, profile, inputs, target).outcome;
 }
 
 /** Same evaluation as planBatch plus a per-input trace; never a receipt or authority. */
 export function classifyBatch(
   artifact: CompiledArtifact, profile: CustomerProfile, inputs: SourceEvent[], target: TargetState,
 ): BatchClassificationV1 {
-  return evaluate(artifact, profile, inputs, target);
+  return evaluateBatch(artifact, profile, inputs, target);
 }

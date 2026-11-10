@@ -30,6 +30,7 @@ test('every local import of every pinned source is pinned, including package exp
 });
 
 test('compiler, finance, contracts, evaluator and lock mutations each change the financial build pin', async () => {
+  expect(financialBuildSources).toContain('packages/compiler/src/plan-batch.ts');
   const directory = await mkdtemp(join(await realpath(tmpdir()), 'financial-build-'));
   try {
     const root = pathToFileURL(directory + '/');

@@ -39,6 +39,7 @@ const families = [
   ['packages/evaluator/src/bootstrap-comparison.ts', false],
   ['packages/evaluator/src/bootstrap-reference.ts', false],
   ['packages/compiler/src/plan-bootstrap.ts', true],
+  ['packages/compiler/src/plan-batch.ts', true],
   ['packages/parent/src/bootstrap.ts', true],
   ['packages/finance/src/balance.ts', true],
   ['packages/contracts/src/canonical.ts', true],
@@ -57,6 +58,8 @@ const families = [
 ] as const;
 
 test('hashes actual source bytes from every owned family', async () => {
+  expect(bootstrapBuildSources.subject).toContain('packages/compiler/src/plan-batch.ts');
+  expect(bootstrapBuildSources.evaluator).toContain('packages/compiler/src/plan-batch.ts');
   const temporary = await mkdtemp(join(tmpdir(), 'eapr-bootstrap-build-'));
   const root = pathToFileURL(temporary + '/');
   try {
