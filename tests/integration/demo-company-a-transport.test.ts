@@ -1,6 +1,6 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { z } from 'zod';
 import { readStoredActivation } from '@eapr/parent/activation-store';
 import { readSyncReceipt } from '@eapr/parent/sync-store';
@@ -10,7 +10,7 @@ import type { DemoRoleSetup } from '../fixtures/demo-company-a-process.js';
 import { assertWorkerSourcesModelFree, modelCredentialEnvNames, workerProductionImportGraph, workerSourceFiles } from '../fixtures/v5-ai-off.js';
 import type { Pool } from 'pg';
 import { expect, test } from 'vitest';
-import { IdSchema, ReceiptResponseSchema, SafeIntegerSchema, strict } from '@eapr/contracts';
+import { DemoCandidatesResponseSchema, IdSchema, RawSourceEventSchema, ReceiptResponseSchema, SafeIntegerSchema, hashSpec, strict } from '@eapr/contracts';
 import { createRuntimeDb } from '@eapr/storage/runtime-db';
 import { composeDemoSource } from '../../apps/control/src/demo-source-composition.js';
 import { launchControl } from '../../apps/control/src/server.js';
@@ -20,6 +20,7 @@ import { composeWorkerDemoSync } from '../../apps/worker/src/demo-sync-compositi
 import { createParentReads } from '../../apps/worker/src/parent-reads.js';
 import { launchWorker } from '../../apps/worker/src/server.js';
 import { companyADemo as demo } from '../../packages/contracts/src/demo-company-a.js';
+import { companyAGate, mountedCase } from '../../scripts/verify-demo-company-a-evidence.js';
 import { migrate } from '../../scripts/migrate.js';
 import { dropTest, localPort, provisionTest } from '../../scripts/native-db.js';
 import { testNamespace } from '../fixtures/harness.js';
@@ -39,9 +40,9 @@ function post(origin: string, path: string, token?: string, body = '{}', extra: 
   });
 }
 
-async function fixture(run: (data: SyncApplyFixture) => Promise<void>) {
+async function fixture<T>(run: (data: SyncApplyFixture) => Promise<T>) {
   const data = await createSyncApplyFixture(undefined, undefined, { seed: demo.seed });
-  try { await run(data); } finally { await data.close(); }
+  try { return await run(data); } finally { await data.close(); }
 }
 
 async function controlServer(data: SyncApplyFixture, enabled = true) {
@@ -128,7 +129,8 @@ test('private HTTP applies the fixed source events once and recovers a lost work
         '/internal/sources/legacy-a/semantics',
       ]));
       expect(await readParent(data, demo.scenario.observedAt)).toMatchObject({ balanceCents: 50000, version: before.version + 1 });
-      expect(await readParent(data, demo.cutover)).toMatchObject({ balanceCents: 80000 });
+      const cutover = await readParent(data, demo.cutover);
+      expect(cutover).toMatchObject({ balanceCents: 80000 });
     } finally { await worker.app.close(); }
 
     const reconstructed = await workerServer(data, control.origin);
@@ -341,7 +343,7 @@ test('actual worker child rejects a leaked model credential before service readi
   } finally { await stopRole(child); }
 });
 
-test('mounted Company A CLI applies with bounded worker HTTP isolation and recovers after process restart', () => fixture(async data => {
+async function observeMountedCompanyA(data: SyncApplyFixture, collectObservation: boolean) {
   const { processSetup: setup, stored } = data;
   const controlPort = localPort('EAPR_CONTROL_PORT', 3241);
   const workerPort = localPort('EAPR_WORKER_PORT', 3242);
@@ -415,7 +417,8 @@ test('mounted Company A CLI applies with bounded worker HTTP isolation and recov
     try {
       const retry = await executeDemoCli(controlPort, workerPort);
       expect(retry.code, retry.stderr).toBe(0);
-      expect(cliReceiptSchema.parse(JSON.parse(retry.stdout))).toEqual({ ...applied, replayed: true });
+      const replay = cliReceiptSchema.parse(JSON.parse(retry.stdout));
+      expect(replay).toEqual({ ...applied, replayed: true });
       expect(await inspectWorker(reconstructed)).toEqual({
         mountedHttpPathProtected: true, sourceRead: false, semanticsRead: false, interruptedBeforeApply: false,
       });
@@ -434,7 +437,8 @@ test('mounted Company A CLI applies with bounded worker HTTP isolation and recov
         .toMatchObject([{ amountCents: 30000 }]);
       expect(current.records.allocations.filter(allocation => allocation.sourceEventId === demo.eventIds[1]))
         .toMatchObject([{ amountCents: 30000 }]);
-      expect(await readParent(data, demo.cutover)).toMatchObject({ balanceCents: 80000 });
+      const cutover = await readParent(data, demo.cutover);
+      expect(cutover).toMatchObject({ balanceCents: 80000 });
       const approvedHash = stored.approvedTarget.snapshotHash;
       const historical = await createParentReads(data.db, syncApplyClock, data.scopeReader)
         .readParent(demo.scope.accountId, { asOf: demo.cutover, snapshotHash: approvedHash });
@@ -442,6 +446,111 @@ test('mounted Company A CLI applies with bounded worker HTTP isolation and recov
       const original = await withTransaction(data.db, client => readStoredActivation(client, demo.scope));
       expect(original?.receipt).toEqual(stored.receipt);
       expect(original?.approvedTarget).toEqual(stored.approvedTarget);
+      if (!collectObservation) return;
+      const { activation, bundle, receipt: initial } = stored;
+      const { artifact, manifest, reviewPackage } = bundle;
+      const profile = bundle.profiles.find(profile => profile.hash === activation.profileHash);
+      expect(profile).toMatchObject({ id: demo.profileId, version: demo.profileVersion, parentCustomerId: demo.parentCustomerId });
+      expect(activation).toMatchObject({
+        id: data.identity.activationId, scope: demo.scope, epoch: 1, status: 'active',
+        artifactHash: artifact.hash, profileHash: reviewPackage.profileHash, manifestHash: manifest.hash,
+      });
+      expect(reviewPackage.manifestHash).toBe(manifest.hash);
+      expect(initial).toMatchObject({
+        scope: demo.scope, activationId: activation.id, epoch: activation.epoch,
+        artifactHash: activation.artifactHash, afterBalanceCents: before.balanceCents,
+      });
+      expect(original?.activation).toEqual(activation);
+      expect(savedReceipt).toMatchObject({ scope: demo.scope, epoch: activation.epoch,
+        beforeBalanceCents: before.balanceCents, afterBalanceCents: current.balanceCents });
+      expect(savedReceipt!.id).not.toBe(initial.id);
+
+      const events = await data.dependencies.db.query<{ event: unknown }>(
+        'SELECT event FROM source_events WHERE source_ref = $1 AND event_id = ANY($2) ORDER BY sequence',
+        [demo.sourceRef, demo.eventIds],
+      );
+      const source = events.rows.map(row => RawSourceEventSchema.parse(row.event));
+      expect(source.map(({ id, recordId, effectiveAt, observedAt }) => ({ id, recordId, effectiveAt, observedAt })))
+        .toEqual(demo.eventIds.map((id, i) => ({
+          id, recordId: demo.recordIds[i], effectiveAt: demo.scenario.observedAt, observedAt: demo.scenario.observedAt,
+        })));
+      const payment = current.records.payments.find(record => record.sourceEventId === demo.eventIds[0])!;
+      const allocation = current.records.allocations.find(record => record.sourceEventId === demo.eventIds[1])!;
+      expect(allocation.fundingRecordId).toBe(payment.id);
+      expect(savedReceipt!.targetRecordIds).toEqual(expect.arrayContaining([payment.id, allocation.id]));
+      expect(savedReceipt!.targetRecordIds).toHaveLength(2);
+
+      const controlOrigin = 'http://127.0.0.1:' + controlPort;
+      const webOrigin = 'http://127.0.0.1:' + input.webPort;
+      const opened = await post(controlOrigin, '/api/local-session', undefined, '{}', { origin: webOrigin, 'x-eapr-local-ui': '1' });
+      expect(opened.status).toBe(200);
+      await opened.body?.cancel();
+      const cookie = opened.headers.getSetCookie()[0]?.split(';')[0];
+      expect(cookie).toBeTruthy();
+      const catalogResponse = await fetch(controlOrigin + '/api/demo/candidates', {
+        headers: { cookie: cookie! }, redirect: 'error', signal: AbortSignal.timeout(10_000),
+      });
+      expect(catalogResponse.status).toBe(200);
+      const catalog = DemoCandidatesResponseSchema.parse(await catalogResponse.json());
+      const candidate = catalog.candidates.find(item => item.id === demo.candidateId);
+      expect(catalog).toMatchObject({ mode: 'development-fixture', targetMode: 'persisted-parent' });
+      expect(candidate).toMatchObject({
+        scope: activation.scope, sourceRef: manifest.sourceRef, snapshotId: bundle.snapshot.id,
+        request: { spec: { id: demo.connectorId, version: demo.connectorVersion }, profiles: [profile] },
+      });
+      const spec = candidate!.request.spec;
+      expect(hashSpec(spec)).toBe(artifact.specHash);
+
+      return {
+        schemaVersion: 1, gate: companyAGate, test: mountedCase,
+        constructionMode: catalog.mode, targetMode: catalog.targetMode, seed: demo.seed,
+        scope: activation.scope, parentCustomerId: profile!.parentCustomerId, sourceRef: manifest.sourceRef,
+        manifestId: manifest.id, manifestHash: activation.manifestHash, artifactHash: activation.artifactHash,
+        profileHash: activation.profileHash, profileId: profile!.id, profileVersion: profile!.version,
+        candidateId: candidate!.id, specId: spec.id, specVersion: spec.version,
+        activation: {
+          activationId: activation.id, initialReceiptId: initial.id, epoch: activation.epoch,
+          initialAfterBalanceCents: initial.afterBalanceCents,
+        },
+        sync: {
+          receiptId: savedReceipt!.id, activationId: savedReceipt!.activationId, epoch: savedReceipt!.epoch,
+          artifactHash: savedReceipt!.artifactHash, replayed: applied.replayed,
+          beforeBalanceCents: savedReceipt!.beforeBalanceCents, afterBalanceCents: savedReceipt!.afterBalanceCents,
+          replayReceiptId: replay.receiptId,
+        },
+        sourceEventIds: savedReceipt!.eventIds, paymentId: payment.identity.recordId, allocationId: allocation.identity.recordId,
+        amountCents: payment.amountCents, effectiveDate: source[0]!.effectiveAt.slice(0, 10), observedAt: source[0]!.observedAt,
+        parent: {
+          currentAsOf: current.asOf, currentBalanceCents: current.balanceCents, cutoverAsOf: cutover.asOf,
+          cutoverBalanceCents: cutover.balanceCents, beforeVersion: before.version, afterVersion: current.version,
+          approvedSnapshotHash: historical.snapshotHash,
+        },
+        assertions: {
+          baselineExcludesInjectedEvents: true, sameApproval: true, onePaymentAndAllocation: true,
+          approvedSnapshotUnchanged: true, receiptMatchesStoredParent: true, actualSupervisorMount: true, privateBoundary: true,
+        },
+      };
+
     } finally { await stopRole(reconstructed); }
   } finally { await stopRole(control); }
-}), 120_000);
+}
+
+test(mountedCase, async () => {
+  const path = process.env.EAPR_COMPANY_A_OBSERVATION;
+  const runToken = process.env.EAPR_COMPANY_A_RUN_TOKEN;
+  const collectObservation = path !== undefined || runToken !== undefined;
+  const observation = await fixture(data => observeMountedCompanyA(data, collectObservation));
+  if (!collectObservation) return;
+  expect(observation).toBeDefined();
+  expect(path).toBeTruthy();
+  expect(runToken).toMatch(/^[0-9a-f]{64}$/);
+  // The worker's isolation-ready handshake requires credential absence and forbidden-fetch controls.
+  // Its final IPC assertions require those credentials and the guard/trap to stay unchanged.
+  inspectMountedWorkerSources();
+  writeFileSync(path!, JSON.stringify({
+    ...observation, runToken,
+    runtimeIsolation: {
+      credentialsAbsent: true, modelFreeWorkerImports: true, mountedHttpPathProtected: true, positiveControlPassed: true,
+    },
+  }), { mode: 0o600, flag: 'wx' });
+}, 120_000);

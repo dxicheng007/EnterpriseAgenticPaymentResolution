@@ -1186,6 +1186,19 @@ if (requested === 'live') {
   await verifyV3();
 } else if (requested === 'V4') {
   await verifyV4();
+} else if (requested === 'demo-company-a-ai-off') {
+  if (process.argv.length !== 3) {
+    console.error('Usage: npm run verify:slice -- demo-company-a-ai-off');
+    process.exitCode = 1;
+  } else {
+    try {
+      const { verifyDemoCompanyA } = await import('./verify-demo-company-a.js');
+      await verifyDemoCompanyA(sourceIdentity());
+    } catch {
+      console.error('demo-company-a-ai-off verification failed (bounded fixture scope; full V5 not established)');
+      process.exitCode = 1;
+    }
+  }
 } else if (requested === 'V5') {
   await verifyV5();
 } else if (requested === 'V6') {
@@ -1196,7 +1209,7 @@ if (requested === 'live') {
   const required = Object.hasOwn(registry, requested) ? registry[requested as keyof typeof registry] : undefined;
   const missing = required?.filter(file => !existsSync(file));
   if (missing?.length) console.error('Mandatory test files unavailable: ' + missing.join(', '));
-  console.error(required ? requested + ' verification is unavailable in the foundation slice.' : 'Usage: npm run verify:slice -- <V0|V1|V2|V3|V4|V5|V6|V7>');
+  console.error(required ? requested + ' verification is unavailable in the foundation slice.' : 'Usage: npm run verify:slice -- <V0|V1|V2|V3|V4|V5|V6|V7|demo-company-a-ai-off>');
   process.exitCode = 1;
 } else {
   await verifyV0();
