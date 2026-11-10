@@ -17,6 +17,7 @@ import { migrationIdentities, readMigrationCatalog } from '../../../scripts/migr
 import { prepareVerificationPins } from '../../../scripts/prepare-verification.js';
 import { localPort } from '../../../scripts/native-db.js';
 import { createTestSystem, testNamespace } from '../../fixtures/harness.js';
+import { createReviewActivationMount } from './review-activation.js';
 import { browserVerificationFixtures, fixedProtectedRoot } from './verification-fixtures.js';
 
 async function fingerprintTree(path: string): Promise<string> {
@@ -29,14 +30,19 @@ async function fingerprintTree(path: string): Promise<string> {
 }
 
 export async function openLocalReview(
-  { verification = false }: { verification?: boolean | 'evidence-v2' } = {},
+  {
+    verification = false,
+    activation = false,
+  }: { verification?: boolean | 'evidence-v2'; activation?: boolean } = {},
 ) {
+  if (verification && activation) throw new Error('Browser harness cannot combine verification pins with activation');
   const root = await mkdtemp(join(await realpath(tmpdir()), 'eapr-c3-browser-'));
   const origin = 'http://127.0.0.1:' + localPort('EAPR_WEB_PORT', 5173);
   const visibleRoot = join(root, 'visible');
   const truthRoot = join(root, 'protected');
   const originalsRoot = join(root, 'originals');
   const evidenceV2 = verification === 'evidence-v2';
+  const reviewActivation = activation ? createReviewActivationMount(root, origin) : undefined;
   const fixtures = verification ? browserVerificationFixtures({
     root, originalTruthRoot: truthRoot, mode: 'evidence-v2',
   }) : undefined;
@@ -143,81 +149,90 @@ export async function openLocalReview(
     let serviceToken = '';
     system = await createTestSystem({
       modelMode: 'disabled',
-      dbNamespace: testNamespace('c3browser'),
-      workerPlugins: [async (app, services) => {
-        serviceToken = services.serviceToken;
-        await composeWorkerParentReads(registryRoot)(app, services);
-      }],
-      async controlPluginFactory({ db, clock }) {
-        const dependencies = { db, clock, store };
-        const { captures } = await loadDemo(dependencies, { visibleRoot, truthRoot });
-        const registry = createCandidateRegistry(db, registryRoot);
-        const parentReads = createParentReadClient('http://127.0.0.1:' + localPort('EAPR_WORKER_PORT', 3002), serviceToken, registryRoot);
-        const options = { webOrigin: origin, captures, registry, parentReads };
-        async function mountLocal(verification?: import('../../../apps/control/src/verification-composition.js').LocalVerificationOptions) {
-          const composition = await createLocalComposition(dependencies, { ...options, verification });
-          const { rows } = await db.query<{ artifact_hash: string; manifest_id: string }>(
-            'SELECT artifact_hash, manifest_id FROM artifact_captures ORDER BY manifest_id',
-          );
-          expect(rows).toHaveLength(captures.length);
-          await createRegisteredScopePublication({ registryRoot, candidates: registry }).publishRegisteredScopes(
-            await Promise.all(rows.map(async ({ artifact_hash, manifest_id }) => {
-              const candidate = await registry.getCandidate(artifact_hash, manifest_id);
-              expect(candidate.profiles).toHaveLength(1);
-              return { artifactHash: artifact_hash, manifestId: manifest_id, selectedProfileHash: candidate.profiles[0]!.hash };
-            })),
-          );
-          return composition.featurePlugins;
-        }
-        if (!fixtures) return mountLocal();
-        const sources = createSourceService(dependencies, localSourceCatalog);
-        const bindings = await Promise.all(captures.map(async ({ companyId, manifestId }) => {
-          const manifest = await readManifest(db, companyId, manifestId);
-          const snapshot = await sources.getSnapshot('snapshot:' + manifestId);
-          return { companyId, manifestId, sourceRef: manifest.sourceRef,
-            manifestHash: manifest.hash, snapshotHash: snapshot.contentHash };
-        }));
-        if (evidenceV2) originalFingerprints = await fingerprintInputs();
-        const pins = await fixtures.prepare(bindings,
-          truthRoot => prepareVerificationPins({ db, captures, truthRoot, store }));
-        if (evidenceV2) {
-          try {
-            for (const pin of pins) {
-              const filename = hashCanonical([pin.fixtureSetId, pin.fixtureSetVersion]) + '.json';
-              const path = fileURLToPath(new URL(filename, fixedProtectedRoot));
-              privateFiles.push(path);
-              blockedPinPaths.push('/.local/protected-evaluator/' + filename);
-              const bundle = JSON.parse(await readFile(path, 'utf8'));
-              for (const value of [pin.fixtureSetId, bundle.pin.hash, bundle.bundleHash, bundle.evidence.hash,
-                bundle.evidence.financialTruthHash, bundle.evidence.producer.hash, bundle.evidence.producer.producerTruthHash]) {
-                if (typeof value !== 'string' || !value) throw new Error('Invalid private pin probe input');
-                protectedValues.add(value);
+      dbNamespace: testNamespace(activation ? 'v3review' : 'c3browser'),
+      workerPlugins: reviewActivation
+        ? reviewActivation.workerPlugins
+        : [async (app, services) => {
+          serviceToken = services.serviceToken;
+          await composeWorkerParentReads(registryRoot)(app, services);
+        }],
+      controlPluginFactory: reviewActivation
+        ? reviewActivation.controlPlugins
+        : async ({ db, clock }) => {
+          const dependencies = { db, clock, store };
+          const { captures } = await loadDemo(dependencies, { visibleRoot, truthRoot });
+          const registry = createCandidateRegistry(db, registryRoot);
+          const parentReads = createParentReadClient('http://127.0.0.1:' + localPort('EAPR_WORKER_PORT', 3002), serviceToken, registryRoot);
+          const options = { webOrigin: origin, captures, registry, parentReads };
+          async function mountLocal(verification?: import('../../../apps/control/src/verification-composition.js').LocalVerificationOptions) {
+            const composition = await createLocalComposition(dependencies, { ...options, verification });
+            const { rows } = await db.query<{ artifact_hash: string; manifest_id: string }>(
+              'SELECT artifact_hash, manifest_id FROM artifact_captures ORDER BY manifest_id',
+            );
+            expect(rows).toHaveLength(captures.length);
+            await createRegisteredScopePublication({ registryRoot, candidates: registry }).publishRegisteredScopes(
+              await Promise.all(rows.map(async ({ artifact_hash, manifest_id }) => {
+                const candidate = await registry.getCandidate(artifact_hash, manifest_id);
+                expect(candidate.profiles).toHaveLength(1);
+                return { artifactHash: artifact_hash, manifestId: manifest_id, selectedProfileHash: candidate.profiles[0]!.hash };
+              })),
+            );
+            return composition.featurePlugins;
+          }
+          if (!fixtures) return mountLocal();
+          const sources = createSourceService(dependencies, localSourceCatalog);
+          const bindings = await Promise.all(captures.map(async ({ companyId, manifestId }) => {
+            const manifest = await readManifest(db, companyId, manifestId);
+            const snapshot = await sources.getSnapshot('snapshot:' + manifestId);
+            return { companyId, manifestId, sourceRef: manifest.sourceRef,
+              manifestHash: manifest.hash, snapshotHash: snapshot.contentHash };
+          }));
+          if (evidenceV2) originalFingerprints = await fingerprintInputs();
+          const pins = await fixtures.prepare(bindings,
+            truthRoot => prepareVerificationPins({ db, captures, truthRoot, store }));
+          if (evidenceV2) {
+            try {
+              for (const pin of pins) {
+                const filename = hashCanonical([pin.fixtureSetId, pin.fixtureSetVersion]) + '.json';
+                const path = fileURLToPath(new URL(filename, fixedProtectedRoot));
+                privateFiles.push(path);
+                blockedPinPaths.push('/.local/protected-evaluator/' + filename);
+                const bundle = JSON.parse(await readFile(path, 'utf8'));
+                for (const value of [pin.fixtureSetId, bundle.pin.hash, bundle.bundleHash, bundle.evidence.hash,
+                  bundle.evidence.financialTruthHash, bundle.evidence.producer.hash, bundle.evidence.producer.producerTruthHash]) {
+                  if (typeof value !== 'string' || !value) throw new Error('Invalid private pin probe input');
+                  protectedValues.add(value);
+                }
               }
-            }
-            for (const directory of [truthRoot, join(root, 'verification-truth')]) {
-              for (const company of ['a', 'b']) {
-                for (const kind of ['expected', 'evidence']) {
-                  const path = join(directory, kind + '-' + company + '.json');
-                  privateFiles.push(path);
-                  const input = JSON.parse(await readFile(path, 'utf8'));
-                  for (const value of [input.fixtureSetId, input.hash]) {
-                    if (typeof value !== 'string' || !value) throw new Error('Invalid private file probe input');
-                    protectedValues.add(value);
+              for (const directory of [truthRoot, join(root, 'verification-truth')]) {
+                for (const company of ['a', 'b']) {
+                  for (const kind of ['expected', 'evidence']) {
+                    const path = join(directory, kind + '-' + company + '.json');
+                    privateFiles.push(path);
+                    const input = JSON.parse(await readFile(path, 'utf8'));
+                    for (const value of [input.fixtureSetId, input.hash]) {
+                      if (typeof value !== 'string' || !value) throw new Error('Invalid private file probe input');
+                      protectedValues.add(value);
+                    }
                   }
                 }
               }
+            } catch {
+              throw new Error('Browser could not prepare private boundary probes');
             }
-          } catch {
-            throw new Error('Browser could not prepare private boundary probes');
           }
-        }
-        return mountLocal({
-          pins, registryRoot,
-          roots: { evidencePinRoot: fileURLToPath(fixedProtectedRoot), servedRoots: [visibleRoot, originalsRoot, registryRoot] },
-          expectedMigrations: migrationIdentities(readMigrationCatalog().control),
-        });
-      },
+          return mountLocal({
+            pins, registryRoot,
+            roots: { evidencePinRoot: fileURLToPath(fixedProtectedRoot), servedRoots: [visibleRoot, originalsRoot, registryRoot] },
+            expectedMigrations: migrationIdentities(readMigrationCatalog().control),
+          });
+        },
     });
+    if (reviewActivation) {
+      // Proofs finish during control composition; remount the worker with activation + parent reads.
+      await system.worker.stop();
+      await system.worker.start();
+    }
     web = await createServer({
       configFile: 'apps/web/vite.config.ts',
       // Suppress only the known file-denial diagnostics that log private paths.
@@ -228,7 +243,13 @@ export async function openLocalReview(
       }),
     });
     await web.listen();
-    return { origin, system, store, visibleRoot, close, assertPrivateBoundary };
+    return {
+      origin, system, store, visibleRoot, close, assertPrivateBoundary,
+      accounts: reviewActivation?.accounts,
+      forceStaleReview: reviewActivation
+        ? (accountId: string) => reviewActivation.forceStaleReview(system!.db.control, accountId)
+        : undefined,
+    };
   } catch (error) {
     await close();
     throw error;
@@ -254,7 +275,11 @@ export async function expectBrowserMutation(response: Response, origin: string, 
   }
 }
 
-export async function startReview(page: Page, origin: string, section: 'sources' | 'preview' | 'parent') {
+export async function startReview(
+  page: Page,
+  origin: string,
+  section: 'sources' | 'preview' | 'parent' | 'review',
+) {
   const bootstrap = apiResponse(page, '/api/local-session', 'POST');
   await page.goto(origin + '/#' + section);
   const session = await bootstrap;
@@ -266,4 +291,7 @@ export async function startReview(page: Page, origin: string, section: 'sources'
   await expect(page.getByText('Demo reviewer · demo-reviewer')).toBeVisible();
   await expect(page.getByRole('button', { name: /sign in|log in|sign up/i })).toHaveCount(0);
   await expect(page.getByLabel(/password|sign-in code/i)).toHaveCount(0);
+  if (section === 'review') {
+    await expect(page.getByRole('heading', { name: 'Customer review', exact: true })).toBeVisible();
+  }
 }
