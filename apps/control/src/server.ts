@@ -62,6 +62,19 @@ export function buildControl({ db, workerClient, clock, expectedMigrations, feat
              (activationPath.test(request.url) && control.hasRoute({ method: 'GET', url: '/api/accounts/:accountId/activation' })))) {
           return sendParentReadError(new ParentReadError(400), request, reply);
         }
+        const reviewPath = /^(?:https?:\/\/[^/?#]+)?\/api\/review\/[^/?#]+(?:\/(prepare|activate))?(?:\?|$)/;
+        const reviewMatch = reviewPath.exec(request.url);
+        if (reviewMatch) {
+          const action = reviewMatch[1];
+          const method = action ? 'POST' : 'GET';
+          const route = '/api/review/:accountId' + (action ? '/' + action : '');
+          if (request.method === method && control.hasRoute({ method, url: route })) {
+            return reply.code(400).header('Cache-Control', 'no-store').send(ApiErrorSchema.parse({
+              code: 'REVIEW_REQUEST_INVALID', message: 'Review request could not be completed.',
+              diagnostics: [], correlationId: request.id,
+            }));
+          }
+        }
         const statusCode = error.code === 'FST_ERR_BAD_URL' ? 400 : 414;
         return reply.code(statusCode).send({
           error: 'Bad Request', code: error.code, message: 'Request URL is invalid', statusCode,
