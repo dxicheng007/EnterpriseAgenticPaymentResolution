@@ -40,8 +40,19 @@ test('verification failures map owner-loss and attestation gaps to unavailable',
 });
 
 test('verification interrupted diagnostic stays a non-blocker warning', async () => {
-  const { verificationInterrupted } = await import('../src/verification-tools.js');
+  const { verificationInterrupted, verificationInterruptedResult } = await import('../src/verification-tools.js');
   expect(verificationInterrupted).toMatchObject({
     code: 'VERIFICATION_INTERRUPTED', severity: 'warning',
+  });
+  expect(verificationInterruptedResult({
+    jobId: '7117ef37-c37e-4902-9192-8787445ce8e3',
+    state: 'running',
+    diagnostics: [],
+  })).toMatchObject({
+    ok: true,
+    job: {
+      state: 'running',
+      diagnostics: [expect.objectContaining({ code: 'VERIFICATION_INTERRUPTED', severity: 'warning' })],
+    },
   });
 });

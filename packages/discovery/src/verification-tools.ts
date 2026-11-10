@@ -18,9 +18,15 @@ import { safeCounter } from './budgets.js';
 
 type GateDenial = Extract<GateOutcome<unknown>, { kind: 'denied' }>['code'];
 
-export type OwnerGateTransaction = <T>(fn: (
-  client: PoolClient,
-) => Promise<T | { kind: 'denied'; code: GateDenial }>) => Promise<GateOutcome<T>>;
+export type OwnerGateTransactionOptions = {
+  /** Runs after COMMIT succeeds; invalidating here yields owner_lost/unknown. */
+  afterCommit?: () => Promise<void>;
+};
+
+export type OwnerGateTransaction = <T>(
+  fn: (client: PoolClient) => Promise<T | { kind: 'denied'; code: GateDenial }>,
+  options?: OwnerGateTransactionOptions,
+) => Promise<GateOutcome<T>>;
 
 export type VerificationAdmissionSubject = {
   subjectHash: string;
@@ -144,11 +150,30 @@ export function verificationToolResult(job: VerificationJob): RequestVerificatio
   return RequestVerificationResultSchema.parse({ ok: true as const, job });
 }
 
+/** Safe uncertain-running observation; keeps financial state and adds lifecycle diagnostic. */
+export function verificationInterruptedResult(job: VerificationJob): RequestVerificationResult {
+  return verificationToolResult(VerificationJobSchema.parse({
+    jobId: job.jobId,
+    state: job.state,
+    ...(job.summary ? { summary: job.summary } : {}),
+    diagnostics: [...job.diagnostics, verificationInterrupted],
+  }));
+}
+
+export type DiscoveryVerificationGateHooks = {
+  beforeAdmitCommit?: () => Promise<void>;
+  afterAdmitCommit?: () => Promise<void>;
+  beforeRecoverCommit?: () => Promise<void>;
+  afterRecoverCommit?: () => Promise<void>;
+};
+
 export type DiscoveryVerificationGateOptions = {
   runOnOwner: OwnerGateTransaction;
   generation: () => number;
   permits: (run: RunRow, task: TaskRow) => boolean;
   admissions: VerificationAdmissionStore;
+  /** Named test boundaries only. Runtime composition never configures these. */
+  testHooks?: DiscoveryVerificationGateHooks;
 };
 
 /**
@@ -158,7 +183,7 @@ export type DiscoveryVerificationGateOptions = {
 export function createDiscoveryVerificationOwnerGate(
   options: DiscoveryVerificationGateOptions,
 ): DiscoveryVerificationOwnerGate {
-  const { runOnOwner, generation, permits, admissions } = options;
+  const { runOnOwner, generation, permits, admissions, testHooks } = options;
 
   async function authorizeStep(
     client: PoolClient,
@@ -244,8 +269,10 @@ export function createDiscoveryVerificationOwnerGate(
           subjectHash: prepared.subjectHash,
           subjectBytes: prepared.subjectBytes,
         };
-        return sql(client, original);
-      });
+        const value = await sql(client, original);
+        await testHooks?.beforeAdmitCommit?.();
+        return value;
+      }, { afterCommit: testHooks?.afterAdmitCommit });
     },
 
     async recoverQueued(input, sql) {
@@ -272,8 +299,10 @@ export function createDiscoveryVerificationOwnerGate(
           subjectHash: row.subject_hash, subjectBytes: row.subject_bytes, jobId: row.job_id,
           requestHash: row.request_hash,
         };
-        return sql(client, binding);
-      });
+        const value = await sql(client, binding);
+        await testHooks?.beforeRecoverCommit?.();
+        return value;
+      }, { afterCommit: testHooks?.afterRecoverCommit });
     },
   };
 }

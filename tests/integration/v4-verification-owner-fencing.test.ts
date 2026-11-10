@@ -34,7 +34,7 @@ import { assembleEvidenceVerificationInput } from '../../scripts/evidence-verifi
 import { loadDemo } from '../../scripts/load-demo.js';
 import { migrate, migrationStreams, readMigrationCatalog } from '../../scripts/migrate.js';
 import { dropTest, provisionTest, startNativeDb } from '../../scripts/native-db.js';
-import { modelResult, scriptedModel } from '../fixtures/discovery-model.js';
+import { barrier, modelResult, scriptedModel } from '../fixtures/discovery-model.js';
 import { testNamespace } from '../fixtures/harness.js';
 
 const namespace = testNamespace('discverif');
@@ -124,7 +124,7 @@ afterAll(async () => {
     if (provisioned) await dropTest(namespace);
     if (directory) await rm(directory, { recursive: true, force: true });
   }
-});
+}, 120_000);
 
 const resolveAuthority = (reviewerId: string, { companyId, sourceRef }: Pick<DiscoveryBinding, 'companyId' | 'sourceRef'>) =>
   enabled && reviewerId === reviewer.reviewerId && localSourceCatalog.get(companyId)?.sourceRef === sourceRef ?
@@ -243,6 +243,60 @@ async function mappingCount(runId: string) {
   const { rows: [row] } = await db.query<{ count: string }>(
     'SELECT count(*)::text AS count FROM discovery_verification_requests WHERE run_id=$1', [runId]);
   return Number(row!.count);
+}
+
+async function counts(runId: string) {
+  const { rows: [row] } = await db.query(
+    `SELECT (SELECT count(*)::int FROM discovery_verification_requests WHERE run_id = $1) AS mappings,
+       (SELECT coalesce(sum(attempts),0)::int FROM verification_attempt_budgets WHERE run_id = $1) AS attempts,
+       count(*) FILTER (WHERE j.state = 'queued')::int AS queued,
+       count(*) FILTER (WHERE j.state = 'running')::int AS running,
+       count(*) FILTER (WHERE j.state = 'completed')::int AS completed,
+       count(*) FILTER (WHERE j.state = 'failed')::int AS failed,
+       count(r.job_id)::int AS reservations, count(v.job_id)::int AS reports, count(a.job_id)::int AS attestations
+     FROM verification_jobs j
+       LEFT JOIN financial_verification_reservations r ON r.job_id = j.id
+       LEFT JOIN verification_reports v ON v.job_id = j.id
+       LEFT JOIN financial_verification_attestations a ON a.job_id = j.id
+     WHERE j.task_run_id = $1`, [runId],
+  );
+  return row as {
+    mappings: number; attempts: number; queued: number; running: number; completed: number; failed: number;
+    reservations: number; reports: number; attestations: number;
+  };
+}
+
+const zeroCounts = {
+  mappings: 0, attempts: 0, queued: 0, running: 0, completed: 0, failed: 0,
+  reservations: 0, reports: 0, attestations: 0,
+};
+const queuedCounts = { ...zeroCounts, mappings: 1, attempts: 1, queued: 1, reservations: 1 };
+const runningCounts = { ...queuedCounts, queued: 0, running: 1 };
+
+async function terminateOwner() {
+  const { rows: [lock] } = await db.query<{ pid: number }>(`SELECT pid FROM pg_locks
+    WHERE locktype='advisory' AND classid=1161908306 AND objid=4
+    AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND granted`);
+  const { rows: [result] } = await db.query('SELECT pg_terminate_backend($1,5000) AS terminated', [lock.pid]);
+  expect(result!.terminated).toBe(true);
+}
+
+async function preparedVerify(
+  key: string,
+  options: {
+    testHooks?: Parameters<typeof acquireDiscoverySupervisor>[0]['testHooks'];
+  } = {},
+) {
+  trustedAccounts = [trustedAccountId];
+  const model = scriptedModel();
+  const acquired = await acquire(model.model, instrumentReads().readTools, {
+    withVerification: true,
+    ...(options.testHooks ? { testHooks: options.testHooks } : {}),
+  });
+  const run = await createRun(key, model);
+  const task = await delegateConnector(run, acquired.owner);
+  const compiled = await draftCompileDemo(run, acquired.owner, task);
+  return { model, run, task, compiled, ...acquired };
 }
 
 async function waitJob(jobId: string, timeoutMs = 60_000) {
@@ -487,3 +541,250 @@ test('stale assessment after admit keeps mapping without current success', async
     trustedAccounts = [];
   }
 }, 120_000);
+
+test('claim abort before commit leaves zero mapping', async () => {
+  const entered = barrier<void>();
+  const release = barrier<void>();
+  let owner: Owner | undefined;
+  let pending: Promise<unknown> | undefined;
+  try {
+    const prepared = await preparedVerify('verif-claim-abort', {
+      testHooks: {
+        beforeVerificationClaimCommit: async () => { entered.resolve(); await release.promise; },
+      },
+    });
+    owner = prepared.owner;
+    const [step] = await prepared.run.accept(owner, [verifyCall('verify', prepared.compiled)], 3, prepared.task);
+    pending = owner.executePendingStep(prepared.run.runId, prepared.task, step!);
+    await entered.promise;
+    const closing = owner.close();
+    release.resolve();
+    await closing;
+    expect(await pending).toBeUndefined();
+    expect(await counts(prepared.run.runId)).toEqual(zeroCounts);
+    expect(await storedStep(step!)).toMatchObject({ state: 'pending' });
+    expect((await prepared.run.state()).verificationJobs).toEqual([]);
+  } finally {
+    release.resolve();
+    try { await pending; } catch { /* owner lost */ }
+    await owner?.close();
+    trustedAccounts = [];
+  }
+}, 120_000);
+
+test('lost admit commit-ack keeps queued mapping for replacement recovery', async () => {
+  let owner: Owner | undefined;
+  let pending: Promise<unknown> | undefined;
+  const beforeRuntime = await runtimeFingerprint();
+  try {
+    const prepared = await preparedVerify('verif-admit-lost-ack', {
+      testHooks: {
+        afterVerificationAdmitCommit: async () => { void owner?.close(); },
+      },
+    });
+    owner = prepared.owner;
+    const priorGeneration = owner.generation;
+    const [step] = await prepared.run.accept(owner, [verifyCall('verify', prepared.compiled)], 3, prepared.task);
+    pending = owner.executePendingStep(prepared.run.runId, prepared.task, step!);
+    expect(await pending).toBeUndefined();
+    expect(await counts(prepared.run.runId)).toEqual(queuedCounts);
+
+    owner = (await acquire(prepared.model.model, instrumentReads().readTools, { withVerification: true })).owner;
+    expect(owner.generation).toBeGreaterThan(priorGeneration);
+    expect(await storedStep(step!)).toMatchObject({ state: 'interrupted', result: null });
+
+    await prepared.run.action('pause', 'pause-queued-recover');
+    const recovered = await owner.executePendingStep(prepared.run.runId, prepared.task, step!);
+    expect(recovered).toMatchObject({ ok: true, job: { jobId: expect.any(String) } });
+    expect(await counts(prepared.run.runId)).toMatchObject({ mappings: 1, attempts: 1, reservations: 1 });
+    expect(await mappingCount(prepared.run.runId)).toBe(1);
+    const jobId = (recovered as { ok: true; job: { jobId: string } }).job.jobId;
+    await waitJob(jobId);
+    expect(await runtimeFingerprint()).toBe(beforeRuntime);
+  } finally {
+    try { await pending; } catch { /* owner lost */ }
+    await owner?.close();
+    trustedAccounts = [];
+  }
+}, 180_000);
+
+test('lost recover commit-ack surfaces VERIFICATION_INTERRUPTED without relaunch', async () => {
+  let owner: Owner | undefined;
+  let pending: Promise<unknown> | undefined;
+  try {
+    const prepared = await preparedVerify('verif-recover-lost-ack', {
+      testHooks: {
+        afterVerificationRecoverCommit: async () => { void owner?.close(); },
+      },
+    });
+    owner = prepared.owner;
+    const priorGeneration = owner.generation;
+    const [step] = await prepared.run.accept(owner, [verifyCall('verify', prepared.compiled)], 3, prepared.task);
+    pending = owner.executePendingStep(prepared.run.runId, prepared.task, step!);
+    expect(await pending).toBeUndefined();
+    expect(await counts(prepared.run.runId)).toEqual(runningCounts);
+
+    owner = (await acquire(prepared.model.model, instrumentReads().readTools, { withVerification: true })).owner;
+    expect(owner.generation).toBeGreaterThan(priorGeneration);
+    expect(await storedStep(step!)).toMatchObject({ state: 'interrupted', result: null });
+
+    const observed = await owner.executePendingStep(prepared.run.runId, prepared.task, step!);
+    expect(observed).toMatchObject({
+      ok: true,
+      job: {
+        jobId: expect.any(String),
+        state: 'running',
+        diagnostics: [expect.objectContaining({ code: 'VERIFICATION_INTERRUPTED', severity: 'warning' })],
+      },
+    });
+    expect(await counts(prepared.run.runId)).toEqual(runningCounts);
+    expect((await prepared.run.state()).diagnostics).toEqual([
+      expect.objectContaining({ code: 'VERIFICATION_INTERRUPTED', severity: 'warning' }),
+    ]);
+  } finally {
+    try { await pending; } catch { /* owner lost */ }
+    await owner?.close();
+    trustedAccounts = [];
+  }
+}, 120_000);
+
+test('sticky revoke at settle survives policy restore and resume', async () => {
+  const entered = barrier<void>();
+  const release = barrier<void>();
+  let owner: Owner | undefined;
+  let pending: Promise<unknown> | undefined;
+  try {
+    const prepared = await preparedVerify('verif-sticky-revoke', {
+      testHooks: {
+        beforeVerificationSettleCommit: async () => { entered.resolve(); await release.promise; },
+      },
+    });
+    owner = prepared.owner;
+    const [step] = await prepared.run.accept(owner, [verifyCall('verify', prepared.compiled)], 3, prepared.task);
+    pending = owner.executePendingStep(prepared.run.runId, prepared.task, step!);
+    await entered.promise;
+    enabled = false;
+    release.resolve();
+    expect(await pending).toBeUndefined();
+    enabled = true;
+    expect(await storedStep(step!)).toMatchObject({ state: 'interrupted', result: null });
+    expect(await mappingCount(prepared.run.runId)).toBe(1);
+    expect(await prepared.run.state()).toMatchObject({
+      status: 'blocked',
+      diagnostics: [expect.objectContaining({ code: 'DISCOVERY_FORBIDDEN' })],
+    });
+    await prepared.run.action('pause', 'after-revoke');
+    expect(await prepared.run.action('resume', 'after-policy-restore')).toMatchObject({
+      status: 'blocked',
+      diagnostics: [expect.objectContaining({ code: 'DISCOVERY_FORBIDDEN' })],
+    });
+    expect(await owner.executePendingStep(prepared.run.runId, prepared.task, step!)).toBeUndefined();
+    expect(await mappingCount(prepared.run.runId)).toBe(1);
+  } finally {
+    enabled = true;
+    release.resolve();
+    try { await pending; } catch { /* revoked */ }
+    await owner?.close();
+    trustedAccounts = [];
+  }
+}, 180_000);
+
+test('owner terminate during enqueue replaces generation and recovers same job', async () => {
+  const entered = barrier<void>();
+  const release = barrier<void>();
+  let owner: Owner | undefined;
+  let pending: Promise<unknown> | undefined;
+  try {
+    const prepared = await preparedVerify('verif-owner-terminate', {
+      testHooks: {
+        afterVerificationEnqueue: async () => { entered.resolve(); await release.promise; },
+      },
+    });
+    owner = prepared.owner;
+    const priorGeneration = owner.generation;
+    const [step] = await prepared.run.accept(owner, [verifyCall('verify', prepared.compiled)], 3, prepared.task);
+    pending = owner.executePendingStep(prepared.run.runId, prepared.task, step!);
+    await entered.promise;
+    await terminateOwner();
+    release.resolve();
+    expect(await pending).toBeUndefined();
+    expect(await mappingCount(prepared.run.runId)).toBe(1);
+    const jobId = (await db.query<{ job_id: string }>(
+      'SELECT job_id FROM discovery_verification_requests WHERE run_id=$1', [prepared.run.runId],
+    )).rows[0]!.job_id;
+
+    owner = (await acquire(prepared.model.model, instrumentReads().readTools, { withVerification: true })).owner;
+    expect(owner.generation).toBeGreaterThan(priorGeneration);
+    expect(await storedStep(step!)).toMatchObject({ state: 'interrupted' });
+    const recovered = await owner.executePendingStep(prepared.run.runId, prepared.task, step!);
+    expect(recovered).toMatchObject({ ok: true, job: { jobId } });
+    expect(await counts(prepared.run.runId)).toMatchObject({ mappings: 1, attempts: 1, reservations: 1 });
+    await waitJob(jobId);
+  } finally {
+    release.resolve();
+    try { await pending; } catch { /* terminated */ }
+    await owner?.close();
+    trustedAccounts = [];
+  }
+}, 180_000);
+
+test('cross-run readVerification denial keeps foreign jobs out of verificationJobs', async () => {
+  trustedAccounts = [trustedAccountId];
+  let owner: Owner | undefined;
+  let jobId = '';
+  try {
+    const modelA = scriptedModel();
+    ({ owner } = await acquire(modelA.model, instrumentReads().readTools, { withVerification: true }));
+    const runA = await createRun('verif-cross-a', modelA);
+    const taskA = await delegateConnector(runA, owner);
+    const compiledA = await draftCompileDemo(runA, owner, taskA);
+    const [stepA] = await runA.execute(owner, [verifyCall('verify-a', compiledA)], 3, taskA);
+    jobId = (await storedStep(stepA!) as { result: { ok: true; job: { jobId: string } } }).result.job.jobId;
+    await waitJob(jobId);
+    expect((await runA.state()).verificationJobs).toEqual([expect.objectContaining({ jobId })]);
+    await owner.close();
+
+    const modelB = scriptedModel();
+    ({ owner } = await acquire(modelB.model, instrumentReads().readTools, { withVerification: true }));
+    const runB = await createRun('verif-cross-b', modelB);
+    const taskB = await delegateConnector(runB, owner);
+    await draftCompileDemo(runB, owner, taskB);
+    const [readStep] = await runB.execute(owner, [{
+      id: 'read-foreign-run', name: 'readVerification', arguments: { jobId },
+    }], 3, taskB);
+    expect(await storedStep(readStep!)).toMatchObject({
+      state: 'failed', result: { ok: false, code: 'DISCOVERY_FORBIDDEN' },
+    });
+    expect((await runB.state()).verificationJobs).toEqual([]);
+  } finally {
+    await owner?.close();
+    trustedAccounts = [];
+  }
+}, 180_000);
+
+test('same-key concurrent replay reuses one mapping and budget', async () => {
+  trustedAccounts = [trustedAccountId];
+  const model = scriptedModel();
+  const { owner } = await acquire(model.model, instrumentReads().readTools, { withVerification: true });
+  try {
+    const run = await createRun('verif-same-key', model);
+    const task = await delegateConnector(run, owner);
+    const compiled = await draftCompileDemo(run, owner, task);
+    const [step] = await run.execute(owner, [verifyCall('verify', compiled)], 3, task);
+    const first = await storedStep(step!);
+    expect(first).toMatchObject({ state: 'succeeded', result: { ok: true } });
+    const jobId = (first!.result as { ok: true; job: { jobId: string } }).job.jobId;
+    await waitJob(jobId);
+    const [left, right] = await Promise.all([
+      owner.executePendingStep(run.runId, task, step!),
+      owner.executePendingStep(run.runId, task, step!),
+    ]);
+    expect(left).toEqual(right);
+    expect(left).toMatchObject({ ok: true, job: { jobId } });
+    expect(await counts(run.runId)).toMatchObject({ mappings: 1, attempts: 1, reservations: 1, completed: 1 });
+    expect(await storedStep(step!)).toEqual(first);
+  } finally {
+    await owner.close();
+    trustedAccounts = [];
+  }
+}, 180_000);

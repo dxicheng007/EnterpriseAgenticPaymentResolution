@@ -52,7 +52,7 @@ import {
 import {
   bindReadVerificationJob, createDiscoveryVerificationOwnerGate, createVerificationAdmissionStore,
   hasVerificationBinding, loadVerificationSubject, mapVerificationFailure, requireTrustedScope,
-  verificationInterrupted, verificationToolResult,
+  verificationInterrupted, verificationInterruptedResult, verificationToolResult,
   type OwnerGateTransaction, type VerificationSubject,
 } from './verification-tools.js';
 
@@ -153,6 +153,10 @@ type Options = RepositoryOptions & {
     beforeVerificationClaimCommit?: () => Promise<void>;
     afterVerificationEnqueue?: () => Promise<void>;
     beforeVerificationSettleCommit?: () => Promise<void>;
+    beforeVerificationAdmitCommit?: () => Promise<void>;
+    afterVerificationAdmitCommit?: () => Promise<void>;
+    beforeVerificationRecoverCommit?: () => Promise<void>;
+    afterVerificationRecoverCommit?: () => Promise<void>;
   };
 };
 
@@ -235,7 +239,7 @@ export async function acquireDiscoverySupervisor({
     return next;
   }
 
-  const runOnOwner: OwnerGateTransaction = fn => {
+  const runOnOwner: OwnerGateTransaction = (fn, gateOptions) => {
     const next = serial.then(async () => {
       if (!valid) {
         discard();
@@ -252,6 +256,7 @@ export async function acquireDiscoverySupervisor({
         if (!valid) throw new Error('Discovery owner lost');
         await client.query('COMMIT');
         committed = true;
+        await gateOptions?.afterCommit?.();
         if (!valid) return { kind: 'owner_lost' as const, commit: 'unknown' as const };
         return { kind: 'committed' as const, value: result as Exclude<typeof result, { kind: 'denied' }> };
       } catch (error) {
@@ -277,6 +282,12 @@ export async function acquireDiscoverySupervisor({
     ...verificationDeps!,
     gate: createDiscoveryVerificationOwnerGate({
       runOnOwner, generation: () => generation, permits, admissions,
+      testHooks: testHooks ? {
+        beforeAdmitCommit: testHooks.beforeVerificationAdmitCommit,
+        afterAdmitCommit: testHooks.afterVerificationAdmitCommit,
+        beforeRecoverCommit: testHooks.beforeVerificationRecoverCommit,
+        afterRecoverCommit: testHooks.afterVerificationRecoverCommit,
+      } : undefined,
     }),
     async resolveTaskId({ requestKey, runId }) {
       const { rows: [row] } = await db.query<{ task_id: string; run_id: string }>(
@@ -1375,7 +1386,7 @@ export async function acquireDiscoverySupervisor({
 
   async function executeVerificationClaim(claim: Omit<VerificationClaim, 'candidate'>) {
     if (!valid || !verification || !verificationDeps) return;
-    let toolResult: RequestVerificationResult;
+    let toolResult: RequestVerificationResult | undefined;
     let interrupted = false;
     try {
       const candidate = await verificationDeps.candidates.getCandidate(
@@ -1409,10 +1420,7 @@ export async function acquireDiscoverySupervisor({
           });
           if (history.kind === 'existing' && history.executionUncertain) {
             interrupted = true;
-            toolResult = verificationToolResult({
-              ...history.job,
-              diagnostics: [...history.job.diagnostics, verificationInterrupted],
-            });
+            toolResult = verificationInterruptedResult(history.job);
           } else {
             toolResult = verificationToolResult(job);
           }
@@ -1421,10 +1429,10 @@ export async function acquireDiscoverySupervisor({
         }
       }
     } catch (error) {
-      toolResult = { ok: false, code: mapVerificationFailure(error) };
+      if (!toolResult?.ok) toolResult = { ok: false, code: mapVerificationFailure(error) };
     }
     await testHooks?.afterVerificationEnqueue?.();
-    return settleVerificationClaim(claim, toolResult, false, interrupted);
+    return settleVerificationClaim(claim, toolResult ?? { ok: false, code: 'TOOL_UNAVAILABLE' }, false, interrupted);
   }
 
   async function settleVerificationClaim(
@@ -1450,18 +1458,20 @@ export async function acquireDiscoverySupervisor({
         if (revoked || !stillAuthorized()) return interruptForbiddenRead(connection, context);
 
         let settledResult = toolResult;
-        try {
-          if (!stillAuthorized()) return interruptForbiddenRead(connection, context);
-          // Current-success settlement always requires a clear live assessment. Historical
-          // recovery may still observe the original job without linking current success.
-          const subject = await loadVerificationSubject(connection, run.id, claim.input);
-          if (subject.artifactHash !== claim.subject.artifactHash ||
-              subject.assessmentRevision !== claim.subject.assessmentRevision ||
-              subject.profileHash !== claim.subject.profileHash) {
-            settledResult = { ok: false, code: 'DISCOVERY_CONFLICT' };
+        if (!interrupted) {
+          try {
+            if (!stillAuthorized()) return interruptForbiddenRead(connection, context);
+            // Current-success settlement always requires a clear live assessment. Historical
+            // recovery may still observe the original job without linking current success.
+            const subject = await loadVerificationSubject(connection, run.id, claim.input);
+            if (subject.artifactHash !== claim.subject.artifactHash ||
+                subject.assessmentRevision !== claim.subject.assessmentRevision ||
+                subject.profileHash !== claim.subject.profileHash) {
+              settledResult = { ok: false, code: 'DISCOVERY_CONFLICT' };
+            }
+          } catch (error) {
+            settledResult = { ok: false, code: mapVerificationFailure(error) };
           }
-        } catch (error) {
-          settledResult = { ok: false, code: mapVerificationFailure(error) };
         }
 
         if (!stillAuthorized()) throw authorityRevoked;
