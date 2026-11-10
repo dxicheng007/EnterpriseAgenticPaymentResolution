@@ -1,7 +1,7 @@
 import {
   CompiledArtifactSchema, CustomerProfileSchema, MutationOperationSchema, SourceEventSchema, ValidatorIdSchema,
-  canonicalJson, hashArtifact, hashEvent, hashPlan, targetRecordId,
-  type CompiledArtifact, type CustomerProfile, type FieldLineage, type Hold, type MutationPlan,
+  canonicalJson, hashArtifact, hashEvent, hashPlan, hashTargetSnapshot, targetRecordId,
+  type CompiledArtifact, type CustomerProfile, type EconomicIdentity, type FieldLineage, type Hold, type MutationPlan,
   type PlanOutcome, type Scope, type SourceEvent, type TargetState,
 } from '@eapr/contracts';
 import { computeBalance } from '@eapr/finance/balance';
@@ -13,8 +13,50 @@ import { compare, sourceContractHashes } from './canonicalize.js';
 import { blocker, executableDiagnostics, profileDiagnostics } from './compile.js';
 import { executeMapping, MappingError, validateSourcePayload } from './operations.js';
 
+type Hash = CompiledArtifact['hash'];
+type Id = SourceEvent['id'];
 type Lineage = Omit<FieldLineage, 'operationIndex'>;
 type Candidate = { event: SourceEvent; operation: FinancialMutation; lineage: Lineage[] };
+
+export type BatchStopReason =
+  'artifact_binding' | 'input_limit' | 'target_invalid' | 'target_scope' | 'delivery_conflict' | 'source_guard' | 'plan_invalid';
+export type SourceBlocker = { sourceRef: Id; code: 'IDENTITY_SCOPE' | 'SEMANTIC_VERSION'; causingInputIndexes: number[] };
+export type ClassificationBinding = {
+  artifactHash: Hash; profileHash: Hash; scope: Scope; expectedTargetVersion: number; targetSnapshotHash: Hash; asOf: string;
+};
+export type EventRef = { sourceRef: Id; eventId: Id; streamId: Id; sequence: number; contentHash: Hash };
+export type TypedPrerequisite = {
+  relation: 'allocation_funding' | 'allocation_invoice' | 'reversal_original';
+  scope: Scope; identity: EconomicIdentity; targetRecordId: Id;
+  presence: { kind: 'target' } | { kind: 'candidate'; providerInputIndexes: number[] } | { kind: 'missing' };
+};
+export type MappedIdentity = { scope: Scope; identity: EconomicIdentity; targetRecordId: Id; prerequisites: TypedPrerequisite[] };
+export type ExistingRecordRef = { identity: EconomicIdentity; targetRecordId: Id; sourceEventId: Id; sourceRecordVersion: number };
+type DeliveryResult =
+  | { disposition: 'held'; event: EventRef | null; holdIndexes: number[]; mapped: MappedIdentity | null; groupIndex: number | null }
+  | { disposition: 'semantic_observed'; event: EventRef; scope: Scope };
+export type InputClassification = { inputIndex: number } & (
+  | DeliveryResult
+  | { disposition: 'financial_new'; event: EventRef; mapped: MappedIdentity; groupIndex: number; planIndex: number; operationIndex: number }
+  | { disposition: 'financial_replay'; event: EventRef; mapped: MappedIdentity; groupIndex: number; existing: ExistingRecordRef }
+  | { disposition: 'financial_coalesced'; event: EventRef; mapped: MappedIdentity; groupIndex: number; producerInputIndex: number }
+  | { disposition: 'delivery_repeat'; event: EventRef; primaryInputIndex: number }
+);
+export type DependencyGroupClassification = { inputIndexes: number[]; disposition: 'accepted' | 'held'; holdIndexes: number[] };
+export type BatchClassificationV1 = {
+  schemaVersion: '1';
+  outcome: PlanOutcome;
+  details:
+    | { kind: 'not_classified'; reason: BatchStopReason; holdIndexes: number[]; sourceBlockers: SourceBlocker[] }
+    | {
+      kind: 'classified'; binding: ClassificationBinding; items: InputClassification[];
+      groups: DependencyGroupClassification[]; sourceBlockers: SourceBlocker[];
+    };
+};
+
+const eventRef = (event: SourceEvent): EventRef => ({
+  sourceRef: event.sourceRef, eventId: event.id, streamId: event.streamId, sequence: event.sequence, contentHash: event.contentHash,
+});
 
 const operationName = {
   invoice: 'insert_invoice',
@@ -131,6 +173,21 @@ function prerequisites(record: FinancialRecord): Prerequisite[] {
   return [];
 }
 
+function typedPrerequisites(record: FinancialRecord) {
+  const reference = (relation: TypedPrerequisite['relation'], kind: EconomicIdentity['kind'], recordId: string) => {
+    const identity: EconomicIdentity = { ...record.identity, kind, recordId };
+    return { relation, identity, targetId: targetRecordId(identity) };
+  };
+  if (record.kind === 'allocation') {
+    return [
+      reference('allocation_funding', record.fundingKind, record.fundingRecordId),
+      reference('allocation_invoice', 'invoice', record.invoiceRecordId),
+    ];
+  }
+  if (record.kind === 'reversal') return [reference('reversal_original', record.reversedKind, record.reversedRecordId)];
+  return [];
+}
+
 function dependencyGroups(candidates: Candidate[], existing: ReadonlyMap<string, FinancialRecord>): Candidate[][] {
   const parents = new Map<string, string>();
   function root(id: string): string {
@@ -164,21 +221,31 @@ function economics({ sourceEventId: _event, sourceRecordVersion: _version, ...re
   return canonicalJson(record);
 }
 
+type GroupResult =
+  | { ok: true; inserted: Candidate[]; replays: Map<Candidate, FinancialRecord>; coalesced: Map<Candidate, Candidate> }
+  | { ok: false; hold: Hold };
+
 const orderRank = { insert_invoice: 0, insert_payment: 0, insert_credit: 0, add_allocation: 1, full_reverse: 2 };
 
 function validateGroup(
   group: Candidate[], target: ReturnType<typeof validateTarget>,
-): { ok: true; inserted: Candidate[] } | { ok: false; hold: Hold } {
+): GroupResult {
   const { state, records: persisted, reversals } = target;
   const eventList = group.map(candidate => candidate.event);
   const pending = new Map<string, Candidate>();
+  const replays = new Map<Candidate, FinancialRecord>();
+  const coalesced = new Map<Candidate, Candidate>();
   for (const candidate of group) {
     const record = candidate.operation.record;
-    const prior = persisted.get(record.id) ?? pending.get(record.id)?.operation.record;
+    const persistedPrior = persisted.get(record.id);
+    const pendingPrior = pending.get(record.id);
+    const prior = persistedPrior ?? pendingPrior?.operation.record;
     if (prior) {
       if (economics(prior) !== economics(record)) {
         return { ok: false, hold: hold(eventList, 'ECONOMIC_CONFLICT', 'Economic identity has conflicting content', state.scope) };
       }
+      if (persistedPrior) replays.set(candidate, persistedPrior);
+      else if (pendingPrior) coalesced.set(candidate, pendingPrior);
     } else {
       pending.set(record.id, candidate);
     }
@@ -217,16 +284,23 @@ function validateGroup(
       return { ok: false, hold: hold(eventList, error.code, error.message, state.scope, [...dependencies].sort()) };
     }
   }
-  return { ok: true, inserted };
+  return { ok: true, inserted, replays, coalesced };
 }
+
+type Occurrence =
+  | { index: number; kind: 'envelope'; holdIndex: number }
+  | { index: number; kind: 'hash'; event: SourceEvent; holdIndex?: number }
+  | { index: number; kind: 'valid'; event: SourceEvent; key: string };
 
 function parseEvents(inputs: SourceEvent[]) {
   const eventByDelivery = new Map<string, SourceEvent>();
   const seen = new Map<string, SourceEvent>();
   const conflicts = new Map<string, SourceEvent>();
   const holds: Hold[] = [];
-  const invalid: SourceEvent[] = [];
-  for (const input of inputs) {
+  const invalid: Extract<Occurrence, { kind: 'hash' }>[] = [];
+  const occurrences: Occurrence[] = [];
+  const firstIndex = new Map<string, number>();
+  inputs.forEach((input, index) => {
     try {
       canonicalJson(input);
       const event = SourceEventSchema.parse(input);
@@ -235,21 +309,30 @@ function parseEvents(inputs: SourceEvent[]) {
       if (first && first.contentHash !== event.contentHash) conflicts.set(key, first);
       seen.set(key, event);
       if (hashEvent(event) !== event.contentHash) {
-        invalid.push(event);
-        continue;
+        const occurrence = { index, kind: 'hash' as const, event };
+        invalid.push(occurrence);
+        occurrences.push(occurrence);
+        return;
       }
       eventByDelivery.set(key, event);
+      if (!firstIndex.has(key)) firstIndex.set(key, index);
+      occurrences.push({ index, kind: 'valid', event, key });
     } catch {
+      occurrences.push({ index, kind: 'envelope', holdIndex: holds.length });
       holds.push(hold([], 'SOURCE_SCHEMA', 'Invalid source event envelope'));
     }
-  }
-  for (const event of invalid.sort(compareEvents)) {
+  });
+  for (const occurrence of invalid.sort((a, b) => compareEvents(a.event, b.event))) {
+    const { event } = occurrence;
     const key = event.sourceRef + '/' + event.id;
     if (eventByDelivery.has(key)) conflicts.set(key, event);
-    else holds.push(hold([event], 'SOURCE_HASH_CONFLICT', 'Event content hash differs'));
+    else {
+      occurrence.holdIndex = holds.length;
+      holds.push(hold([event], 'SOURCE_HASH_CONFLICT', 'Event content hash differs'));
+    }
   }
   return {
-    events: [...eventByDelivery.values()].sort(compareEvents), holds,
+    events: [...eventByDelivery.values()].sort(compareEvents), holds, occurrences, firstIndex,
     conflicts: [...conflicts.entries()].sort(([a], [b]) => compare(a, b)).map(([, event]) => event),
   };
 }
@@ -263,11 +346,15 @@ function bindingIsValid(artifact: CompiledArtifact, profile: CustomerProfile) {
     !profileDiagnostics([profile], artifact.sourceRef).length && !executableDiagnostics(normalized, [profile]).length;
 }
 
-export function planBatch(
+function evaluate(
   artifactInput: CompiledArtifact, profileInput: CustomerProfile, inputs: SourceEvent[], targetInput: TargetState,
-): PlanOutcome {
-  const blocked = (code: string, message: string, events: SourceEvent[] = [], scope?: Scope): PlanOutcome => ({
-    plans: [], holds: [hold(events, code, message, scope)],
+): BatchClassificationV1 {
+  const blocked = (
+    reason: BatchStopReason, code: string, message: string, events: SourceEvent[] = [], scope?: Scope,
+    sourceBlockers: SourceBlocker[] = [],
+  ): BatchClassificationV1 => ({
+    schemaVersion: '1', outcome: { plans: [], holds: [hold(events, code, message, scope)] },
+    details: { kind: 'not_classified', reason, holdIndexes: [0], sourceBlockers },
   });
   let artifact: CompiledArtifact;
   let profile: CustomerProfile;
@@ -277,26 +364,26 @@ export function planBatch(
     artifact = CompiledArtifactSchema.parse(artifactInput);
     profile = CustomerProfileSchema.parse(profileInput);
     if (!bindingIsValid(artifact, profile)) {
-      return blocked('ARTIFACT_BINDING', 'Artifact executable, source contracts or reviewed profile are inconsistent');
+      return blocked('artifact_binding', 'ARTIFACT_BINDING', 'Artifact executable, source contracts or reviewed profile are inconsistent');
     }
   } catch {
-    return blocked('ARTIFACT_BINDING', 'Artifact or reviewed profile is invalid');
+    return blocked('artifact_binding', 'ARTIFACT_BINDING', 'Artifact or reviewed profile is invalid');
   }
   if (!Array.isArray(inputs) || inputs.length > artifact.normalizedPlan.limits.maxRecordsPerCycle) {
-    return blocked('CYCLE_LIMIT', 'Batch exceeds the executable cycle limit');
+    return blocked('input_limit', 'CYCLE_LIMIT', 'Batch exceeds the executable cycle limit');
   }
-  const { events, conflicts, holds } = parseEvents(inputs);
-  if (conflicts.length) return blocked('DELIVERY_CONFLICT', 'Delivery identity has conflicting content hashes', conflicts);
+  const { events, conflicts, holds, occurrences, firstIndex } = parseEvents(inputs);
+  if (conflicts.length) return blocked('delivery_conflict', 'DELIVERY_CONFLICT', 'Delivery identity has conflicting content hashes', conflicts);
 
   let target: ReturnType<typeof validateTarget>;
   try {
     target = validateTarget(targetInput);
   } catch (error) {
     if (!(error instanceof FinanceError)) throw error;
-    return blocked(error.code, error.message, events);
+    return blocked('target_invalid', error.code, error.message, events);
   }
   if (!sameScope(target.state.scope, profile.scope)) {
-    return blocked('TARGET_SCOPE', 'Target scope differs from the profile', events);
+    return blocked('target_scope', 'TARGET_SCOPE', 'Target scope differs from the profile', events);
   }
   const sameCompany = (event: SourceEvent) =>
     event.sourceRef === profile.sourceRef && event.rawIdentity.companyId === profile.scope.companyId;
@@ -306,7 +393,14 @@ export function planBatch(
   );
   if (unscoped.length) {
     const code = unscoped.some(event => event.kind === 'semantic_change') ? 'SEMANTIC_VERSION' : 'IDENTITY_SCOPE';
-    return blocked(code, 'Unscoped identity or semantic revision pauses source application', sourceEvents);
+    const causing = (predicate: (event: SourceEvent) => boolean) => occurrences.flatMap(occurrence =>
+      occurrence.kind === 'valid' && sameCompany(occurrence.event) && predicate(occurrence.event) ? [occurrence.index] : []);
+    const sourceBlockers: SourceBlocker[] = [];
+    const identity = causing(event => !event.rawIdentity.sellerEntityId);
+    const semantic = causing(event => event.kind === 'semantic_change' && !event.rawIdentity.sourceAccountId);
+    if (identity.length) sourceBlockers.push({ sourceRef: profile.sourceRef, code: 'IDENTITY_SCOPE', causingInputIndexes: identity });
+    if (semantic.length) sourceBlockers.push({ sourceRef: profile.sourceRef, code: 'SEMANTIC_VERSION', causingInputIndexes: semantic });
+    return blocked('source_guard', code, 'Unscoped identity or semantic revision pauses source application', sourceEvents, undefined, sourceBlockers);
   }
 
   const ownSeller = (event: SourceEvent) => sameCompany(event) && event.rawIdentity.sellerEntityId === profile.scope.sellerEntityId;
@@ -320,48 +414,162 @@ export function planBatch(
   const priorDeliveries = new Map([...target.records.values()].map(record =>
     [record.identity.sourceRef + '/' + record.sourceEventId, record.id],
   ));
+  const deliveryKey = (event: SourceEvent) => event.sourceRef + '/' + event.id;
+  const results = new Map<string, DeliveryResult>();
+  const candidateKeys = new Map<Candidate, string>();
+  const heldBy = (event: SourceEvent, next: Hold) => {
+    results.set(deliveryKey(event), { disposition: 'held', event: eventRef(event), holdIndexes: [holds.length], mapped: null, groupIndex: null });
+    holds.push(next);
+  };
   for (const event of events) {
     if (!ownSeller(event)) {
-      holds.push(hold([event], 'IDENTITY_SCOPE', 'Source, company or seller is outside the reviewed profile'));
+      heldBy(event, hold([event], 'IDENTITY_SCOPE', 'Source, company or seller is outside the reviewed profile'));
     } else if (!ownAccount(event)) {
-      holds.push(hold([event], 'UNKNOWN_ACCOUNT', 'Source account has no approved identity in this profile'));
+      heldBy(event, hold([event], 'UNKNOWN_ACCOUNT', 'Source account has no approved identity in this profile'));
     } else if (event.semanticVersion !== profile.semanticVersion || changedSemantics.has(event.rawIdentity.sourceAccountId)) {
-      holds.push(hold([event], 'SEMANTIC_VERSION', 'Event semantic revision is not reviewed', profile.scope));
+      heldBy(event, hold([event], 'SEMANTIC_VERSION', 'Event semantic revision is not reviewed', profile.scope));
     } else {
       try {
         const mapped = materialize(artifact, profile, event);
-        if (!mapped) continue;
+        if (!mapped) {
+          results.set(deliveryKey(event), { disposition: 'semantic_observed', event: eventRef(event), scope: profile.scope });
+          continue;
+        }
         const priorId = priorDeliveries.get(event.sourceRef + '/' + event.id);
         if (priorId && priorId !== mapped.operation.record.id) {
-          return blocked('DELIVERY_CONFLICT', 'Delivery identity conflicts with an existing target record', [event], profile.scope);
+          return blocked('delivery_conflict', 'DELIVERY_CONFLICT', 'Delivery identity conflicts with an existing target record', [event], profile.scope);
         }
         candidates.push(mapped);
+        candidateKeys.set(mapped, deliveryKey(event));
       } catch (error) {
         if (!(error instanceof MappingError)) throw error;
-        holds.push(hold([event], error.code, error.message, profile.scope, [], [error.path]));
+        heldBy(event, hold([event], error.code, error.message, profile.scope, [], [error.path]));
       }
     }
   }
 
   const accepted: SourceEvent[] = [];
   const inserted: Candidate[] = [];
-  for (const group of dependencyGroups(candidates, target.records)) {
+  const indexOf = (candidate: Candidate) => firstIndex.get(candidateKeys.get(candidate)!)!;
+  const providers = new Map<string, number[]>();
+  for (const candidate of candidates) {
+    const list = providers.get(candidate.operation.record.id) ?? [];
+    list.push(indexOf(candidate));
+    providers.set(candidate.operation.record.id, list);
+  }
+  const mappedFor = (candidate: Candidate): MappedIdentity => {
+    const record = candidate.operation.record;
+    return {
+      scope: profile.scope, identity: record.identity, targetRecordId: record.id,
+      prerequisites: typedPrerequisites(record).map(requirement => ({
+        relation: requirement.relation, scope: profile.scope, identity: requirement.identity,
+        targetRecordId: requirement.targetId,
+        presence: target.records.has(requirement.targetId) ? { kind: 'target' as const }
+          : providers.has(requirement.targetId)
+            ? { kind: 'candidate' as const, providerInputIndexes: [...new Set(providers.get(requirement.targetId)!)].sort((a, b) => a - b) }
+            : { kind: 'missing' as const },
+      })).sort((a, b) => compare(a.relation, b.relation) || compare(canonicalJson(a.identity), canonicalJson(b.identity))),
+    };
+  };
+  const groups = dependencyGroups(candidates, target.records);
+  const groupDetails: DependencyGroupClassification[] = [];
+  const groupResults: GroupResult[] = [];
+  groups.forEach((group, groupIndex) => {
     const result = validateGroup(group, target);
+    groupResults.push(result);
+    const inputIndexes = group.map(indexOf).sort((a, b) => a - b);
     if (!result.ok) {
+      const holdIndex = holds.length;
       holds.push(result.hold);
-      continue;
+      groupDetails.push({ inputIndexes, disposition: 'held', holdIndexes: [holdIndex] });
+      for (const candidate of group) {
+        results.set(candidateKeys.get(candidate)!, {
+          disposition: 'held', event: eventRef(candidate.event), holdIndexes: [holdIndex],
+          mapped: mappedFor(candidate), groupIndex,
+        });
+      }
+      return;
     }
+    groupDetails.push({ inputIndexes, disposition: 'accepted', holdIndexes: [] });
     inserted.push(...result.inserted);
     accepted.push(...group.map(candidate => candidate.event));
-  }
-  if (!inserted.length) return { plans: [], holds };
+  });
+  const finish = (outcome: PlanOutcome, planned: Candidate[]): BatchClassificationV1 => {
+    const items: InputClassification[] = occurrences.map(occurrence => {
+      if (occurrence.kind === 'envelope') {
+        return { inputIndex: occurrence.index, disposition: 'held', event: null, holdIndexes: [occurrence.holdIndex], mapped: null, groupIndex: null };
+      }
+      if (occurrence.kind === 'hash') {
+        return { inputIndex: occurrence.index, disposition: 'held', event: null, holdIndexes: [occurrence.holdIndex!], mapped: null, groupIndex: null };
+      }
+      const primary = firstIndex.get(occurrence.key)!;
+      if (primary !== occurrence.index) {
+        return { inputIndex: occurrence.index, disposition: 'delivery_repeat', event: eventRef(occurrence.event), primaryInputIndex: primary };
+      }
+      const result = results.get(occurrence.key);
+      if (result) return { inputIndex: occurrence.index, ...result } as InputClassification;
+      const candidate = candidates.find(value => candidateKeys.get(value) === occurrence.key)!;
+      const groupIndex = groups.findIndex(group => group.includes(candidate));
+      const groupResult = groupResults[groupIndex]!;
+      if (!groupResult.ok) throw new Error('Held group candidate was not classified');
+      const mapped = mappedFor(candidate);
+      const operationIndex = planned.indexOf(candidate);
+      if (operationIndex >= 0) {
+        return { inputIndex: occurrence.index, disposition: 'financial_new', event: eventRef(candidate.event), mapped, groupIndex, planIndex: 0, operationIndex };
+      }
+      const existing = groupResult.replays.get(candidate);
+      if (existing) {
+        return {
+          inputIndex: occurrence.index, disposition: 'financial_replay', event: eventRef(candidate.event), mapped, groupIndex,
+          existing: {
+            identity: existing.identity, targetRecordId: existing.id, sourceEventId: existing.sourceEventId,
+            sourceRecordVersion: existing.sourceRecordVersion,
+          },
+        };
+      }
+      const producer = groupResult.coalesced.get(candidate)!;
+      return {
+        inputIndex: occurrence.index, disposition: 'financial_coalesced', event: eventRef(candidate.event), mapped, groupIndex,
+        producerInputIndex: indexOf(producer),
+      };
+    });
+    return {
+      schemaVersion: '1', outcome,
+      details: {
+        kind: 'classified',
+        binding: {
+          artifactHash: artifact.hash, profileHash: profile.hash, scope: target.state.scope,
+          expectedTargetVersion: target.state.version, targetSnapshotHash: hashTargetSnapshot(target.state), asOf: target.state.asOf,
+        },
+        items, groups: groupDetails, sourceBlockers: [],
+      },
+    };
+  };
+  if (!inserted.length) return finish({ plans: [], holds }, []);
   inserted.sort((left, right) =>
     orderRank[left.operation.op] - orderRank[right.operation.op] || compareEvents(left.event, right.event),
   );
   try {
-    return { plans: [resultPlan(artifact, profile, target.state, inserted, accepted)], holds };
+    return finish({ plans: [resultPlan(artifact, profile, target.state, inserted, accepted)], holds }, inserted);
   } catch (error) {
     if (!(error instanceof FinanceError)) throw error;
-    return { plans: [], holds: [...holds, hold(accepted, error.code, error.message, profile.scope)] };
+    const final = hold(accepted, error.code, error.message, profile.scope);
+    return {
+      schemaVersion: '1', outcome: { plans: [], holds: [...holds, final] },
+      details: { kind: 'not_classified', reason: 'plan_invalid', holdIndexes: [holds.length], sourceBlockers: [] },
+    };
   }
+}
+
+export function planBatch(
+  artifact: CompiledArtifact, profile: CustomerProfile, inputs: SourceEvent[], target: TargetState,
+): PlanOutcome {
+  return evaluate(artifact, profile, inputs, target).outcome;
+}
+
+/** Same evaluation as planBatch plus a per-input trace; never a receipt or authority. */
+export function classifyBatch(
+  artifact: CompiledArtifact, profile: CustomerProfile, inputs: SourceEvent[], target: TargetState,
+): BatchClassificationV1 {
+  return evaluate(artifact, profile, inputs, target);
 }
