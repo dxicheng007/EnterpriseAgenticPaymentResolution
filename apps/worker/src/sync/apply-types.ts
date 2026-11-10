@@ -183,4 +183,4 @@ export function hashPreparedUnit(subject: PreparedSyncUnit) {
   return hashSyncUnit({
     identity, lane, streamId, expectedEpoch, expectedTargetVersion, beforeSnapshotHash, asOf, coverageHash, planHash: plan?.hash ?? null,
   });
-      }
+}
