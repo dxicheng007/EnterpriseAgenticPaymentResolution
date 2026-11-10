@@ -4,7 +4,9 @@ Reconstruct an acquired company's contract-to-cash history and translate its exi
 
 **Current build:** local PostgreSQL-backed source capture, evidence inspection, registered parent-state reads, development connector previews, independent verification, and persisted discovery findings/proposals. The monitor and scripted orchestration checks exist; live agent construction, customer activation, persisted parent imports, and ongoing sync remain incomplete. Preview performs zero parent writes.
 
-- [Three-team handoff: current state, remaining tasks, and dependencies](docs/superpowers/plans/2026-11-08-team-expansion-handoff.md)
+- [Demo remaining work (active track: pregenerated connector + AI-off sync)](docs/superpowers/plans/2026-11-10-demo-remaining-work.md) — shared task board; update when dispatching or completing work
+- [Current team handoff — November 10 owner tasks](docs/progress/2026-11-10/team-handoff.md)
+- [Three-team handoff: lane ownership and older dependency graph](docs/superpowers/plans/2026-11-08-team-expansion-handoff.md)
 - [Progress, verification, branches, and next work](docs/progress/2026-11-08/README.md)
 - [PRD v2](prdv2.md)
 - [Vertical implementation plan](docs/superpowers/plans/2026-11-08-implementation-plan.md)
