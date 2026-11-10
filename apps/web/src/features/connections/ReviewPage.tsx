@@ -106,24 +106,78 @@ export function ActivationOutcomeView({ outcome }: { outcome: ActivationOutcome 
 }
 
 const staleCodes = ['REVIEW_STALE', 'STALE_REVIEW', 'ACTIVATION_POLICY_MISMATCH', 'FINANCIAL_ATTESTATION_MISMATCH'];
-function staleError(error: unknown) {
+
+/** True for accepted 409 stale / package-binding conflicts that require reload before approve. */
+export function staleError(error: unknown) {
   return error instanceof LocalApiError && error.status === 409 && staleCodes.includes(error.code);
 }
 
-const approvalStorageKey = (accountId: string) => 'eapr-review-approval:' + accountId;
-function loadSavedApproval(accountId: string, reviewPackage: ReviewPackage): ActivationRequest | undefined {
+export type ApprovalStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+
+function browserApprovalStorage(): ApprovalStorage | undefined {
   try {
-    const raw = window.sessionStorage.getItem(approvalStorageKey(accountId));
+    return typeof window !== 'undefined' ? window.sessionStorage : undefined;
+  } catch { return undefined; }
+}
+
+export const approvalStorageKey = (accountId: string) => 'eapr-review-approval:' + accountId;
+
+export function loadSavedApproval(
+  accountId: string,
+  reviewPackage: ReviewPackage,
+  storage: ApprovalStorage | undefined = browserApprovalStorage(),
+): ActivationRequest | undefined {
+  if (!storage) return undefined;
+  try {
+    const raw = storage.getItem(approvalStorageKey(accountId));
     const parsed = raw ? ActivationRequestSchema.safeParse(JSON.parse(raw)) : undefined;
     return parsed?.success && parsed.data.reviewPackageId === reviewPackage.id &&
       parsed.data.expectedPackageHash === reviewPackage.hash ? parsed.data : undefined;
   } catch { return undefined; }
 }
-function saveApproval(accountId: string, request: ActivationRequest) {
-  try { window.sessionStorage.setItem(approvalStorageKey(accountId), JSON.stringify(request)); } catch { /* storage only aids recovery */ }
+
+export function saveApproval(
+  accountId: string,
+  request: ActivationRequest,
+  storage: ApprovalStorage | undefined = browserApprovalStorage(),
+) {
+  if (!storage) return;
+  try { storage.setItem(approvalStorageKey(accountId), JSON.stringify(request)); } catch { /* storage only aids recovery */ }
 }
-function clearApproval(accountId: string) {
-  try { window.sessionStorage.removeItem(approvalStorageKey(accountId)); } catch { /* nothing to clear */ }
+
+export function clearApproval(
+  accountId: string,
+  storage: ApprovalStorage | undefined = browserApprovalStorage(),
+) {
+  if (!storage) return;
+  try { storage.removeItem(approvalStorageKey(accountId)); } catch { /* nothing to clear */ }
+}
+
+/** Reuse a saved same-package approval; never invent a second key for that package. */
+export function nextApprovalRequest(
+  reviewPackage: ReviewPackage,
+  savedApproval: ActivationRequest | undefined,
+  createKey: () => string,
+): ActivationRequest {
+  return savedApproval ?? activationRequestFor(reviewPackage, createKey());
+}
+
+/** Approve stays off through load/busy/stale and after an applied outcome. */
+export function canApproveReview(input: {
+  reviewPackage: ReviewPackage | undefined;
+  loading: boolean;
+  busy: boolean;
+  stale: boolean;
+  outcome?: ActivationOutcome;
+}): boolean {
+  const { reviewPackage, loading, busy, stale, outcome } = input;
+  return reviewPackage !== undefined && reviewPackage.ready && !loading && !busy && !stale &&
+    !reviewPackage.diagnostics.some(item => item.severity === 'blocker') && outcome?.state !== 'applied';
+}
+
+/** Drop a selection that is no longer in the renewed session grants. */
+export function authorizedAccountId(chosen: string, allowedAccountIds: readonly string[]): string {
+  return allowedAccountIds.includes(chosen) ? chosen : '';
 }
 
 function AccountReview({ accountId, session }: { accountId: string; session: LocalSession }) {
@@ -196,7 +250,7 @@ function AccountReview({ accountId, session }: { accountId: string; session: Loc
 
   const approve = () => run(async () => {
     if (!reviewPackage) return;
-    const request = savedApproval ?? activationRequestFor(reviewPackage, 'approval-' + crypto.randomUUID());
+    const request = nextApprovalRequest(reviewPackage, savedApproval, () => 'approval-' + crypto.randomUUID());
     saveApproval(accountId, request);
     setSavedApproval(request);
     const result = await activateReview(accountId, request);
@@ -206,8 +260,7 @@ function AccountReview({ accountId, session }: { accountId: string; session: Loc
 
   const detailsFor = details?.reviewPackage.hash === reviewPackage?.hash ? details : undefined;
   const pendingApproval = outcome?.state === 'pending' || (savedApproval !== undefined && outcome === undefined);
-  const canApprove = reviewPackage !== undefined && detailsFor !== undefined && reviewPackage.ready && !loading && !busy &&
-    !stale && !reviewPackage.diagnostics.some(item => item.severity === 'blocker') && outcome?.state !== 'applied';
+  const canApprove = canApproveReview({ reviewPackage, loading, busy, stale, outcome });
   return <>
     {loading && <p role="status">Loading saved review package…</p>}
     {!loading && !reviewPackage && error == null && <p>No review package is prepared for this account.</p>}
@@ -235,7 +288,7 @@ function AccountReview({ accountId, session }: { accountId: string; session: Loc
 
 export function ReviewPage({ session }: { session: LocalSession }) {
   const [chosen, setAccountId] = useState('');
-  const accountId = session.allowedAccountIds.includes(chosen) ? chosen : '';
+  const accountId = authorizedAccountId(chosen, session.allowedAccountIds);
   return <main className="review-main">
     <header>
       <p className="review-eyebrow">Per-customer review</p>
