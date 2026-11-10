@@ -9,7 +9,7 @@ const safetyRuleText: Record<string, string> = {
   'source-contract-bound': 'Automatic sync stops when a source no longer matches the contract that was reviewed.',
   'reviewed-semantic-version': 'Automatic sync stops if the reviewed meaning of the source fields changes.',
   'explicit-supported-finance': 'Only explicitly supported financial records are applied; other records are held, not guessed.',
-  'target-version-bound': 'Automatic sync stops if the parent records changed since the version shown here.',
+  'target-version-bound': 'The proposed import applies only to the parent version shown here; if the parent changed, the import is rejected and must be re-prepared and approved again. Later synchronization is planned against the then-current version.',
   'bounded-cycle': 'Automatic sync stops when a cycle exceeds the record or amount limits shown here.',
 };
 

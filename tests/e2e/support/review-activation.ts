@@ -59,14 +59,33 @@ export function createReviewActivationMount(root: string, webOrigin: string) {
   }
 
   async function forceStaleReview(db: Pool, accountId: string) {
+    await rewriteHead(db, accountId, fields => fields, 'browser-stale');
+  }
+
+  /** Test-owner head rewrite that adds a server-held blocker for an unsupported contract term. */
+  async function forceBlockedReview(db: Pool, accountId: string) {
+    await rewriteHead(db, accountId, fields => ({
+      ...fields,
+      ready: false,
+      diagnostics: [...fields.diagnostics, {
+        code: 'UNSUPPORTED_CONTRACT_TERM', severity: 'blocker' as const,
+        message: 'A contract term has no supported meaning, so no amount was invented for it.',
+        sourceIds: [], fieldPaths: ['contractTerms[0]'],
+      }],
+    }), 'browser-blocked');
+  }
+
+  async function rewriteHead<T>(
+    db: Pool, accountId: string, change: (fields: any) => T, label: string,
+  ) {
     const repository = createReviewRepository(db, () => new Date());
     const head = await repository.readHead(accountId);
-    if (!head) throw new Error('No prepared review head to stale');
+    if (!head) throw new Error('No prepared review head to rewrite');
     const { id: _id, hash: _hash, revision: _revision, ...fields } = head.review;
     await repository.savePreparation(headToken(head.review), {
-      fields,
+      fields: change(fields) as typeof fields,
       sourceRef: head.sourceRef,
-      fingerprint: hashCanonical(['browser-stale', accountId, String(Date.now())]),
+      fingerprint: hashCanonical([label, accountId, String(Date.now())]),
       companion: head.companion,
     });
   }
@@ -75,6 +94,7 @@ export function createReviewActivationMount(root: string, webOrigin: string) {
     workerPlugins,
     controlPlugins,
     forceStaleReview,
+    forceBlockedReview,
     accounts: () => {
       if (!proofs) throw new Error('Activation proofs are not ready');
       return { a: proofs.a.accountId, b: proofs.b.accountId };

@@ -235,3 +235,109 @@ test('retries a failed details read and offers earlier unresolved approvals only
     await close();
   }
 });
+
+test('inspects source evidence before approval and shows a server-held unsupported term as blocked', async ({ page }) => {
+  const { origin, close, accounts, forceBlockedReview } = await openLocalReview({ activation: true });
+  if (!accounts || !forceBlockedReview) throw new Error('Activation review harness did not expose accounts');
+  const { b: accountB } = accounts();
+  const activations: string[] = [];
+  page.on('request', request => {
+    if (request.method() === 'POST' && request.url().includes('/activate')) activations.push(request.url());
+  });
+
+  try {
+    await startReview(page, origin, 'review');
+    const prepared = await prepareAccount(page, origin, accountB);
+    const details = page.getByRole('region', { name: 'Decision details' });
+    await expect(details).toBeVisible();
+
+    const firstCitation = details.getByRole('button', { name: /^Inspect / }).first();
+    const evidenceId = (await firstCitation.innerText()).replace(/^Inspect /, '');
+    const evidenceRead = page.waitForResponse(response =>
+      decodeURIComponent(new URL(response.url()).pathname) === '/api/evidence/' + evidenceId);
+    await firstCitation.click();
+    expect((await evidenceRead).status()).toBe(200);
+    const citation = page.getByRole('region', { name: 'Decision details' }).getByLabel('Opened citation');
+    await expect(citation.getByRole('article', { name: 'Evidence citation' })).toBeVisible();
+    await expect(citation.getByRole('link', { name: /Open original/ })).toHaveAttribute('href', /\/api\/evidence\//);
+    await expect(citation.getByLabel('Citation text')).not.toBeEmpty();
+    await citation.getByRole('button', { name: 'Close citation' }).click();
+    await expect(citation).toHaveCount(0);
+    expect(activations).toEqual([]);
+
+    await forceBlockedReview(accountB);
+    await page.getByLabel('Registered account').selectOption('');
+    await page.getByLabel('Registered account').selectOption(accountB);
+    await expect(page.getByRole('region', { name: 'Review package' }).getByText('Not ready for approval', { exact: true }))
+      .toBeVisible();
+    const unresolved = page.getByRole('region', { name: 'Unresolved decisions' });
+    await expect(unresolved.getByText('UNSUPPORTED_CONTRACT_TERM')).toBeVisible();
+    await expect(page.getByRole('button', { name: /Approve this customer only|Retry same approval/ })).toBeDisabled();
+    expect(activations).toEqual([]);
+    expect(prepared.id).toBeTruthy();
+  } finally {
+    await close();
+  }
+});
+
+test('recovers the original receipt after a lost reply and a newer head, and sends one request per double click', async ({ page }) => {
+  const { origin, system, close, accounts, forceStaleReview } = await openLocalReview({ activation: true });
+  if (!accounts || !forceStaleReview) throw new Error('Activation review harness did not expose accounts');
+  const { b: accountB } = accounts();
+  const posts: string[] = [];
+  page.on('request', request => {
+    if (request.method() === 'POST' && request.url().endsWith('/activate')) posts.push(request.postData() ?? '');
+  });
+
+  try {
+    await startReview(page, origin, 'review');
+    const prepared = await prepareAccount(page, origin, accountB);
+    await expect(page.getByRole('region', { name: 'Decision details' })).toBeVisible();
+
+    // The server applies the approval, but the browser never receives the reply.
+    let dropReply = true;
+    await page.route('**/api/review/*/activate', async route => {
+      if (!dropReply) return route.continue();
+      dropReply = false;
+      await route.fetch();
+      return route.abort('failed');
+    });
+    await page.getByRole('button', { name: 'Approve this customer only' }).click();
+    await expect(page.getByRole('alert')).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Activation receipt' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Retry same approval' })).toBeEnabled();
+    expect(posts).toHaveLength(1);
+    const original = JSON.parse(posts[0]!) as { idempotencyKey: string; reviewPackageId: string };
+    expect(original.reviewPackageId).toBe(prepared.id);
+
+    const stored = await system.db.runtime.query<{ receipt_id: string }>(
+      'SELECT receipt_id FROM runtime_activation_imports WHERE account_id = $1', [accountB]);
+    expect(stored.rows).toHaveLength(1);
+
+    // The head moves to a newer package; the first approval is now only recoverable explicitly.
+    await forceStaleReview(accountB);
+    await page.getByLabel('Registered account').selectOption('');
+    await page.getByLabel('Registered account').selectOption(accountB);
+    const panel = page.getByRole('region', { name: 'Unresolved earlier approvals' });
+    await expect(panel).toBeVisible();
+    await expect(panel.getByText(prepared.id, { exact: false }).first()).toBeVisible();
+    expect(posts).toHaveLength(1);
+
+    const replay = apiResponse(page, '/api/review/' + accountB + '/activate', 'POST');
+    const retry = panel.getByRole('button', { name: /Retry original approval/ });
+    await retry.dblclick();
+    const response = await replay;
+    expect(response.status()).toBe(200);
+    expect(JSON.parse(response.request().postData() ?? '')).toEqual(JSON.parse(posts[0]!));
+    const body = await response.json() as { receipt: { id: string }; replayed: boolean };
+    expect(body.replayed).toBe(true);
+    expect(body.receipt.id).toBe(stored.rows[0]!.receipt_id);
+    await expect(panel.getByRole('region', { name: 'Activation receipt' })).toBeVisible();
+    expect(posts).toHaveLength(2);
+
+    const after = await system.db.runtime.query('SELECT 1 FROM runtime_activation_imports WHERE account_id = $1', [accountB]);
+    expect(after.rowCount).toBe(1);
+  } finally {
+    await close();
+  }
+});
