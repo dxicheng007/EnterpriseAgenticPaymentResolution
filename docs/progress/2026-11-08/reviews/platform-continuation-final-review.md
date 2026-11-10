@@ -1,0 +1,40 @@
+# Platform continuation — final whole-branch integration review
+
+Base: `bdf4da5` (current main supplied for this review).
+Candidate: `da2cfafd22b828da20afbe63d1291e3ac6f40928`.
+
+Integration specification verdict: **PASS** for the implemented Gate P producer and additive immutable review-details backend.
+Engineering quality verdict: **PASS** for this local publication checkpoint.
+Actionable source findings, in priority order: **none identified**.
+
+This is an independent combined source/evidence review. It does not confer Gate J, E1, full V3/V4, live construction, synchronization or joint user acceptance.
+
+## Scope and method
+
+Read the full combined source changes in bounded passes, relevant exact tree context, producer design/report/independent review, review-details design/report/independent review and SDD ledger, consumer handoff, sync design boundaries, repository/area guidance, and relevant frozen-contract and verification conventions. Inspected the new tests for substantive boundary evidence. Follow-up reads covered the existing activation preparation, Discovery tool advertisement and state projection, browser-safe contract graph, protected build manifests, and database changes. No source/git mutations, database access, test reruns, subagents or external comments were performed. Only this report was written.
+
+The candidate-to-current comparison for apps/packages/db/tests was empty. `git diff --check bdf4da5 da2cfaf` passed. Only control009 is added under database SQL paths; existing control/runtime migrations and worker, parent, finance, Discovery and browser implementations are unchanged.
+
+## Cross-component integration
+
+- **A4/A5 authority remains intact.** `apps/control/src/activation-composition.ts:50` mounts the details read as an authenticated sibling. `review-repository.ts:35` preserves the original canonical-row decoder for head reads while `:55` selects exactly account/hash without a head fallback, write or refresh. `review-details.ts:86` enforces current account and saved source grants. The read does not call preparation, the worker, policy/registry refresh or activation. Existing fresh approval checks, per-customer intent identity and authoritative receipt recovery are unchanged.
+- **Historical evidence is explicit and bounded.** `review-details.ts:29` verifies saved authority equality/digest, capture/profile/artifact identity and membership, saved plan hashes, the recorded parent snapshot and distinct planner-time copy. Source event and evidence references are restricted to that saved capture. Explicit projection at `:58` and `:70`, followed by the strict response schema, excludes full companions, other profiles, proof/policy/fixture material and raw capture events. `packages/contracts/src/review-details.ts:88` checks public scope/hash/version/time bindings. Saved plan arrays retain their order. Historical readability after policy/source/parent change does not grant present activation readiness.
+- **Route errors stay bounded.** `apps/control/src/routes/review.ts:59` uses the existing session authorizer and redacted envelope, rejects query/body inputs and returns no-store. `server.ts:67` restricts router-level malformed-parameter translation to the mounted details GET. Existing sibling routes and unmounted behavior remain preserved.
+- **Producer and current Discovery remain separated.** `packages/evaluator/src/discovery-verification.ts:173` uses the owner gate for historical lookup; `:231` performs reservation/mapping SQL on that gate's client. `:143` claims only queued work and `:197` requires positively committed claim ownership before saved-request execution. Unknown commit outcomes and losing claims do not launch or fail another claimant. Original subject identity includes exact snapshot object bytes and full registration. Shared preparation/reservation/job projection extraction preserves the reviewer path and financial preimages. No producer factory is injected into current application composition. Existing `packages/discovery/src/roles.ts:17` still does not advertise verification tools, and `repository.ts:141` still projects the deliberately unimplemented verificationJobs list. Gate J remains a real required consumer integration, not an implicit capability enabled by this export.
+- **Immutable migration is compatible.** Control009 references existing control007 step/dispatch/assessment identities and control006 reservation identity, bounds numeric conversions and subject bytes, and grants only SELECT/INSERT to the application role. Independently computed SHA-256 is `5080b0c7cec1c0a6eb366aa650f01e87d50183d5de3fa490691bf0f8085c1ab0`, identical to the accepted producer checkpoint. Review-details introduces no DDL.
+- **Build/export boundaries are maintained.** The evaluator adds one trusted server subpath. The new browser contract imports safe leaf schemas directly; its actual Vite graph test excludes Node/server dependencies. Both explicit protected build closures include the additive contracts leaf, and the financial closure includes producer/shared source changes. Existing recursive closure and mutation tests cover the changed dependency boundaries. The producer report's earlier financial build pin describes its earlier source checkpoint, not the final details source. Preserved installed demo proofs/policies are not claimed refreshed; fresh candidate proofs are the reported test evidence.
+
+## Evidence assessment and limitations
+
+The inspected details test issues genuine A4 preparations and proves exact historical reads across newer heads, source/parent changes and policy removal; current-grant rejection; malformed requests; 14 recomputed corrupt owner-side copies; protected sentinel exclusion; and stable control/runtime fingerprints and dependency-call counts. The nonempty 300,000-to-380,000-cent case is explicitly projection-only owner-inserted data. It is not proof of nonempty-target bootstrap issuance. Genuine prepared examples have empty financial baselines and an 80,000-cent proposed balance.
+
+The producer matrix substantiates atomic mapping/budget admission, queued saved-byte recovery, commit-uncertainty handling, claim races, protected completion provenance and unchanged runtime state through a test-owned gate. It cannot establish actual Discovery supervisor authority, generation replacement, paused/stale recovery scheduling, current settlement, scoped state/tool publication or activity privacy end-to-end. Those obligations are correctly retained in the consumer handoff.
+
+Machine evidence is supplied, not rerun here: final source typecheck and 444 unit tests; builder 8 integration tests across 5 files; root's final v3-activation, v4-verification-idempotency and financial-attestation-composition run passed 4 tests across 3 files in 61.55 seconds. Earlier 427-unit/46-integration/2-browser evidence predates review-details and is supporting baseline evidence, not browser proof of the new endpoint or approval UI. No concrete unresolved integration doubt required another database run.
+
+## Publication status audit
+
+Implemented: Gate P producer, immutable control009, additive exact-package authenticated details backend, related contracts and protected build closure updates.
+Design-only/deferred: Gate J actual supervisor integration and mounting; sync capture/application/status; Experience approval detail consumption and exact-bound browser evidence; live provider generation and full acceptance.
+
+During review, root reconciled the publication status in the progress README and continuation handoff with a new implementation checkpoint, superseding the retained chronological planned-next record. I inspected those working documentation additions and confirmed that apps/packages/db/tests remained unchanged. The current status now explicitly separates implemented review-details from design-only Gate J, and preserves the financial/browser/acceptance limits. This documentation follow-up is addressed. Existing Experience PR11 findings remain separately tracked and are not represented as fixed by this backend prerequisite.

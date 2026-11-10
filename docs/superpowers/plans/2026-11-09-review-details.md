@@ -33,6 +33,8 @@
 
 **Modify:** `packages/contracts/src/index.ts` export; `apps/control/src/review-repository.ts` decoder reuse and immutable lookup; `apps/control/src/routes/review.ts` additive plugin; `apps/control/src/activation-composition.ts` narrow mount. Add the new schema leaf to `packages/evaluator/src/financial-attestation-build.ts` and `packages/evaluator/src/bootstrap-runner.ts` build source lists, preserving all current entries. Guide updates may touch `apps/AGENTS.md` and `docs/demo/activation-review-setup.md` only for this endpoint.
 
+**Narrow additional reservation:** `apps/control/src/server.ts` frameworkErrors recognition for the mounted details GET only, covering malformed escapes and overlong account/hash parameters with the same redacted400/no-store contract. Preserve other paths/methods and unmounted fallback; include these cases in the new integration test.
+
 **Read/reuse, do not edit:** `tests/fixtures/activation-proof.ts` (`issueActivationProofs`), existing A4 integration setup and current leaf schemas. Request a concrete extra path if necessary. Root serializes shared evaluator manifest paths after the D4b producer handoff.
 
 **Interfaces:**

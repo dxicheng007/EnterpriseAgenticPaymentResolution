@@ -8,11 +8,12 @@ import { createActivationPublication } from './activation-publication.js';
 import { createActivationReview } from './activation-review.js';
 import { createFinancialCaptureReader, type FinancialSourceDependencies } from './financial-capture.js';
 import type { ParentReadClient } from './parent-read-client.js';
+import { createReviewDetails } from './review-details.js';
 import { createReviewPreparation } from './review-preparation.js';
 import { createReviewProofSelection, loadReviewSelection, type BootstrapRoots } from './review-proof-selection.js';
 import { createReviewRepository } from './review-repository.js';
 import { createActivationReviewPlugin } from './routes/activation.js';
-import { createReviewPlugin, type ReviewAuthorize } from './routes/review.js';
+import { createReviewDetailsPlugin, createReviewPlugin, type ReviewAuthorize } from './routes/review.js';
 import type { composeSourceSemantics } from './source-semantics-composition.js';
 
 export type LocalActivationOptions = {
@@ -46,6 +47,7 @@ export async function composeActivationReview(source: FinancialSourceDependencie
   const publisher = createActivationPublication({ registryRoot, readCommittedIntent: repository.readCommittedIntent });
   return [
     createReviewPlugin(preparation, authorize),
+    createReviewDetailsPlugin(createReviewDetails(repository), authorize),
     async app => {
       const publicationFailed = () => app.log.warn('ACTIVATION_PUBLICATION_PENDING');
       const deliver = options.worker && createActivationDelivery({
