@@ -1,6 +1,6 @@
 # Current team handoff and remaining tasks — November 10, 2026
 
-This is the current coordination snapshot at main `0f0184e13d63df435aedda17810b07a08e9fcedc`, which merged [PR40](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/40). Earlier progress reports and the original team-expansion plan remain historical evidence; use their exact-candidate reviews rather than their old completion summaries. No open PRs were observed when preparing this handoff. This task list is not a source-path or migration reservation.
+For the latest implementation checkpoints and delivered owner requests, read [Platform coordination](platform-coordination.md). The following is the roadmap snapshot at main `0f0184e13d63df435aedda17810b07a08e9fcedc`, which merged [PR40](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/40). Earlier progress reports and the original team-expansion plan remain historical evidence; use their exact-candidate reviews rather than their old completion summaries. No open PRs were observed when preparing this handoff. This task list is not a source-path or migration reservation.
 
 ## Completed work to preserve
 

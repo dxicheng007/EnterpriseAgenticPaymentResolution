@@ -72,3 +72,11 @@ Actual-input metering, isolation and honest usage are already required; Platform
 Task 1 candidate `f861fc5843961d4573e585a46399e8da903260dd` adds constrained origins, unit audits, event outcomes, application heads and exact historical reads. Focused checks passed: 11 storage cases, 48 parent/capture cases, 67 parent/compiler/finance unit cases, and typecheck. A fresh independent exact-candidate review is pending; preparation, atomic writing and concurrency proof remain subsequent tasks. The inherited writer is not yet repaired, so this intermediate candidate does not establish working ongoing synchronization.
 
 The latest fetch found main at `f409805` and only Platform draft PR48 open. No newer Discovery or Experience correction was available at that checkpoint. The authority ingress implementation plan is authored and under separate review; it does not mount the routes.
+
+## Accepted storage checkpoint and active preparation
+
+Task1 is accepted at `7af5d8ace77a087529c05bada4c8da48f7b4a0d2`. The [original exact review](sync-apply-storage-review.md) found a missing binding between saved prefix references and actual immutable history. The [scoped correction review](sync-apply-storage-round1-review.md) closes that finding; [implementation evidence](sync-apply-storage-report.md) records two-unit recovery and five independently rehashed corruption variants rejected by both recovery APIs. Fresh correction checks passed typecheck and all eleven storage cases. No migration bytes changed during correction.
+
+Task2 now owns complete source-global capture validation and read-only preparation. Atomic writing and transaction barriers remain Tasks3–4, so the inherited ongoing writer is still incomplete and unmounted. Main `f409805` has been integrated at `f072129`; the latest fetch found no new owner corrections.
+
+The [authority ingress plan](../../superpowers/plans/2026-11-10-authority-operations-ingress.md), SHA-256 `eff819287185eb750733329648b057e1f4f45500e8648a44e64f21fda29711a7`, passed [fresh plan review](authority-operations-ingress-plan-review.md). Its source tasks remain queued behind the apply writer. Discovery completion design is in a correction round for exact diagnostic supersession/full-scope compile failure checks; its schema/consumer release has not occurred. Offline configuration/meter design is being prepared separately.
