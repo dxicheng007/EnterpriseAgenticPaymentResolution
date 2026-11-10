@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { readConnectionState } from '../../../../../packages/client/src/parent.js';
+import { changeAuthority, readConnectionState, type AuthorityAction } from '../../../../../packages/client/src/parent.js';
 import type { LocalSession } from '../../../../../packages/client/src/session.js';
 import type { ConnectionStateV1 } from '../../../../../packages/contracts/src/connection-state.js';
 import { formatUsdCents } from '../preview/preview-values.js';
@@ -31,8 +31,7 @@ export function ConnectionInspection({ state }: { state: ConnectionStateV1 }) {
       <dt>Quarantined events</dt><dd>{counts.quarantinedEvents ?? unmeasured}</dd>
       <dt>Runtime model calls</dt><dd>{state.runtimeModelCalls}</dd>
     </dl>
-    <p>Unmeasured values are not zero. Pending, quarantine and lag appear only when the worker records them.
-      Pause, resume and revoke controls are not available because no worker command ingress is mounted.</p>
+    <p>Unmeasured values are not zero. Pending, quarantine and lag appear only when the worker records them.</p>
     <h3>Captured streams</h3>
     {state.streams.length === 0 ? <p>No captured streams are recorded for this account.</p> : <table className="review-table">
       <thead><tr><th>Source</th><th>Stream</th><th>Transport</th><th>Baseline</th><th>Captured through</th><th>Pages</th><th>Last captured</th><th>Lag</th></tr></thead>
@@ -63,6 +62,63 @@ export function ConnectionInspection({ state }: { state: ConnectionStateV1 }) {
   </section>;
 }
 
+const actionsFor: Record<ConnectionStateV1['status'], AuthorityAction[]> = {
+  inactive: [], active: ['pause', 'revoke'], paused: ['resume', 'revoke'], revoked: [],
+};
+const actionLabel: Record<AuthorityAction, string> = { pause: 'Pause', resume: 'Resume', revoke: 'Revoke' };
+
+function AuthorityControls({ state, onChanged }: { state: ConnectionStateV1; onChanged(): void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>();
+  const [outcome, setOutcome] = useState<string>();
+  const [confirming, setConfirming] = useState<AuthorityAction>();
+  // A retry after a lost reply reuses the key so the worker replays instead of repeating the change.
+  const [keys] = useState(() => new Map<string, string>());
+  const actions = actionsFor[state.status];
+
+  async function run(action: AuthorityAction) {
+    const keyName = action + ':' + state.epoch;
+    const key = keys.get(keyName) ?? globalThis.crypto.randomUUID();
+    keys.set(keyName, key);
+    setBusy(true);
+    setError(undefined);
+    setOutcome(undefined);
+    setConfirming(undefined);
+    try {
+      const { result, replayed } = await changeAuthority(state.scope.accountId, action, state.epoch, key);
+      setOutcome(actionLabel[action] + ' recorded: ' + result.state.status + ' at epoch ' + result.state.epoch +
+        (replayed ? ' (replayed original result)' : result.changed ? '' : ' (already in that state)') + '.');
+      onChanged();
+    } catch (failure) {
+      setError(failure);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <section className="review-card" aria-label="Authority controls">
+    <h2>Authority controls</h2>
+    {state.status === 'inactive' && <p>No approved activation exists, so there is no authority to change.</p>}
+    {state.status === 'revoked' && <p>Authority is revoked and cannot be resumed. A new customer approval is required.</p>}
+    {actions.length > 0 && <>
+      <p>Changes apply to this customer only and are checked against authority epoch {state.epoch}.</p>
+      <div className="review-actions">
+        {actions.map(action => <button key={action} type="button" disabled={busy}
+          onClick={() => action === 'revoke' ? setConfirming('revoke') : void run(action)}>{actionLabel[action]} this customer</button>)}
+      </div>
+    </>}
+    {confirming === 'revoke' && <div role="alertdialog" aria-label="Confirm revoke">
+      <p>Revoking permanently withdraws automatic synchronization for this customer. It cannot be resumed.</p>
+      <div className="review-actions">
+        <button type="button" disabled={busy} onClick={() => void run('revoke')}>Confirm revoke</button>
+        <button type="button" disabled={busy} onClick={() => setConfirming(undefined)}>Cancel</button>
+      </div>
+    </div>}
+    {outcome && <p role="status">{outcome}</p>}
+    {error != null && <RequestFailure error={error} next="The stored state is unchanged unless a receipt shows otherwise. Refresh, then retry; a retry reuses the same request key." />}
+  </section>;
+}
+
 function AccountOperations({ accountId, session }: { accountId: string; session: LocalSession }) {
   const [state, setState] = useState<ConnectionStateV1>();
   const [error, setError] = useState<unknown>();
@@ -70,7 +126,6 @@ function AccountOperations({ accountId, session }: { accountId: string; session:
 
   useEffect(() => {
     const controller = new AbortController();
-    setState(undefined);
     setError(undefined);
     void readConnectionState(accountId, controller.signal).then(value => {
       if (!controller.signal.aborted) setState(value);
@@ -84,6 +139,7 @@ function AccountOperations({ accountId, session }: { accountId: string; session:
     <div className="review-actions"><button type="button" onClick={() => setAttempt(value => value + 1)}>Refresh connection state</button></div>
     {error != null && <RequestFailure error={error} next="Nothing was assumed. Refresh to read the stored state again." />}
     {state === undefined && error == null && <p role="status">Loading connection state…</p>}
+    {state && <AuthorityControls state={state} onChanged={() => setAttempt(value => value + 1)} />}
     {state && <ConnectionInspection state={state} />}
   </>;
 }
