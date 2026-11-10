@@ -28,8 +28,8 @@ import { captureEvidenceFixture } from './evidence-v2-capture.js';
 export const activationCutover = '2026-10-01T00:00:00.000Z';
 const fixtureSeed = 'activation-policy';
 
-export function verifyOriginals(target: TargetState, company: 'a' | 'b') {
-  const fixture = company === 'a' ? fixtureA(fixtureSeed, activationCutover) : fixtureB(fixtureSeed, activationCutover);
+export function verifyOriginals(target: TargetState, company: 'a' | 'b', seed = fixtureSeed) {
+  const fixture = company === 'a' ? fixtureA(seed, activationCutover) : fixtureB(seed, activationCutover);
   const expected = fixture.records.filter(record => record.sourceAccountId === fixture.accounts[0]!.accountId)
     .map(({ sourceAccountId: _account, recordId, effectiveDate, ...facts }) => ({
       ...facts, recordId, effectiveAt: effectiveDate + 'T00:00:00.000Z',
@@ -42,7 +42,7 @@ export function verifyOriginals(target: TargetState, company: 'a' | 'b') {
   expect(target.reversals).toEqual([]);
 }
 
-export async function issueActivationProofs(root: string, db: Pool) {
+export async function issueActivationProofs(root: string, db: Pool, seed = fixtureSeed) {
   const visibleRoot = join(root, 'visible');
   const truthRoot = join(root, 'truth');
   const storeRoot = join(root, 'originals');
@@ -62,7 +62,7 @@ export async function issueActivationProofs(root: string, db: Pool) {
   const publishScopes = createRegisteredScopePublication({ registryRoot, candidates }).publishRegisteredScopes;
   const scopeReader = createRegisteredScopeReader({ registryRoot });
   await expect(scopeReader.readSnapshot()).rejects.toThrow('REGISTERED_SCOPE_UNAVAILABLE');
-  await generateFixtures({ seed: fixtureSeed, asOf: activationCutover, visibleRoot, truthRoot });
+  await generateFixtures({ seed, asOf: activationCutover, visibleRoot, truthRoot });
   const evaluatorBuildHash = await readFixedFinancialBuildHash();
 
   async function issue(company: 'a' | 'b') {
