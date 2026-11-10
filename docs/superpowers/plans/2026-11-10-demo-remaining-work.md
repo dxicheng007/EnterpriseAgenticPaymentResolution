@@ -207,3 +207,7 @@ General multi-customer capture/history selection, dependency journal/application
 ## 9. User-directed MVP ownership split
 
 Developer 0 retains Platform source, bounded verification, shared board and integration. The successor Experience agent owns the exact UI/client/browser paths and T3/T4/T8 delivery in [Experience MVP handoff](../../progress/2026-11-10/experience-mvp-handoff.md), starting from Platform source85023c8. No overlapping implementation ownership is authorized. Three timed rehearsals and independent browser evidence remain required; the new agent returns a draft PR and completion report for Developer 0 to integrate.
+
+### Merged-main checkpoint
+
+PR57/59/61 are merged into main12f6595. Platform continuation `codex/platform-mvp-integration` contains reviewed legacy V5 title correction3e791e6 (89 independent database-free checks), without unlocking full V5/V6. PR61 delivers honest unmeasured model posture and committed-manifest shared-lane reads; it does not close PR59 authority UX findings or T3/T4 browser acceptance. Experience successor has claimed its isolated lease and must reconcile main before fresh proof staging. Developer 0 retains source review/integration and will not run services during that lease. See [coordination record](../../progress/2026-11-10/platform-coordination.md).
