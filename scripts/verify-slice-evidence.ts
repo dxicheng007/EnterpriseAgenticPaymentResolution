@@ -62,8 +62,7 @@ function playwrightCases(report: unknown, file: string) {
   if (!parsed.success) return;
   const { suites, stats } = parsed.data;
   if (stats && Object.entries(stats).some(([key, value]) =>
-    ['unexpected', 'skipped', 'flaky', 'failed'].includes(key) && value !== 0 ||
-    key === 'expected' && value !== 1)) return;
+    ['unexpected', 'skipped', 'flaky', 'failed'].includes(key) && value !== 0)) return;
 
   const expectedFile = relative('tests/e2e', file);
   const specs: z.infer<typeof browserSpec>[] = [];
@@ -74,23 +73,26 @@ function playwrightCases(report: unknown, file: string) {
         (suite.data.file !== undefined && suite.data.file !== expectedFile)) return false;
     const children = suite.data.suites ?? [];
     const currentSpecs = suite.data.specs ?? [];
-    if (children.length + currentSpecs.length !== 1) return false;
+    if (children.length > 0 && currentSpecs.length > 0) return false;
+    if (children.length === 0 && currentSpecs.length === 0) return false;
     for (const spec of currentSpecs) {
       if (spec.file !== undefined && spec.file !== expectedFile) return false;
+      if (spec.tests.length !== 1) return false;
       specs.push(spec);
     }
     return children.every(child => visit(child, depth + 1));
   }
-  if (!visit(suites[0], 0) || specs.length !== 1) return;
-  const [spec] = specs;
-  const [test] = spec.tests;
-  const result = test?.results[0];
-  return [{
-    name: spec.title,
-    passed: spec.ok !== false && spec.tests.length === 1 && test.status === 'expected' &&
-      test.expectedStatus === 'passed' && test.results.length === 1 && result.status === 'passed' &&
-      (result.retry === undefined || result.retry === 0) && !result.error && !result.errors?.length,
-  }];
+  if (!visit(suites[0], 0) || specs.length < 1) return;
+  return specs.map(spec => {
+    const [test] = spec.tests;
+    const result = test.results[0];
+    return {
+      name: spec.title,
+      passed: spec.ok !== false && test.status === 'expected' &&
+        test.expectedStatus === 'passed' && test.results.length === 1 && result.status === 'passed' &&
+        (result.retry === undefined || result.retry === 0) && !result.error && !result.errors?.length,
+    };
+  });
 }
 
 export function normalizeReport(
@@ -188,6 +190,13 @@ export function v1ExitCode(
 }
 
 export function v3ExitCode(
+  commands: readonly ReturnType<typeof commandResult>[], diagnostics: readonly string[], chromium?: string,
+) {
+  return commands.length === 4 && commands.every(command => command.result === 'passed') &&
+    diagnostics.length === 0 && chromium ? 0 : 1;
+}
+
+export function v4ExitCode(
   commands: readonly ReturnType<typeof commandResult>[], diagnostics: readonly string[], chromium?: string,
 ) {
   return commands.length === 4 && commands.every(command => command.result === 'passed') &&
