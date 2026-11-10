@@ -7,7 +7,13 @@ import {
   type ParentReadQuery, type ParentView,
 } from '../../contracts/src/runtime.js';
 import { ConnectionStateV1Schema } from '../../contracts/src/connection-state.js';
-import { LocalApiError, requestLocal } from './http.js';
+import {
+  AuthorityStatusResponseV1Schema, CurrentAuthorityV1Schema,
+} from '../../contracts/src/current-authority.js';
+import {
+  AuthorityOperationBodyV1Schema, type AuthorityOperationV1,
+} from '../../contracts/src/authority-ingress.js';
+import { jsonPost, LocalApiError, requestLocal } from './http.js';
 
 function sameScope(left: Scope, right: Scope) {
   return left.companyId === right.companyId && left.sellerEntityId === right.sellerEntityId &&
@@ -77,4 +83,41 @@ export async function readConnectionState(accountId: string, signal?: AbortSigna
     throw new LocalApiError(200, 'MALFORMED_RESPONSE', 'The connection state did not match the selected account.');
   }
   return state;
+}
+
+export type AuthorityAction = Exclude<AuthorityOperationV1['action'], 'read'>;
+
+export async function readCurrentAuthority(accountId: string, signal?: AbortSignal) {
+  const id = accountIdOf(accountId);
+  const state = await requestLocal(
+    '/api/connections/' + encodeURIComponent(id) + '/authority', CurrentAuthorityV1Schema, { signal },
+  );
+  if (state.identity.scope.accountId !== id) {
+    throw new LocalApiError(200, 'MALFORMED_RESPONSE', 'The authority state did not match the selected account.');
+  }
+  return state;
+}
+
+export async function changeAuthority(
+  accountId: string,
+  action: AuthorityAction,
+  body: unknown,
+  signal?: AbortSignal,
+) {
+  const id = accountIdOf(accountId);
+  const parsedBody = AuthorityOperationBodyV1Schema.safeParse(body);
+  if (!parsedBody.success) invalid('The authority command is invalid.');
+  const response = await requestLocal(
+    '/api/connections/' + encodeURIComponent(id) + '/' + action,
+    AuthorityStatusResponseV1Schema,
+    jsonPost(parsedBody.data, signal),
+    true,
+  );
+  const { result } = response;
+  if (result.identity.scope.accountId !== id || result.state.identity.scope.accountId !== id ||
+      result.action !== action || result.idempotencyKey !== parsedBody.data.idempotencyKey ||
+      result.beforeEpoch !== parsedBody.data.expectedEpoch) {
+    throw new LocalApiError(200, 'MALFORMED_RESPONSE', 'The authority result did not match the request.');
+  }
+  return response;
 }

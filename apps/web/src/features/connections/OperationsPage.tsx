@@ -1,7 +1,14 @@
 import { useEffect, useState } from 'react';
-import { readConnectionState } from '../../../../../packages/client/src/parent.js';
+import {
+  changeAuthority, readConnectionState, readCurrentAuthority, type AuthorityAction,
+} from '../../../../../packages/client/src/parent.js';
+import { LocalApiError } from '../../../../../packages/client/src/http.js';
 import type { LocalSession } from '../../../../../packages/client/src/session.js';
+import {
+  AuthorityOperationV1Schema, type AuthorityOperationV1,
+} from '../../../../../packages/contracts/src/authority-ingress.js';
 import type { ConnectionStateV1 } from '../../../../../packages/contracts/src/connection-state.js';
+import type { CurrentAuthorityV1 } from '../../../../../packages/contracts/src/current-authority.js';
 import { formatUsdCents } from '../preview/preview-values.js';
 import { RequestFailure } from '../sources/review-details.js';
 
@@ -29,10 +36,10 @@ export function ConnectionInspection({ state }: { state: ConnectionStateV1 }) {
       <dt>Applied batches</dt><dd>{counts.appliedBatches}</dd>
       <dt>Pending events</dt><dd>{counts.pendingEvents ?? unmeasured}</dd>
       <dt>Quarantined events</dt><dd>{counts.quarantinedEvents ?? unmeasured}</dd>
-      <dt>Runtime model calls</dt><dd>{state.runtimeModelCalls}</dd>
+      <dt>Runtime model calls</dt><dd>AI-off / forbidden by worker posture (literal {state.runtimeModelCalls}; not measured)</dd>
     </dl>
     <p>Unmeasured values are not zero. Pending, quarantine and lag appear only when the worker records them.
-      Pause, resume and revoke controls are not available because no worker command ingress is mounted.</p>
+      This single-customer fixture view does not establish isolation for customers that share a capture lane.</p>
     <h3>Captured streams</h3>
     {state.streams.length === 0 ? <p>No captured streams are recorded for this account.</p> : <table className="review-table">
       <thead><tr><th>Source</th><th>Stream</th><th>Transport</th><th>Baseline</th><th>Captured through</th><th>Pages</th><th>Last captured</th><th>Lag</th></tr></thead>
@@ -63,27 +70,181 @@ export function ConnectionInspection({ state }: { state: ConnectionStateV1 }) {
   </section>;
 }
 
+const actionsFor: Record<CurrentAuthorityV1['status'], AuthorityAction[]> = {
+  active: ['pause', 'revoke'], paused: ['resume', 'revoke'], revoked: [],
+};
+const actionLabel: Record<AuthorityAction, string> = {
+  pause: 'Pause', resume: 'Resume', revoke: 'Revoke',
+};
+const storagePrefix = 'eapr-authority-operation:';
+
+function sameIdentity(left: CurrentAuthorityV1, right: CurrentAuthorityV1) {
+  return left.identity.activationId === right.identity.activationId &&
+    left.identity.bundleHash === right.identity.bundleHash &&
+    left.identity.scope.companyId === right.identity.scope.companyId &&
+    left.identity.scope.sellerEntityId === right.identity.scope.sellerEntityId &&
+    left.identity.scope.accountId === right.identity.scope.accountId;
+}
+
+function readPending(accountId: string): AuthorityOperationV1 | undefined {
+  try {
+    const value = sessionStorage.getItem(storagePrefix + accountId);
+    if (value === null) return;
+    const parsed = AuthorityOperationV1Schema.safeParse(JSON.parse(value));
+    if (!parsed.success || parsed.data.accountId !== accountId || parsed.data.action === 'read') {
+      sessionStorage.removeItem(storagePrefix + accountId);
+      return;
+    }
+    return parsed.data;
+  } catch {
+    return;
+  }
+}
+
+function storePending(operation: AuthorityOperationV1 | undefined, accountId: string) {
+  if (operation === undefined) sessionStorage.removeItem(storagePrefix + accountId);
+  else sessionStorage.setItem(storagePrefix + accountId, JSON.stringify(operation));
+}
+
+function AuthorityControls({
+  authority, pending, busy, error, outcome, confirming, onConfirming, onRun,
+}: {
+  authority?: CurrentAuthorityV1;
+  pending?: AuthorityOperationV1;
+  busy: boolean;
+  error?: unknown;
+  outcome?: string;
+  confirming?: AuthorityAction;
+  onConfirming(action?: AuthorityAction): void;
+  onRun(operation: AuthorityOperationV1): void;
+}) {
+  const actions = authority ? actionsFor[authority.status] : [];
+  function operation(action: AuthorityAction): AuthorityOperationV1 {
+    if (!authority) throw new Error('Authority is unavailable');
+    return AuthorityOperationV1Schema.parse({
+      schemaVersion: '1',
+      accountId: authority.identity.scope.accountId,
+      action,
+      body: { expectedEpoch: authority.epoch, idempotencyKey: globalThis.crypto.randomUUID() },
+    });
+  }
+
+  return <section className="review-card" aria-label="Current authority">
+    <h2>Current authority</h2>
+    {authority && <>
+      <p><strong>{authority.status}</strong> · committed epoch {authority.epoch}</p>
+      <dl className="review-facts">
+        <dt>Activation</dt><dd>{authority.identity.activationId}</dd>
+        <dt>Artifact hash</dt><dd>{authority.artifactHash}</dd>
+        <dt>Profile hash</dt><dd>{authority.profileHash}</dd>
+        <dt>Manifest hash</dt><dd>{authority.manifestHash}</dd>
+      </dl>
+    </>}
+    {error != null && <RequestFailure error={error}
+      next="Authority commands are unavailable. Refresh the dedicated authority read before taking a new action." />}
+    {!authority && error == null && <p role="status">Loading current authority…</p>}
+    {pending && pending.action !== 'read' && <>
+      <p>An earlier {pending.action} command has an unresolved outcome. Retry sends its exact saved epoch and key.</p>
+      <div className="review-actions">
+        <button type="button" disabled={busy} onClick={() => onRun(pending)}>
+          Retry original {pending.action}
+        </button>
+      </div>
+    </>}
+    {authority && error == null && pending === undefined && <>
+      {authority.status === 'revoked'
+        ? <p>Authority is revoked and cannot be resumed. A new customer approval is required.</p>
+        : <p>Changes apply to this customer only and are checked against authority epoch {authority.epoch}.</p>}
+      <div className="review-actions">
+        {actions.map(action => <button key={action} type="button" disabled={busy}
+          onClick={() => action === 'revoke' ? onConfirming(action) : onRun(operation(action))}>
+          {actionLabel[action]} this customer
+        </button>)}
+      </div>
+    </>}
+    {confirming === 'revoke' && authority && <div role="alertdialog" aria-label="Confirm revoke">
+      <p>Revoking permanently withdraws automatic synchronization for this customer. It cannot be resumed.</p>
+      <div className="review-actions">
+        <button type="button" disabled={busy} onClick={() => onRun(operation('revoke'))}>Confirm revoke</button>
+        <button type="button" disabled={busy} onClick={() => onConfirming(undefined)}>Cancel</button>
+      </div>
+    </div>}
+    {outcome && <p role="status">{outcome}</p>}
+  </section>;
+}
+
 function AccountOperations({ accountId, session }: { accountId: string; session: LocalSession }) {
   const [state, setState] = useState<ConnectionStateV1>();
-  const [error, setError] = useState<unknown>();
+  const [overviewError, setOverviewError] = useState<unknown>();
+  const [authority, setAuthority] = useState<CurrentAuthorityV1>();
+  const [authorityError, setAuthorityError] = useState<unknown>();
+  const [pending, setPending] = useState<AuthorityOperationV1 | undefined>(() => readPending(accountId));
+  const [busy, setBusy] = useState(false);
+  const [outcome, setOutcome] = useState<string>();
+  const [confirming, setConfirming] = useState<AuthorityAction>();
   const [attempt, setAttempt] = useState(0);
+
+  function acceptAuthority(value: CurrentAuthorityV1) {
+    setAuthority(current => current && sameIdentity(current, value) && value.epoch < current.epoch ? current : value);
+  }
 
   useEffect(() => {
     const controller = new AbortController();
-    setState(undefined);
-    setError(undefined);
+    setOverviewError(undefined);
+    setAuthorityError(undefined);
     void readConnectionState(accountId, controller.signal).then(value => {
       if (!controller.signal.aborted) setState(value);
     }, failure => {
-      if (!controller.signal.aborted) setError(failure);
+      if (!controller.signal.aborted) setOverviewError(failure);
+    });
+    void readCurrentAuthority(accountId, controller.signal).then(value => {
+      if (!controller.signal.aborted) acceptAuthority(value);
+    }, failure => {
+      if (!controller.signal.aborted) setAuthorityError(failure);
     });
     return () => controller.abort();
   }, [accountId, session, attempt]);
 
+  async function run(operation: AuthorityOperationV1) {
+    if (operation.action === 'read' || operation.accountId !== accountId) return;
+    storePending(operation, accountId);
+    setPending(operation);
+    setBusy(true);
+    setAuthorityError(undefined);
+    setOutcome(undefined);
+    setConfirming(undefined);
+    try {
+      const response = await changeAuthority(accountId, operation.action, operation.body);
+      storePending(undefined, accountId);
+      setPending(undefined);
+      if (!response.replayed) acceptAuthority(response.result.state);
+      setOutcome(actionLabel[operation.action] + ' recorded: ' + response.result.state.status +
+        ' at epoch ' + response.result.state.epoch +
+        (response.replayed ? ' (replayed historical result)' : response.result.changed ? '' : ' (already in that state)') + '.');
+      setAttempt(value => value + 1);
+    } catch (failure) {
+      setAuthorityError(failure);
+      if (failure instanceof LocalApiError && failure.status === 409) {
+        storePending(undefined, accountId);
+        setPending(undefined);
+        setAuthority(undefined);
+        setOutcome('The saved command was rejected as stale. Current reads were refreshed; choose a new action deliberately.');
+        setAttempt(value => value + 1);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return <>
-    <div className="review-actions"><button type="button" onClick={() => setAttempt(value => value + 1)}>Refresh connection state</button></div>
-    {error != null && <RequestFailure error={error} next="Nothing was assumed. Refresh to read the stored state again." />}
-    {state === undefined && error == null && <p role="status">Loading connection state…</p>}
+    <div className="review-actions"><button type="button" onClick={() => setAttempt(value => value + 1)}>
+      Refresh authority and connection state
+    </button></div>
+    <AuthorityControls authority={authority} pending={pending} busy={busy} error={authorityError}
+      outcome={outcome} confirming={confirming} onConfirming={setConfirming} onRun={operation => void run(operation)} />
+    {overviewError != null &&
+      <RequestFailure error={overviewError} next="Nothing was assumed. Refresh to read the stored overview again." />}
+    {state === undefined && overviewError == null && <p role="status">Loading connection state…</p>}
     {state && <ConnectionInspection state={state} />}
   </>;
 }
