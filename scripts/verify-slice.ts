@@ -1175,8 +1175,8 @@ if (requested === 'live') {
   console.error('Use npm run test:live -- <tests/live/*.test.ts> (scripts/live-build.ts).');
   process.exitCode = 1;
 } else if (requested === 'inject') {
-  console.error('FEATURE_NOT_IMPLEMENTED: Source injection begins with the source adapters.');
-  process.exitCode = 1;
+  const { runDemoInject } = await import('./demo-inject.js');
+  process.exitCode = await runDemoInject(process.argv.slice(3));
 } else if (requested === 'V1') {
   await verifyV1();
 } else if (requested === 'V2') {

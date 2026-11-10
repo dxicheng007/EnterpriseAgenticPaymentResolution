@@ -1,6 +1,6 @@
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { Pool } from 'pg';
 import { expect } from 'vitest';
 import { hashEvent, hashTargetSnapshot, LocalSessionResponseSchema, ReviewPackageSchema, type RawSourceEvent, type TargetState } from '@eapr/contracts';
@@ -184,6 +184,17 @@ export async function createSyncApplyFixture(runtimeThrough?: number, baselineVe
     return {
       db, owner, pair, close, source, operator, operatorToken, registryRoot: proofs.registryRoot,
       addInvoice, addPayment, addSemantic, dependencies: proofs.dependencies, scopeReader: proofs.scopeReader, ...activation,
+      processSetup: {
+        captures: [proofs.a.capture, proofs.b.capture],
+        evidenceRoot: join(root, 'originals'),
+        selectionPath: proofs.selectionPath,
+        workerPaths: { registryRoot: proofs.registryRoot, policyPath: proofs.policyPath },
+        controlPaths: {
+          registryRoot: proofs.registryRoot, policyPath: proofs.policyPath,
+          evidencePinRoot: proofs.bootstrapRoots.evidencePinRoot, sidecarRoot: proofs.bootstrapRoots.sidecarRoot,
+          visibleRoot: join(root, 'visible'), webRoot: resolve('apps/web'),
+        },
+      },
     };
   } catch (error) {
     try {

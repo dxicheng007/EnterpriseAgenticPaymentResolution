@@ -1,6 +1,6 @@
 # Demo contract — pregenerated connector + AI-off sync
 
-**Status:** Frozen T0 demo contract. Documentation only. This page is not V3, V5, or V6 acceptance, not a path or migration reservation, and not a claim that apply, injection, Operations, or replay are product-ready.
+**Status:** Frozen T0 demo contract. Implementation status below tracks the local fixture path. V3, V5, V6 and joint acceptance remain separate.
 
 **Track:** Review a labeled fixture connector, explicitly approve one Company A customer, inject one conforming post-cutover payment, and show deterministic worker sync with AI off. Live on-stage construction is [T9](../superpowers/plans/2026-11-10-demo-remaining-work.md#t9--later-track-explicitly-deferred-genuine-live-construction), not this script.
 
@@ -92,16 +92,16 @@ Preconditions: Node 24 and PostgreSQL 18; `npm ci`; `npm run dev`; [verification
 | 4 | **Preview** · **Development fixtures** | Select `demo-candidate-a`. **Refresh candidates** after scope publication. **Run preview**. | Catalog `development-fixture`, `persisted-parent`; **Parent writes:** `0`; **Amount still owed after proposed import** **$800.00** (80000 cents) at cutover; scope `company-a.seller-a.cust-a-d22feb38e846-1`. | Live/agent-built wording; parent writes ≠ 0; F8 IDs; B’s 0 treated as A. | Machine gate passing (V2) after operator setup; not joint acceptance. |
 | 5 | **Preview** / **Review** | Independent verification and package details. Every amount has evidence or a derivation. | Eligible attested report for the listed hashes; details load. | Ineligible coverage treated as approval; protected proof in the browser. | Setup-dependent; not V3 acceptance. |
 | 6 | **Review** · **Customer review** | Registered account `company-a.seller-a.cust-a-d22feb38e846-1`. **Prepare review package**. Inspect evidence. **Approve this customer only**. | One-customer copy; receipt with id, activation id, epoch `1`; initial activation receipt after-balance **80000**; Parent **Stored parent state** imported; cutover **Stored balance** **$800.00**. Retry same key returns `replayed`, one import. | Other-customer approval; invented authority; second economic effect. | **Blocked on T3** (browser workflow / V3 not accepted). Backend intents exist; do not claim V3. |
-| 7 | Inject | Operator `freshPaymentA` (next section). Model remains off. | Source contains the new payment and allocation; not in the discovery snapshot. | `FEATURE_NOT_IMPLEMENTED`; UI injection; treating the stub as the event. | **Blocked on T2**. |
-| 8 | Apply | Worker captures/classifies/applies the pinned artifact. No second approval. | Current **50000**; cutover asOf still **80000**; receipt before **80000** after **50000**; `runtimeModelCalls` forbidden / zero. | Balance invented in the UI; cutover rewritten; model call. | **Blocked on T1**. |
-| 9 | **Operations** · **Connection operations** | Select the same account. **Refresh connection state**. | Worker-authored **active** (or truthful inactive); epoch; streams; receipt history with those cents. Pending / quarantine / lag **Not measured** until persisted. **Runtime model calls** forbidden. | UI-computed balances; inferred authorization; pause/resume/revoke as if mounted. | **Blocked on T4** (and T1). Surface exists; sync observation is not demo-ready. |
-| 10 | Replay | Same source identity / delivery again. | Current still **50000**; one economic effect; receipt `replayed` or equivalent. | Second payment/allocation; doubled money. | **Blocked on T6** (and T1). |
+| 7 | Inject | Operator runs `npm run demo:inject -- freshPaymentA` (next section). Model remains off. | Source contains the new payment and allocation; not in the discovery snapshot. | `FEATURE_NOT_IMPLEMENTED`; UI injection; treating the stub as the event. | Mounted with explicit [operator setup](company-a-sync-setup.md). |
+| 8 | Apply | Worker captures/classifies/applies the pinned artifact. No second approval. | Current **50000**; cutover asOf still **80000**; receipt before **80000** after **50000**; `runtimeModelCalls` forbidden / zero. | Balance invented in the UI; cutover rewritten; model call. | Mounted for the fixed Company A fixture. Full V5 pending. |
+| 9 | **Operations** · **Connection operations** | Select the same account. **Refresh connection state**. | Worker-authored **active** (or truthful inactive); epoch; streams; receipt history with those cents. Pending / quarantine / lag **Not measured** until persisted. **Runtime model calls** forbidden. | UI-computed balances; inferred authorization; pause/resume/revoke as if mounted. | **Blocked on T4**. The Operations presentation remains pending. |
+| 10 | Replay | Same source identity / delivery again. | Current still **50000**; one economic effect; receipt `replayed` or equivalent. | Second payment/allocation; doubled money. | Fixed command replays the committed receipt. Full V6 pending. |
 
 Timed rehearsal log and reset (`npm run db:down`, then `npm run dev`) stay in [walkthrough and rehearsals](walkthrough-and-rehearsals.md). That checklist does not override this contract.
 
 ## Injection
 
-**Specified call** (in-process `createScenarioAdmin` only; not a product tool):
+**Fixed source scenario** used by the private control command:
 
 ```ts
 createScenarioAdmin(dependencies, {
@@ -119,14 +119,7 @@ createScenarioAdmin(dependencies, {
 
 Derived source records: payment `pay-a:demo-pay-a-cutover-300`, allocation `alloc-a:demo-pay-a-cutover-300` (`funding_kind` payment, `funding_id` that payment, `invoice_id` the September invoice). Optional `semanticVersion` defaults to `sem-a-1`, which is account 1's captured revision.
 
-**Today**
-
-- Scenario-admin `freshPaymentA` exists in-process behind `DEMO_OPERATOR_ENABLED` / `DEMO_OPERATOR_TOKEN`. Keep it out of product tools and the browser bundle.
-- `tests/fixtures/harness.ts` `sourceAdmin.inject` always throws `FEATURE_NOT_IMPLEMENTED`.
-- `npm run verify:slice -- inject` prints `FEATURE_NOT_IMPLEMENTED: Source injection begins with the source adapters.` and exits nonzero.
-- The applier is unmounted for the product demo. Capture is internal; CSV rejected.
-
-**T2** mounts the operator inject → durable capture path the applier consumes. Until then, a stubbed inject is a failed step, not a rehearsal beat.
+Enable the private commands using the [Company A sync setup](company-a-sync-setup.md), then run `npm run demo:inject -- freshPaymentA`. The CLI calls control for source injection and the worker for one synchronization. Retry the same command after an uncertain result. The legacy `tests/fixtures/harness.ts` `sourceAdmin.inject` stub still reports `FEATURE_NOT_IMPLEMENTED`.
 
 ## Open decisions
 
@@ -136,7 +129,7 @@ Recorded, not frozen as product behavior:
 | --- | --- | --- |
 | Extra source-issued invoice beat (PRD §17) | Out. Primary money beat is the $300 allocated payment. | Integrator adds it to the script after T1/T2 can import a new invoice. |
 | Company B | Out of the primary script. | CSV/file capture apply is actually available; T8 stretch. |
-| Injection transport mounting | Spec the `freshPaymentA` params; T2 owns the operator path. No product `/demo` injection claim. | T2 design freeze (in-process vs authenticated operator HTTP). |
+| Injection transport mounting | Authenticated operator-only loopback HTTP through the fixed CLI. | A future operator workflow changes the transport. |
 
 ## Related
 
