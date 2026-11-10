@@ -1,5 +1,5 @@
-import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { rm } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   ChangePageSchema, VerificationCheckIdSchema, bootstrapRequiredAssertions, bootstrapRequiredCases,
@@ -23,10 +23,12 @@ import { eventA } from '../../packages/sources/src/company-a.js';
 import * as nativeDb from '../../scripts/native-db.js';
 import * as evidenceCapture from '../fixtures/evidence-v2-capture.js';
 import { createSyncSelectionBaselinesFixture } from '../fixtures/sync-selection-baselines.js';
+import {
+  inventory, measureBootstrapOuter, measureFinancialOuter, originalsAt, resolveEvidenceDirectory, statIfPresent,
+  writePrivateEvidence, type InventoryEntry, type Measurement,
+} from '../fixtures/sync-selection-evidence.js';
 
-import { BootstrapEvaluatorInputV1Schema } from '../../packages/evaluator/src/bootstrap-protocol.js';
 import * as bootstrapRunner from '../../packages/evaluator/src/bootstrap-runner.js';
-import { FinancialRequestSchema } from '../../packages/evaluator/src/financial-attestation-protocol.js';
 import * as financialRunner from '../../packages/evaluator/src/financial-attestation-runner.js';
 
 type Fixture = Awaited<ReturnType<typeof createSyncSelectionBaselinesFixture>>;
@@ -270,7 +272,6 @@ function expectProgress(progress: CaptureProgressV1, manifestHash: string, basel
   });
 }
 
-const evidenceParent = join(root, '.superpowers/sdd/2026-11-10-sync-selection-variants/evidence/task-2');
 const sourcePaths = [
   'tests/fixtures', 'tests/integration/sync-selection.test.ts', 'tests/integration/sync-selection-bundled-fixture.test.ts',
   'tests/integration/sync-capture.test.ts', 'scripts/generate-fixtures.ts', 'packages/sources/src', 'packages/evaluator/src',
@@ -278,56 +279,9 @@ const sourcePaths = [
   '.local/activation-policy', '.local/artifacts',
 ];
 
-type InventoryEntry = { path: string; sha256: string; bytes: number } | { path: string; absent: true };
-
-async function statIfPresent(path: string) {
-  return lstat(path).catch((error: NodeJS.ErrnoException) => {
-    if (error.code !== 'ENOENT') throw error;
-  });
-}
-
-async function inventory(path: string, label: string): Promise<InventoryEntry[]> {
-  const stats = await statIfPresent(path);
-  if (!stats) return [{ path: label, absent: true }];
-  if (stats.isDirectory()) return (await Promise.all((await readdir(path)).sort()
-    .map(name => inventory(join(path, name), label + '/' + name)))).flat();
-  if (!stats.isFile()) throw new Error('Unexpected file type in inventory ' + label);
-  const bytes = await readFile(path);
-  return [{ path: label, sha256: hashBytes(bytes), bytes: bytes.length }];
-}
-
 const unchangedSources = async () => (await Promise.all(sourcePaths.map(path => inventory(join(root, path), path))))
   .flat().filter(item => item.path !== 'tests/fixtures/sync-selection-baselines.ts');
 
-async function resolveEvidenceDirectory() {
-  const configured = process.env.EAPR_SELECTION_FIXTURE_EVIDENCE_DIR;
-  const path = configured && resolve(configured);
-  if (configured && (!isAbsolute(configured) || dirname(path!) !== evidenceParent || !basename(path!).startsWith('run-'))) {
-    throw new Error('Expected a Task 2 evidence run directory');
-  }
-  let directory = resolve(root);
-  for (const segment of relative(root, evidenceParent).split('/')) {
-    directory = join(directory, segment);
-    const info = await statIfPresent(directory);
-    if (!info) await mkdir(directory, { mode: 0o700 });
-    else if (!info.isDirectory()) throw new Error('Unexpected evidence directory type');
-  }
-  if (await realpath(evidenceParent) !== evidenceParent) throw new Error('Unexpected evidence directory symlink');
-  if (!path) return mkdtemp(join(evidenceParent, 'run-'));
-  await mkdir(path, { recursive: true, mode: 0o700 });
-  if (await realpath(path) !== path || relative(evidenceParent, path) !== basename(path)) {
-    throw new Error('Unexpected evidence run directory symlink');
-  }
-  return path;
-}
-
-type Measurement = {
-  stage: 'financial-probe' | 'financial-launch' | 'bootstrap';
-  jobId: string; manifestHash: string; requestHash: string;
-  requestJsonBytes: number; framedRequestBytes: number; framedContextBytes: number;
-  returnedResponseObjectJsonBytes: number | null; elapsedMs: number; status: string;
-  evidencePinBytes?: number; sidecarBytes?: number;
-};
 type AttemptName = 'primary' | 'fresh' | 'failure';
 type Worker = Awaited<ReturnType<typeof workerServer.launchWorker>>;
 type PoolHandle = { pool: Pool; role: 'control' | 'runtime'; ended: boolean };
@@ -342,17 +296,6 @@ const attemptFor = (name: AttemptName): Attempt => ({
   name, dropped: false, workerWasListening: false, workerClosed: false, composed: false,
   pools: [], captures: [], measurements: [],
 });
-
-async function originalsAt(root: string) {
-  return (await Promise.all(['visible', 'truth'].map(label => inventory(join(root, label), label))))
-    .flat().sort((a, b) => a.path.localeCompare(b.path));
-}
-const jsonBytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
-async function pinLength(root: string, pin: { fixtureSetId: string; fixtureSetVersion: string }) {
-  const stats = await lstat(join(root, hashCanonical([pin.fixtureSetId, pin.fixtureSetVersion]) + '.json'));
-  if (!stats.isFile()) throw new Error('Unexpected pin file type');
-  return stats.size;
-}
 
 function proofBindings({ subjects }: Fixture) {
   return subjects.map(({ stored }) => {
@@ -391,8 +334,7 @@ describe('distinct-baseline fixture qualification', () => {
   const restore: (() => void)[] = [];
   const sentinel = new Error('Intentional post-composition construction failure');
   const save = (attempt: Attempt, phase: string, data: unknown) =>
-    writeFile(join(evidenceDir, attempt.name + '-' + phase + '.json'), JSON.stringify({ version: 1, data }, null, 2) + '\n',
-      { flag: 'wx', mode: 0o600 });
+    writePrivateEvidence(join(evidenceDir, attempt.name + '-' + phase + '.json'), data);
 
   async function saveOriginals(attempt: Attempt, phase: string) {
     const entries = await originalsAt(attempt.root!);
@@ -477,7 +419,7 @@ describe('distinct-baseline fixture qualification', () => {
   }
 
   beforeAll(async () => {
-    evidenceDir = await resolveEvidenceDirectory();
+    evidenceDir = await resolveEvidenceDirectory(root, 2);
     sourceBefore = await unchangedSources();
     const capture = evidenceCapture.captureEvidenceFixture;
     const provision = nativeDb.provisionTest;
@@ -578,35 +520,16 @@ describe('distinct-baseline fixture qualification', () => {
 
     const financialSpy = vi.spyOn(financialRunner, 'runFinancialEvaluator').mockImplementation(async (request, context) => {
       const attempt = active;
-      const requestJsonBytes = jsonBytes(FinancialRequestSchema.parse(request));
-      const start = performance.now();
-      const result = await runFinancial(request, context);
-      const elapsedMs = performance.now() - start;
-      attempt.measurements.push({
-        stage: request.protocolVersion === 'financial-attestation-probe-1' ? 'financial-probe' : 'financial-launch',
-        jobId: request.jobId, manifestHash: request.capture.manifest.hash, requestHash: context.requestHash,
-        requestJsonBytes, framedRequestBytes: requestJsonBytes + 1, framedContextBytes: jsonBytes(context) + 1,
-        returnedResponseObjectJsonBytes: result.ok ? jsonBytes(result.value) : null,
-        elapsedMs, status: result.ok ? 'ok' : result.code,
-        evidencePinBytes: result.ok ? await pinLength(context.roots.evidencePinRoot, result.value.evidencePin) : undefined,
-      });
+      const { result, measurement } = await measureFinancialOuter(runFinancial, request, context);
+      attempt.measurements.push(measurement);
       return result;
     });
     restore.push(() => financialSpy.mockRestore());
 
     const bootstrapSpy = vi.spyOn(bootstrapRunner, 'runBootstrapEvaluator').mockImplementation(async (request, context) => {
       const attempt = active;
-      const requestJsonBytes = jsonBytes(BootstrapEvaluatorInputV1Schema.parse(request));
-      const start = performance.now();
-      const result = await runBootstrap(request, context);
-      const elapsedMs = performance.now() - start;
-      attempt.measurements.push({
-        stage: 'bootstrap', jobId: request.jobId, manifestHash: request.manifest.hash, requestHash: context.requestHash,
-        requestJsonBytes, framedRequestBytes: requestJsonBytes + 1, framedContextBytes: jsonBytes(context) + 1,
-        returnedResponseObjectJsonBytes: result.ok ? jsonBytes(result.value) : null,
-        elapsedMs, status: result.ok ? 'ok' : result.code,
-        sidecarBytes: await pinLength(context.roots.sidecarRoot, request.pin),
-      });
+      const { result, measurement } = await measureBootstrapOuter(runBootstrap, request, context);
+      attempt.measurements.push(measurement);
       return result;
     });
     restore.push(() => bootstrapSpy.mockRestore());
