@@ -249,6 +249,9 @@ export async function openLocalReview(
       forceStaleReview: reviewActivation
         ? (accountId: string) => reviewActivation.forceStaleReview(system!.db.control, accountId)
         : undefined,
+      forceBlockedReview: reviewActivation
+        ? (accountId: string) => reviewActivation.forceBlockedReview(system!.db.control, accountId)
+        : undefined,
     };
   } catch (error) {
     await close();

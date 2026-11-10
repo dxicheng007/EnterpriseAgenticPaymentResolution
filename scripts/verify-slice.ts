@@ -422,6 +422,8 @@ const requiredV3Cases = {
   'tests/e2e/v3-review.spec.ts': [
     'binds one-customer approval, reuses the saved key, gates stale packages, and keeps parent reads GET-only',
     'retries a failed details read and offers earlier unresolved approvals only as an explicit action',
+    'inspects source evidence before approval and shows a server-held unsupported term as blocked',
+    'recovers the original receipt after a lost reply and a newer head, and sends one request per double click',
   ],
   'tests/integration/v3-corrections.test.ts': [
     'unsupported invented money stays blocked with no invented resolution write',

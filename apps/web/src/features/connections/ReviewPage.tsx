@@ -10,6 +10,7 @@ import { formatUsdCents } from '../preview/preview-values.js';
 import { EvidencePanel } from '../sources/EvidencePanel.js';
 import { citationBinding, explainSafetyRule, explainValidator, lineageByOperation, mappingLabel } from '../../../../../packages/client/src/review-explain.js';
 import { Diagnostics, RequestFailure } from '../sources/review-details.js';
+import { UnresolvedDecision } from '../review/UnresolvedDecision.js';
 
 export function ReviewPackageView({ reviewPackage }: { reviewPackage: ReviewPackage }) {
   const { scope } = reviewPackage;
@@ -352,6 +353,8 @@ function AccountReview({ accountId, session }: { accountId: string; session: Loc
       ? 'The package changed. Reload the saved package or prepare again, then review it before approving.'
       : 'Nothing was assumed. Check the saved state before retrying.'} />}
     {reviewPackage && <ReviewPackageView reviewPackage={reviewPackage} />}
+    {reviewPackage && reviewPackage.diagnostics.some(item => item.severity === 'blocker') &&
+      <UnresolvedDecision diagnostics={reviewPackage.diagnostics} />}
     {reviewPackage && !detailsFor && detailsError == null && <p role="status">Loading decision details…</p>}
     {detailsError != null && <>
       <RequestFailure error={detailsError}
