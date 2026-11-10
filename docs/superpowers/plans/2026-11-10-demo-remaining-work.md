@@ -35,9 +35,9 @@ This keeps the PRD operating half of the thesis ([`prdv2.md`](../../../prdv2.md)
 | V2 preview + independent checks | Machine gate passing | Fixture connectors, protected evaluator, empty-target preview, zero parent writes |
 | Discovery scaffolding | Partial | Lifecycle/delegation, monitor, findings/proposals, compilation/replay paths; default composition has **no model client** |
 | Activation backend | Partial / not V3-accepted | Review prep, durable intents, worker first import/receipt recovery, package-detail reads |
-| Sync capture | Partial | Internal API/semantic capture accepted in reviews; unmounted for product demo; CSV lanes rejected |
+| Sync capture | Fixed Company A path mounted and independently reviewed | Private API/semantic feed, fixed operator injection and deterministic capture/apply at `158ce06`; general capture and CSV remain outside this demo path. |
 | Sync classification / selection | Partial | Compiler classification and four pure selector tasks are accepted. Catalog `74cd969` passes focused checks and independent spec/quality review; no substantial safe immediate simplification was identified. General capture/history inspection is follow-on, not a prerequisite silently added to the single-customer demo. |
-| Atomic apply | Worker-private trigger mounted by PR56; exact T0 operator chain remains | Accepted P1 writer reused by `POST /internal/apply`, merged at `49245de`. Focused upstream proof uses in-process source observe/capture and returns `no_work` on second trigger; no full T2/V5/V6 acceptance. |
+| Atomic apply | Generic PR56 trigger and exact Company A operator path delivered | Accepted P1 writer reused; fixed source `158ce06` independently proves fresh80000→50000, cutover80000 and original receipt replay through actual processes. Bounded gate `8468b7e` machine-passing; full V5/V6 and browser/joint acceptance separate. |
 | Authority head / trusted ingress | Implemented and independently reviewed; demo/browser proof separate | P3 source `d8e2833` and its final review pass. PR54 merged the accepted authority ingress into main at `7de9366`; browser acceptance remains separate. |
 
 Authoritative status claims also live in root [`AGENTS.md`](../../../AGENTS.md), [`docs/progress/2026-11-08/README.md`](../../progress/2026-11-08/README.md), and the [team expansion handoff](2026-11-08-team-expansion-handoff.md). Prefer those for exact SHAs and review links.
@@ -106,7 +106,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T5 — Integrator: make V5 machine gate prove ongoing application
 
-**Status:** design complete; Task 4 released for separate `demo-company-a-ai-off` bounded gate over accepted mounted proof. Original full V5 remains fail-closed and unchanged.
+**Status:** bounded `demo-company-a-ai-off` gate passes on clean source `8468b7e`: six mounted transport cases, twelve CLI cases, three app unit cases and typecheck;24 parser regressions also pass. Initial `3951388` failed an evidence-only source-ID/target-ID comparison and was corrected; failed packet retained. Fresh exact-candidate independent execution and whole-branch review are in progress. Original full V5/V6 remain fail-closed and unchanged.
 **Lane:** Integrator  
 **Depends on:** T1 + T2 minimum proofs  
 **Outcome:** `verify:slice -- V5` cannot pass on capture/authority/health alone; mandatory observations include fresh conforming apply, updated money, preserved cutover, and receipt.  
