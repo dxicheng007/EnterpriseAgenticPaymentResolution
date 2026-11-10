@@ -126,7 +126,7 @@ type ReplayClaim = {
 };
 type VerificationClaim = {
   revision: string; run: RunRow; task: TaskRow; step: Step; input: RequestVerificationInput;
-  subject: VerificationSubject; historical: boolean;
+  subject: VerificationSubject; historical: boolean; capture: ConstructionCapture;
   candidate: Awaited<ReturnType<DiscoveryVerificationDeps['candidates']['getCandidate']>>;
 };
 type Reservation = { turn: ModelTurnV2; revision: number };
@@ -151,6 +151,8 @@ type Options = RepositoryOptions & {
     beforeReplayClaimCommit?: () => Promise<void>;
     beforeReplaySettleCommit?: () => Promise<void>;
     beforeVerificationClaimCommit?: () => Promise<void>;
+    /** After producer admit/recover/lookup SQL, before final authority recheck + COMMIT. */
+    beforeVerificationAdmitCommit?: () => Promise<void>;
     afterVerificationEnqueue?: () => Promise<void>;
     beforeVerificationSettleCommit?: () => Promise<void>;
   };
@@ -241,7 +243,7 @@ export async function acquireDiscoverySupervisor({
         discard();
         return { kind: 'owner_lost' as const, commit: 'not_committed' as const };
       }
-      let committed = false;
+      let commitAttempted = false;
       try {
         await client.query('BEGIN');
         const result = await fn(client);
@@ -250,14 +252,22 @@ export async function acquireDiscoverySupervisor({
           return result;
         }
         if (!valid) throw new Error('Discovery owner lost');
+        // Marker before COMMIT: rejection after the server commits must not claim not_committed.
+        commitAttempted = true;
         await client.query('COMMIT');
-        committed = true;
-        if (!valid) return { kind: 'owner_lost' as const, commit: 'unknown' as const };
+        if (!valid) {
+          invalidate();
+          return { kind: 'owner_lost' as const, commit: 'unknown' as const };
+        }
         return { kind: 'committed' as const, value: result as Exclude<typeof result, { kind: 'denied' }> };
       } catch (error) {
+        if (commitAttempted) {
+          invalidate();
+          return { kind: 'owner_lost' as const, commit: 'unknown' as const };
+        }
         try { await client.query('ROLLBACK'); } catch { invalidate(); }
         if (!valid) {
-          return { kind: 'owner_lost' as const, commit: committed ? 'unknown' as const : 'not_committed' as const };
+          return { kind: 'owner_lost' as const, commit: 'not_committed' as const };
         }
         throw error;
       } finally {
@@ -277,6 +287,7 @@ export async function acquireDiscoverySupervisor({
     ...verificationDeps!,
     gate: createDiscoveryVerificationOwnerGate({
       runOnOwner, generation: () => generation, permits, admissions,
+      beforeAdmitCommit: testHooks?.beforeVerificationAdmitCommit,
     }),
     async resolveTaskId({ requestKey, runId }) {
       const { rows: [row] } = await db.query<{ task_id: string; run_id: string }>(
@@ -325,6 +336,58 @@ export async function acquireDiscoverySupervisor({
     }, task);
   }
 
+  /**
+   * Bounded scan of admitted queued mappings. Independent of runnable/current-attempt
+   * scheduling. Reconstructs the original candidate from immutable subject bytes and
+   * claims through the producer without new budget/preparation or current-success settle.
+   */
+  async function recoverAdmittedVerifications() {
+    if (!valid || !verification || !verificationReady) return;
+    const { rows } = await db.query<{
+      request_key: string; run_id: string; task_id: string; account_id: string;
+      subject_bytes: Buffer; reviewer_id: string; binding: RunRow['binding'];
+      run_grants: RunRow['grants']; task_grants: TaskRow['grants'];
+    }>(`
+      SELECT v.request_key, v.run_id, v.task_id, v.account_id, v.subject_bytes,
+             r.reviewer_id, r.binding, r.grants AS run_grants, t.grants AS task_grants
+      FROM discovery_verification_requests v
+      JOIN verification_jobs j ON j.id = v.job_id AND j.state = 'queued'
+      JOIN discovery_runs r ON r.id = v.run_id
+      JOIN discovery_tasks t ON t.run_id = v.run_id AND t.id = v.task_id
+      ORDER BY v.request_key COLLATE "C"
+      LIMIT 32`);
+    for (const row of rows) {
+      if (!valid) return;
+      const current = resolveAuthority(row.reviewer_id, row.binding);
+      if (!coversGrant(row.run_grants, row.task_grants) || !coversGrant(current, row.task_grants) ||
+          !current?.allowedAccountIds.includes(row.account_id) ||
+          !row.run_grants.allowedAccountIds.includes(row.account_id) ||
+          !row.task_grants.allowedAccountIds.includes(row.account_id)) {
+        continue;
+      }
+      let candidate: Parameters<typeof verification.enqueueDiscoveryVerification>[0]['candidate'];
+      try {
+        const parsed = JSON.parse(Buffer.from(row.subject_bytes).toString('utf8')) as {
+          schemaVersion?: string; candidate?: unknown;
+        };
+        if (parsed.schemaVersion !== 'discovery-verification-subject-1' || !parsed.candidate ||
+            typeof parsed.candidate !== 'object') continue;
+        candidate = parsed.candidate as typeof candidate;
+      } catch {
+        continue;
+      }
+      try {
+        await verification.enqueueDiscoveryVerification({
+          requestKey: row.request_key,
+          candidate,
+          task: { runId: row.run_id, accountId: row.account_id },
+        });
+      } catch {
+        // Sticky denial / owner loss / unavailable stays fail-closed for this row.
+      }
+    }
+  }
+
   async function reconcile() {
     const oldClaims = await transact(connection => connection.query<Dispatch>(`SELECT * FROM discovery_dispatches
       WHERE state='reserved' AND generation<$1 ORDER BY run_id,task_id,id`, [generation]));
@@ -354,6 +417,7 @@ export async function acquireDiscoverySupervisor({
         await refencePausedRead(step.run_id, step.task_id, step.id);
       }
     }
+    await recoverAdmittedVerifications();
   }
 
   try {
@@ -1033,7 +1097,6 @@ export async function acquireDiscoverySupervisor({
       let compileClaim: CompileClaim | undefined;
       let replayClaim: ReplayClaim | undefined;
       let verificationClaim: Omit<VerificationClaim, 'candidate'> | undefined;
-      let verificationScopeDenial: RequestVerificationResult | undefined;
       let readVerificationResult: ReadVerificationResult | undefined;
       let compareResult: CompareArtifactsResult | undefined;
       if (!failure) {
@@ -1044,6 +1107,14 @@ export async function acquireDiscoverySupervisor({
             observedRunRevision = nextRevision(lockedRun.revision);
           }
           let projectedRunRevision = safeCounter(lockedRun.revision);
+          const projectedVerificationDemand = new Map<string, number>();
+          const { rows: attemptRows } = verificationInputs.size ? await connection.query<{
+            account_id: string; attempts: string;
+          }>('SELECT account_id, attempts FROM verification_attempt_budgets WHERE run_id=$1', [lockedRun.id]) :
+            { rows: [] as { account_id: string; attempts: string }[] };
+          const consumedAttempts = new Map(
+            attemptRows.map(row => [row.account_id, safeCounter(row.attempts)] as const),
+          );
           for (const facts of preflightFacts) await recheck(connection, lockedRun, facts);
           for (const item of remaining) {
             if (observedRunRevision !== undefined) {
@@ -1109,33 +1180,57 @@ export async function acquireDiscoverySupervisor({
               }
             }
             const compareInput = compareInputs.get(item.id);
-            if (compareInput && step.id === item.id) {
+            if (compareInput) {
               const subjects = await loadCompareSubjects(connection, lockedRun.id, compareInput);
-              compareResult = compareArtifactsResult(subjects.left, subjects.right);
+              if (step.id === item.id) compareResult = compareArtifactsResult(subjects.left, subjects.right);
             }
             const verificationInput = verificationInputs.get(item.id);
-            if (verificationInput && step.id === item.id) {
+            if (verificationInput) {
+              // Whole-batch preflight: every remaining verification call must validate before any effect.
               if (!constructionPinned) throw discoveryError(409);
               await recheck(connection, lockedRun, constructionPinned.facts);
-              const historical = await hasVerificationBinding(connection, step.id);
+              const historical = await hasVerificationBinding(connection, item.id);
               const subject = await loadVerificationSubject(
                 connection, lockedRun.id, verificationInput, { historical },
               );
+              if (!historical) {
+                const projected = projectedAssessments?.get(verificationInput.proposalId);
+                if (projected && (
+                  projected.result.revision !== verificationInput.revision ||
+                  projected.result.state !== 'compiled' ||
+                  !assessmentClear(projected.result) ||
+                  projected.result.artifactHash !== subject.artifactHash ||
+                  projected.result.profileHashes.length !== 1 ||
+                  projected.result.profileHashes[0] !== verificationInput.profileHash
+                )) {
+                  throw discoveryError(409);
+                }
+                const pending = (projectedVerificationDemand.get(subject.accountId) ?? 0) + 1;
+                if ((consumedAttempts.get(subject.accountId) ?? 0) + pending > 3) {
+                  throw discoveryError(409);
+                }
+                projectedVerificationDemand.set(subject.accountId, pending);
+              }
               const scope = requireTrustedScope(lockedRun, lockedTask, subject.accountId);
               if (scope) {
-                verificationScopeDenial = { ok: false, code: scope };
-              } else {
+                failure = scope;
+                break;
+              }
+              if (step.id === item.id) {
                 verificationClaim = {
                   revision: lockedTask.revision, run: lockedRun, task: lockedTask, step,
-                  input: verificationInput, subject, historical,
+                  input: verificationInput, subject, historical, capture: constructionPinned,
                 };
               }
             }
             const readVerificationInput = readVerificationInputs.get(item.id);
-            if (readVerificationInput && step.id === item.id) {
+            if (readVerificationInput) {
               const bound = await bindReadVerificationJob(connection, lockedRun, lockedTask, readVerificationInput);
-              readVerificationResult = 'code' in bound ?
-                { ok: false, code: bound.code } : verificationToolResult(bound.job);
+              if ('code' in bound) {
+                failure = bound.code;
+                break;
+              }
+              if (step.id === item.id) readVerificationResult = verificationToolResult(bound.job);
             }
             const requested = findingReads.get(item.id);
             if (requested) {
@@ -1222,14 +1317,6 @@ export async function acquireDiscoverySupervisor({
         await testHooks?.beforeReplayClaimCommit?.();
         if (!permits(lockedRun, lockedTask)) throw authorityRevoked;
         return { replayClaim };
-      }
-      if (verificationScopeDenial) {
-        await publishDiscovery(connection, clock, lockedRun.id, 'tool.called', {
-          dispatchId: step.dispatch_id, toolStepId: step.id, toolName: 'requestVerification',
-        }, lockedTask);
-        await resolveStep(connection, current, verificationScopeDenial);
-        if (!permits(lockedRun, lockedTask)) throw authorityRevoked;
-        return { result: verificationScopeDenial };
       }
       if (verificationClaim) {
         await connection.query("UPDATE discovery_tool_steps SET state='running',generation=$2 WHERE id=$1", [step.id, generation]);
@@ -1449,8 +1536,19 @@ export async function acquireDiscoverySupervisor({
           hashCanonical(task.grants) === hashCanonical(claim.task.grants);
         if (revoked || !stillAuthorized()) return interruptForbiddenRead(connection, context);
 
+        // Pause after admission keeps the mapping but cannot publish current tool success.
+        if (!runnable(run)) {
+          await connection.query(
+            "UPDATE discovery_tool_steps SET state='interrupted',result=NULL WHERE id=$1", [step.id]);
+          await connection.query(
+            "UPDATE discovery_tasks SET status='queued',revision=revision+1 WHERE id=$1", [task.id]);
+          await connection.query('UPDATE discovery_runs SET revision=revision+1 WHERE id=$1', [run.id]);
+          return;
+        }
+
         let settledResult = toolResult;
         try {
+          await recheck(connection, run, claim.capture.facts);
           if (!stillAuthorized()) return interruptForbiddenRead(connection, context);
           // Current-success settlement always requires a clear live assessment. Historical
           // recovery may still observe the original job without linking current success.
@@ -1680,6 +1778,7 @@ export async function acquireDiscoverySupervisor({
     isValid: () => valid,
     executePendingStep,
     resolveUnavailableStep: executePendingStep,
+    recoverAdmittedVerifications,
     // This seam seeds ready tasks only in trusted tests.
     ...(testHooks ? {
       addTestSpecialist: (runId: string, input: Parameters<typeof insertSpecialist>[2]) => transact(async connection => {

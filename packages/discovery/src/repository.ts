@@ -123,7 +123,7 @@ export async function publishDiscovery(client: PoolClient, clock: RepositoryOpti
   });
 }
 
-async function project(client: PoolClient, run: RunRow): Promise<DiscoveryStateV2> {
+async function project(client: PoolClient, run: RunRow, current: Grants): Promise<DiscoveryStateV2> {
   const tasks = await client.query<TaskRow & Investigation & { dependency_ids: string[] }>(`
     SELECT t.*, i.seller_entity_id, i.source_account_id, ARRAY(
       SELECT predecessor_id FROM discovery_task_dependencies WHERE run_id=t.run_id AND task_id=t.id
@@ -140,13 +140,26 @@ async function project(client: PoolClient, run: RunRow): Promise<DiscoveryStateV
     SELECT c.result FROM discovery_proposal_identities i
     JOIN discovery_proposal_current c ON c.run_id=i.run_id AND c.proposal_id=i.id AND c.proposal_revision=i.current_revision
     WHERE i.run_id=$1 ORDER BY i.id COLLATE "C"`, [run.id]);
-  const { rows: verificationJobs } = await client.query<{
-    proposalId: string; proposalRevision: number; jobId: string;
+  const { rows: verificationRows } = await client.query<{
+    proposalId: string; proposalRevision: number; jobId: string; accountId: string; taskGrants: Grants;
   }>(`
-    SELECT proposal_id AS "proposalId", proposal_revision::int AS "proposalRevision", job_id AS "jobId"
-    FROM discovery_verification_requests
-    WHERE run_id=$1
-    ORDER BY proposal_id COLLATE "C", proposal_revision, job_id COLLATE "C"`, [run.id]);
+    SELECT v.proposal_id AS "proposalId", v.proposal_revision::int AS "proposalRevision",
+           v.job_id AS "jobId", v.account_id AS "accountId", t.grants AS "taskGrants"
+    FROM discovery_verification_requests v
+    JOIN discovery_tasks t ON t.run_id = v.run_id AND t.id = v.task_id
+    JOIN discovery_tool_steps s
+      ON s.run_id = v.run_id AND s.task_id = v.task_id AND s.id = v.request_key
+     AND s.dispatch_id = v.dispatch_id
+    WHERE v.run_id = $1
+    ORDER BY v.proposal_id COLLATE "C", v.proposal_revision, v.job_id COLLATE "C"`, [run.id]);
+  // Same-snapshot filter: original task/account must still be covered by saved and current grants.
+  const verificationJobs = verificationRows.filter(row =>
+    current.allowedAccountIds.includes(row.accountId) &&
+    run.grants.allowedAccountIds.includes(row.accountId) &&
+    row.taskGrants.allowedAccountIds.includes(row.accountId) &&
+    coversGrant(current, { sourceRead: run.grants.sourceRead, allowedAccountIds: [] }) &&
+    coversGrant(run.grants, { sourceRead: row.taskGrants.sourceRead, allowedAccountIds: [] }),
+  ).map(({ proposalId, proposalRevision, jobId }) => ({ proposalId, proposalRevision, jobId }));
   return DiscoveryStateV2Schema.parse({
     schemaVersion: 2, id: run.id, revision: safeCounter(run.revision), binding: run.binding, mode: run.mode,
     modelId: run.model_id, status: run.status,
@@ -178,11 +191,11 @@ export function createDiscoveryRepository({ db, clock, resolveAuthority }: Repos
     };
   }
 
-  function authorizeRun(run: RunRow, reviewerId: string, sourceRef?: string) {
+  function authorizeRun(run: RunRow, reviewerId: string, sourceRef?: string): Grants {
     if (run.reviewer_id !== reviewerId || (sourceRef !== undefined && run.binding.sourceRef !== sourceRef)) {
       throw discoveryError(403, 'DISCOVERY_FORBIDDEN');
     }
-    authorizeSource(reviewerId, run.binding);
+    return authorizeSource(reviewerId, run.binding);
   }
 
   function replayStart(run: RunRow, actor: Actor, requestHash: string) {
@@ -234,8 +247,8 @@ export function createDiscoveryRepository({ db, clock, resolveAuthority }: Repos
       await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
       const { rows: [run] } = await client.query<RunRow>('SELECT * FROM discovery_runs WHERE id=$1', [runId]);
       if (!run) throw discoveryError(404, 'DISCOVERY_NOT_FOUND');
-      authorizeRun(run, actor.reviewerId, actor.sourceRef);
-      return project(client, run);
+      const current = authorizeRun(run, actor.reviewerId, actor.sourceRef);
+      return project(client, run, current);
     });
   }
 
@@ -244,13 +257,14 @@ export function createDiscoveryRepository({ db, clock, resolveAuthority }: Repos
     const requestHash = hashCanonical(input);
     return withTransaction(db, async client => {
       let run = await lockRun(client, runId);
-      authorizeRun(run, actor.reviewerId, actor.sourceRef);
+      const current = authorizeRun(run, actor.reviewerId, actor.sourceRef);
       const key = [actor.reviewerId, runId, input.idempotencyKey];
       const { rows: [saved] } = await client.query<{ action: string; request_hash: string; response: unknown }>(
         'SELECT action,request_hash,response FROM discovery_actions WHERE reviewer_id=$1 AND run_id=$2 AND action_key=$3', key);
       if (saved) {
         if (saved.action !== name || saved.request_hash !== requestHash) throw discoveryError(409);
-        return DiscoveryStateV2Schema.parse(saved.response);
+        // Rebuild under current authority so narrowed grants cannot replay unauthorized jobs.
+        return project(client, run, current);
       }
       if (safeCounter(run.revision) !== input.expectedRevision || run.status === 'failed' || run.status === 'completed' ||
           (name === 'resume' && run.status !== 'paused')) throw discoveryError(409);
@@ -261,7 +275,7 @@ export function createDiscoveryRepository({ db, clock, resolveAuthority }: Repos
         run = updated;
         await publishDiscovery(client, clock, runId, name === 'pause' ? 'discovery.paused' : 'discovery.resumed', { status });
       }
-      const response = await project(client, run);
+      const response = await project(client, run, current);
       await client.query(`INSERT INTO discovery_actions (reviewer_id,run_id,action_key,action,request_hash,response)
         VALUES ($1,$2,$3,$4,$5,$6)`, [...key, name, requestHash, response]);
       return response;

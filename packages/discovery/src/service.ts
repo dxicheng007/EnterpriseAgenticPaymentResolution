@@ -44,6 +44,8 @@ export async function createDiscoveryService(options: Options) {
     if (!modelClient) return;
     if (!owner || !owner.isValid()) owner = await acquireDiscoverySupervisor(supervisorOptions());
     if (!owner || closed) return;
+    // Admitted queued verification recovery is independent of runnable/current-attempt scheduling.
+    await owner.recoverAdmittedVerifications().catch(() => undefined);
     const { rows } = await db.query<{
       run_id: string; task_id: string; step_id: string | null; recovering_read: boolean | null; reviewer_id: string;
       binding: DiscoveryBinding; run_grants: Grants; task_grants: Grants;

@@ -231,7 +231,7 @@ export const RequestVerificationInputSchema = strict({
 }).refine(fitsProposalBytes, 'Invalid canonical input or input exceeds 65,536 UTF-8 bytes');
 
 export const ReadVerificationInputSchema = strict({
-  jobId: IdSchema,
+  proposalId: IdSchema, revision: VersionSchema, jobId: IdSchema,
 }).refine(fitsProposalBytes, 'Invalid canonical input or input exceeds 65,536 UTF-8 bytes');
 
 /** Safe job observation only. No holdout, report truth, pins, or reservation bytes. */

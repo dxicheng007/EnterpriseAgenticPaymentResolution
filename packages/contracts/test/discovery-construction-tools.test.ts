@@ -187,10 +187,11 @@ test('requestVerification and readVerification accept only safe job shapes', asy
     { profileHash: 'a'.repeat(64) },
   ]) expect(RequestVerificationInputSchema.safeParse(invalid).success).toBe(false);
 
-  const read = { jobId: 'job-1' };
+  const read = { proposalId: 'proposal', revision: 1, jobId: 'job-1' };
   expect(ReadVerificationInputSchema.parse(read)).toEqual(read);
   for (const invalid of [
-    { ...read, proposalId: 'proposal' },
+    { jobId: 'job-1' },
+    { ...read, revision: 0 },
     { jobId: '' },
     {},
   ]) expect(ReadVerificationInputSchema.safeParse(invalid).success).toBe(false);

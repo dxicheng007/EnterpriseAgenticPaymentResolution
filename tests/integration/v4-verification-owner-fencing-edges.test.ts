@@ -347,6 +347,42 @@ test('policy revoke at verification claim commit leaves zero mapping and pending
   }
 }, 180_000);
 
+test('policy revoke after producer admit SQL rolls back mapping before COMMIT', async () => {
+  const entered = barrier<void>();
+  const release = barrier<void>();
+  let owner: Owner | undefined;
+  let pending: Promise<unknown> | undefined;
+  const beforeRuntime = await runtimeFingerprint();
+  try {
+    const prepared = await preparedVerify('edge-admit-revoke', {
+      testHooks: {
+        beforeVerificationAdmitCommit: async () => {
+          enabled = false;
+          entered.resolve();
+          await release.promise;
+        },
+      },
+    });
+    owner = prepared.owner;
+    const [step] = await prepared.run.accept(owner, [verifyCall('verify', prepared.compiled)], 3, prepared.task);
+    pending = owner.executePendingStep(prepared.run.runId, prepared.task, step!);
+    await entered.promise;
+    release.resolve();
+    await pending;
+    expect(await counts(prepared.run.runId)).toEqual(zeroCounts);
+    expect(await storedStep(step!)).toMatchObject({ state: 'interrupted' });
+    enabled = true;
+    expect((await prepared.run.state()).verificationJobs).toEqual([]);
+    expect(await runtimeFingerprint()).toBe(beforeRuntime);
+  } finally {
+    enabled = true;
+    release.resolve();
+    try { await pending; } catch { /* revoked */ }
+    await owner?.close();
+    trustedAccounts = [];
+  }
+}, 180_000);
+
 test('task revision advance after enqueue blocks current settlement', async () => {
   const entered = barrier<void>();
   const release = barrier<void>();
@@ -428,3 +464,140 @@ test('wrong profileHash is rejected before verification budget', async () => {
     trustedAccounts = [];
   }
 }, 120_000);
+
+test('recoverAdmittedVerifications claims queued mapping without current success', async () => {
+  const entered = barrier<void>();
+  const release = barrier<void>();
+  let owner: Owner | undefined;
+  let pending: Promise<unknown> | undefined;
+  const beforeRuntime = await runtimeFingerprint();
+  try {
+    const prepared = await preparedVerify('edge-recover-queued', {
+      testHooks: {
+        afterVerificationEnqueue: async () => {
+          entered.resolve();
+          await release.promise;
+        },
+      },
+    });
+    owner = prepared.owner;
+    const [step] = await prepared.run.accept(owner, [verifyCall('verify', prepared.compiled)], 3, prepared.task);
+    pending = owner.executePendingStep(prepared.run.runId, prepared.task, step!);
+    await entered.promise;
+    await prepared.run.action('pause', 'pause-before-recover');
+    const mapped = await db.query<{ job_id: string }>(
+      'SELECT job_id FROM discovery_verification_requests WHERE run_id=$1', [prepared.run.runId]);
+    expect(mapped.rows).toHaveLength(1);
+    const jobId = mapped.rows[0]!.job_id;
+    // Simulate owner loss after admit: job remains queued for replacement recovery.
+    await db.query("UPDATE verification_jobs SET state='queued' WHERE id=$1", [jobId]);
+    release.resolve();
+    await pending;
+    expect(await storedStep(step!)).toMatchObject({ state: 'interrupted' });
+    expect(await counts(prepared.run.runId)).toMatchObject({
+      mappings: 1, attempts: 1, reservations: 1, queued: 1,
+    });
+
+    await owner.recoverAdmittedVerifications();
+    await expect.poll(async () => (await counts(prepared.run.runId)).queued, { timeout: 30_000 }).toBe(0);
+    expect(await counts(prepared.run.runId)).toMatchObject({
+      mappings: 1, attempts: 1, reservations: 1, queued: 0,
+    });
+    expect(await storedStep(step!)).toMatchObject({ state: 'interrupted' });
+    expect(await runtimeFingerprint()).toBe(beforeRuntime);
+  } finally {
+    release.resolve();
+    try { await pending; } catch { /* settle */ }
+    await owner?.close();
+    trustedAccounts = [];
+  }
+}, 180_000);
+
+test('narrowed account grants hide previously admitted verificationJobs', async () => {
+  trustedAccounts = [trustedAccountId];
+  const model = scriptedModel();
+  const { owner } = await acquire(model.model, instrumentReads().readTools, { withVerification: true });
+  try {
+    const run = await createRun('edge-scoped-state', model);
+    const task = await delegateConnector(run, owner);
+    const compiled = await draftCompileDemo(run, owner, task);
+    const [step] = await run.execute(owner, [verifyCall('verify', compiled)], 3, task);
+    expect(await storedStep(step!)).toMatchObject({ state: 'succeeded' });
+    expect((await run.state()).verificationJobs).toHaveLength(1);
+    trustedAccounts = [];
+    expect((await run.state()).verificationJobs).toEqual([]);
+    const paused = await run.action('pause', 'scope-pause');
+    expect(paused.verificationJobs).toEqual([]);
+    trustedAccounts = [trustedAccountId];
+    expect((await run.state()).verificationJobs).toHaveLength(1);
+  } finally {
+    await owner.close();
+    trustedAccounts = [];
+  }
+}, 180_000);
+
+test('pause after verification enqueue keeps mapping without current success', async () => {
+  const entered = barrier<void>();
+  const release = barrier<void>();
+  let owner: Owner | undefined;
+  let pending: Promise<unknown> | undefined;
+  let pause: (() => Promise<unknown>) | undefined;
+  const beforeRuntime = await runtimeFingerprint();
+  try {
+    const prepared = await preparedVerify('edge-pause-settle', {
+      testHooks: {
+        afterVerificationEnqueue: async () => {
+          entered.resolve();
+          await release.promise;
+        },
+      },
+    });
+    owner = prepared.owner;
+    pause = () => prepared.run.action('pause', 'pause-after-enqueue');
+    const [step] = await prepared.run.accept(owner, [verifyCall('verify', prepared.compiled)], 3, prepared.task);
+    pending = owner.executePendingStep(prepared.run.runId, prepared.task, step!);
+    await entered.promise;
+    await pause();
+    release.resolve();
+    await pending;
+    expect(await counts(prepared.run.runId)).toMatchObject({
+      mappings: 1, attempts: 1, reservations: 1,
+    });
+    expect(await storedStep(step!)).toMatchObject({ state: 'interrupted' });
+    expect((await prepared.run.state()).verificationJobs).toHaveLength(1);
+    expect(await runtimeFingerprint()).toBe(beforeRuntime);
+  } finally {
+    release.resolve();
+    try { await pending; } catch { /* paused settle */ }
+    await owner?.close();
+    trustedAccounts = [];
+  }
+}, 180_000);
+
+test('invalid later verification prevents earlier batch verification effects', async () => {
+  trustedAccounts = [trustedAccountId];
+  const model = scriptedModel();
+  const { owner } = await acquire(model.model, instrumentReads().readTools, { withVerification: true });
+  const beforeRuntime = await runtimeFingerprint();
+  try {
+    const run = await createRun('edge-batch-preflight', model);
+    const task = await delegateConnector(run, owner);
+    const compiled = await draftCompileDemo(run, owner, task);
+    const steps = await run.execute(owner, [
+      verifyCall('verify-first', compiled),
+      verifyCall('verify-bad-later', compiled, wrongProfileHash),
+    ], 3, task);
+    expect(await storedStep(steps[0]!)).toMatchObject({
+      state: 'failed', result: { ok: false, code: 'DISCOVERY_CONFLICT' },
+    });
+    expect(await storedStep(steps[1]!)).toMatchObject({
+      state: 'failed', result: { ok: false, code: 'DISCOVERY_CONFLICT' },
+    });
+    expect(await counts(run.runId)).toEqual(zeroCounts);
+    expect((await run.state()).verificationJobs).toEqual([]);
+    expect(await runtimeFingerprint()).toBe(beforeRuntime);
+  } finally {
+    await owner.close();
+    trustedAccounts = [];
+  }
+}, 180_000);
