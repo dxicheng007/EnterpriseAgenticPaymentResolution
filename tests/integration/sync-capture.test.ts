@@ -24,6 +24,7 @@ import { loadActivationPolicy } from '@eapr/storage/activation-policy';
 import { createControlDb } from '@eapr/storage/control-db';
 import { createRuntimeDb } from '@eapr/storage/runtime-db';
 import { withTransaction } from '@eapr/storage/transaction';
+import { createConnectionReads } from '../../apps/worker/src/connections.js';
 import { createRegisteredScopePublication } from '../../apps/control/src/activation-publication.js';
 import { buildDemoCandidate } from '../../apps/control/src/demo-candidates.js';
 import { createFinancialCaptureReader } from '../../apps/control/src/financial-capture.js';
@@ -78,6 +79,7 @@ let fixture: { a: Committed; b: Committed; source: ReturnType<typeof createSourc
   operator: ReturnType<typeof createScenarioAdmin> };
 let sharedA: Committed;
 let sharedB: Committed;
+let sharedScopes: ReturnType<typeof createRegisteredScopeReader>;
 let peerSource: ReturnType<typeof createSourceService>;
 let peerOperator: ReturnType<typeof createScenarioAdmin>;
 let peerA: Committed;
@@ -891,6 +893,7 @@ async function preparePeerFixtures() {
     bootstrapRoots: { sidecarRoot: join(root, 'paired-bootstrap'), evidencePinRoot: join(root, 'paired-evaluator'),
       servedRoots: [roots.visibleRoot, storeRoot, registryRoot, join(root, 'visible-epoch-2')] },
   };
+  sharedScopes = context.scopeReader;
   peerSource = createSourceService(dependencies, localSourceCatalog);
   peerOperator = createScenarioAdmin(dependencies, { DEMO_OPERATOR_ENABLED: 'true', DEMO_OPERATOR_TOKEN: operatorToken });
   await generateSecondQualifyingAccount(roots);
@@ -935,6 +938,16 @@ test('a second independently approved account on the same lane preserves existin
   expect(await second.readProgress()).toEqual(progress);
   expect((await sharedDb.query('SELECT initial_activation_id FROM runtime_capture_lanes')).rows)
     .toEqual([{ initial_activation_id: sharedA.identity.activationId }]);
+
+  // The operations read resolves the shared lane by each account's own committed source and manifest.
+  const reads = createConnectionReads(sharedDb, sharedScopes);
+  const [viewA, viewB] = await Promise.all([
+    reads.readConnection(sharedA.identity.scope.accountId), reads.readConnection(sharedB.identity.scope.accountId),
+  ]);
+  expect(viewA.streams.length).toBeGreaterThan(0);
+  expect(viewB.streams).toEqual(viewA.streams);
+  expect(viewB.incidents).toEqual(viewA.incidents);
+  expect(viewB.activationId).toBe(sharedB.identity.activationId);
 });
 
 async function generateSecondQualifyingAccount({ visibleRoot, truthRoot }: EvidenceRoots) {
