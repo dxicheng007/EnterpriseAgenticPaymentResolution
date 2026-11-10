@@ -91,4 +91,4 @@ export function createSyncApplier({ db, clock, artifact, profile, identity }: {
       return { receipt, replayed: false };
     });
   };
-}
+        }
