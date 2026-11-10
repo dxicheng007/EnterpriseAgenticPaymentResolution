@@ -851,7 +851,7 @@ const requiredV5Cases = {
   'tests/integration/v5-sync.test.ts': [
     'admits standing authority for the activated customer and denies unknown accounts',
     'captures a fresh post-activation API page without parent writes or model credentials',
-    'applies a fresh invoice once, replays the receipt and fences stale input',
+    'applies a captured invoice once, recovers its receipt and fences stale input',
   ],
   'apps/worker/test/sync-dependencies.test.ts': [
     'orders providers before consumers and reports missing prerequisites',
