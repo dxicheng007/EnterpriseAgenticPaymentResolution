@@ -1,0 +1,35 @@
+# Independent discovery completion producer plan review
+
+Reviewed 2026-11-10. Worktree: `/Users/devincheng/.codex/worktrees/platform-activation-integration/EnterpriseAgenticPaymentResolution`.
+
+Candidate: `docs/superpowers/plans/2026-11-10-discovery-completion-producer.md`.
+
+Verified exact candidate SHA-256: `d088c3817b8bf43a5b5a7a72b192e8fc95e95510c82a674417cc47b84853a324`.
+
+Design: `docs/progress/2026-11-10/discovery-completion-contract.md`, verified SHA-256 `b8e32ebad1c0a53aefa18ebda1e4fb6bc385c24d9d1e517f3960553d0c3acf98`. Read its initial independent review and scoped fix1 review in `/private/tmp/eapr-discovery-completion-design-review.md` and `/private/tmp/eapr-discovery-completion-design-fix1-review.md`.
+
+## Verdicts
+
+**Specification: PASS for the assigned Platform producer plan.** The two tasks faithfully implement the reviewed representation/storage boundary. Existing request input and success shapes remain compatible; only the accepted failure vocabulary and optional delegation request linkage are added. Repair/finish authority, diagnostic selection, request consumption and operational orchestration remain Discovery obligations. The plan does not introduce financial policy, parent-account authority, blocker resolution or runtime behavior.
+
+**Quality: PASS for the implementation plan.** The paths, existing seams, dependency closure changes, migration approach and planned checks are concrete and feasible against the inspected source. No actionable findings were identified. This verdict is a plan review, not implementation release or executable acceptance.
+
+**Verification: read-only review only.** No repository edits, Git operations, database operations, tests, provider calls or subagents were performed. Shell reads/searches and SHA-256 calculations support the source observations below. This temporary report is the only written file. No tool availability, live construction, eligibility, approval, activation, synchronization or joint-acceptance claim is established.
+
+## Reviewed evidence and conclusions
+
+1. **Exact schema compatibility and exports.** Inspected `packages/contracts/src/discovery-construction-tools.ts`, `common.ts`, `index.ts` and the existing delegate parser/descriptor in `packages/discovery/src/tasks.ts`. The request schema already uses the shared finding-reference parser, an 8,192 UTF-8 byte question limit and canonical whole-input/result sizing. The local delegate shape has the four specialist roles and required subject/question/dependency fields described by the plan. The root currently does not export the construction leaf. Named new exports, preservation of existing leaf exports, strict prototype rejection, unique lexical sets, the cross-variant duplicate-code case and checked finish revision increment are appropriately specified. Tests distinguish what an isolated result parser can prove from exact request/result matching and authenticated provenance that only a consumer can prove.
+
+2. **Protected dependency closures.** Inspected both build inventory modules and their existing recursive closure/mutation tests. All direct runtime imports of the construction leaf already occur in both inventories; the construction leaf itself does not. Adding a named root value export creates the real missing dependency in both protected closures. Adding only that leaf, retaining recursive graph checks, proving its changed bytes affect the appropriate hashes and proving missing bytes fail closed is the correct cohesive checkpoint. The plan explicitly preserves expected truth and saved operator pins and treats changed build identity honestly.
+
+3. **Current keys, checks and grant delta.** Inspected control004/007/009. Control004 has the bounded repair columns and omits their UPDATE grants; its run status CHECK omits completed. Control007 supplies `(run_id,task_id,id)` on tool steps and the exact immutable finding-revision key, and control004 supplies `(run_id,id)` on tasks. Those keys support every proposed request/ref/delegation FK. The plan reproduces the approved append-only three-table representation, request ID equal to originating step ID, paired nullable source tuple, octet limit, one consumption association and unique delegation step/child. It correctly distinguishes FK identity enforcement from role/name/subject/grant/budget authorization and leaves blocker INSERT authority unchanged.
+
+4. **Immutable catalog and upgrade proof.** SHA-256 calculations confirmed every literal control001–009 pin in the plan matches current bytes; the inspected control directory ends at009. `readMigrationCatalog` validates contiguous unique versions and hashes actual bytes; `migrate` checks existing ledger identities, applies each migration transactionally and supports a control-only catalog ceiling. The plan preserves those APIs and reserves reconfirmation of010 immediately before implementation. Populated009→010, fresh001–010, unchanged existing rows/ledger/activity, literal prior pins and idempotent repeat checks address both upgrade damage and checksum drift. Runtime is intentionally not migrated by this proof; its unchanged catalog/ledger fingerprint must reflect the actual provisioned state, including ledger absence when appropriate.
+
+5. **Meaningful application-role checks.** Inspected provisioning, lease naming, migration prerequisites and existing role-isolation patterns. The stated APIs and at-most12-character namespace labels match source. Product fixture writes and allowed/denied statements are explicitly assigned to the real app role, while migration/catalog work uses privileged credentials. Pre/post status and repair grants, exact SQLSTATE failures, cross-run/missing references, duplicates, multibyte boundaries, savepoint isolation, immutable content/identity mutations, DDL/cross-database denial and reconnect persistence constitute a meaningful storage proof. Catalog privilege assertions supplement actual statements. The plan explicitly rejects denials caused merely by absent rows or CHECK failures as privilege evidence.
+
+6. **Ownership and review limits.** The path map confines implementation to the existing contract leaf/root, two protected inventories and their tests, new control010 and one private-helper integration test file. No consumer, shared harness, migration runner, existing migration, runtime006, composition or provider change is authorized. Prior design P1/P2 fixes remain mandatory for Discovery: full-scope settled compile diagnostics and precise chronology/applicability/supersession are explicitly retained in the handoff. The producer neither reimplements those selectors nor claims their execution. Coherent commits, exact-candidate reviews, partial-check labels and separate user acceptance align with repository guidance.
+
+## Actionable findings
+
+None. Root implementation release, the immediate010 reservation/catalog reconfirmation, actual schema/SQL execution and fresh exact-candidate implementation review remain the existing next gates, not defects in this plan.
