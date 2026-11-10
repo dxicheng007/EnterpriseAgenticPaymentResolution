@@ -81,11 +81,11 @@ if (entry !== undefined && resolve(entry) === resolve(fileURLToPath(import.meta.
           process.exitCode = 1;
         } else {
           // Provider key is present; Blocker D still leaves product composition unmounted.
-          // Run the registered live file — successful G4 construction remains out of band.
+          // Run the registered live file — successful G4/G7 holdouts remain out of band.
           runLiveVitest(file, vitestArgs);
         }
       } else {
-        // Slice verifier evidence mode: execute the fail-closed proof suite without claiming G4.
+        // Slice verifier evidence mode: execute the fail-closed proof suite without claiming G4/G7.
         runLiveVitest(file, vitestArgs);
       }
     } catch (error) {
