@@ -53,10 +53,12 @@ The [Discovery unblock inventory](../2026-11-08/handoffs/d4-discovery-unblock-ha
 
 ## Next execution order
 
-1. Platform prepares the bounded PR39 repair plan. Discovery can correct Gate J and transport independently. Experience can close existing reviewer browser/wording gaps.
-2. Platform publishes remaining capability/grant and operations contracts; consumers implement only the released scope. Continue capture/application scheduling after accepted atomic application.
-3. Run genuine construction and AI-off synchronization, then the complete crash/replay/revocation/drift matrix.
-4. Complete V7 rehearsals, independent final review and joint acceptance.
+Aligned with the active [demo remaining-work board](../../superpowers/plans/2026-11-10-demo-remaining-work.md) and [Company A mount plan](../../superpowers/plans/2026-11-10-company-a-demo-mount.md) after T0/T1 (PR55/PR56) on main:
+
+1. **Platform T2 Task 1** — fixed `createCompanyADemoSync` capture + exact scenario receipt recovery (`local-demo-v1`); do not rebuild PR56 `/internal/apply`.
+2. **Platform T2 Tasks 2–3** — private inject/change-feed/worker sync HTTP, then CLI/supervisor mount.
+3. **Experience T3/T4 in parallel** — reviewer browser/public packet and Operations labeling (`runtimeModelCalls` = forbidden posture, not measured zero).
+4. **Integrator T5 + Platform T6**, then **T8 rehearsals**. Discovery Gate J / live construction remains **T9 deferred** for this demo track.
 
 ## Recorded evidence and continuation safeguards
 

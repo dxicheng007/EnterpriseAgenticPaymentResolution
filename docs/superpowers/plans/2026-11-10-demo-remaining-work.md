@@ -78,9 +78,9 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T2 — Platform: post-activation injection + capture path for the demo event
 
-**Status:** bounded design reviewed with T1 at base `7de9366`; existing internal capture is reusable. Exact Company A event is frozen by T0; fixed operator HTTP transport and owned paths are specified by the bounded plan; transport implementation waits for Task 1 acceptance. No implementation acceptance yet.
+**Status:** in progress on `platform/t2-company-a-demo-sync` (tracks Platform plan on `codex/platform-company-a-demo-mount`). Reviewed design/plan: [Company A mount design](../specs/2026-11-10-company-a-demo-mount-design.md), [implementation plan](2026-11-10-company-a-demo-mount.md), [PR56 delta](../../progress/2026-11-10/company-a-pr56-design-delta.md). **Task 1** (fixed `createCompanyADemoSync` capture + exact receipt recovery, local-demo-v1 seed) is the active source write; Tasks 2–3 (private HTTP + CLI/supervisor) wait for Task 1 acceptance. Do not reopen PR56 generic `/internal/apply`.
 **Lane:** Platform (sources/worker composition as reserved)  
-**Depends on:** T1 or a jointly agreed temporary harness seam owned by Integrator  
+**Depends on:** T1 merged (PR56)  
 **Outcome:** A controlled way to introduce one new Company A API (and optionally later Company B) event after activation and durably capture it into the inbox the applier consumes.  
 **Done when:** Inject → capture → apply chain works in an isolated test without `FEATURE_NOT_IMPLEMENTED` stubs pretending to be the proof.  
 **Not in scope:** General source productization or live agent tools.
@@ -148,21 +148,37 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 **Done when:** Playbook G4 pass evidence exists.  
 **Not required** to ship the §3 demo track.
 
-## 5. Suggested dependency order
+## 5. Owner crosswalk (consolidated product path)
+
+| Owner lane | Owner task | Demo board | Product role now |
+| --- | --- | --- | --- |
+| Integrator | Demo contract | T0 | **Done** (PR55) |
+| Platform | Atomic apply + private mount | T1 | **Done** (PR56); leave generic route alone |
+| Platform | Company A inject/capture/apply orchestration | T2 Tasks 1–3 | **Critical path** — Task 1 active; 2–3 after |
+| Experience | Reviewer browser / V3 packet | T3 / E1 | Parallel; do not block T2 |
+| Experience | Operations presentation | T4 / E2 | Use existing connection/parent reads; label `runtimeModelCalls` as forbidden posture, not measured zero |
+| Integrator | V5 gate honesty | T5 | After T2 mounted proof exists |
+| Platform | Demo-path containment | T6 | Minimum cases folded into T2 Task 1/2 proofs |
+| Discovery | Pregenerated packaging | T7 | Satisfied by T0 `fixture` / `development-fixture` label |
+| Experience + Integrator | Rehearsals | T8 / E4 | After T2–T6 + T3 |
+| Discovery | Live construction / Gate J | T9 / D1–D4 | **Deferred** for this demo; do not block AI-off sync |
 
 ```mermaid
 flowchart TD
   T0[T0 Demo contract freeze]
-  T0 --> T7[T7 Pregenerated artifact packaging]
+  T0 --> T7[T7 Pregenerated fixture label]
   T0 --> T3[T3 Approve browser workflow]
   T7 --> T3
-  T1[T1 Atomic apply mount]
-  T2[T2 Inject and capture]
-  T1 --> T2
+  T1[T1 Generic apply mount PR56]
+  T2a[T2 Task1 fixed capture recovery]
+  T2b[T2 Task2 private HTTP]
+  T2c[T2 Task3 CLI supervisor]
+  T1 --> T2a
+  T2a --> T2b
+  T2b --> T2c
   T1 --> T4[T4 Connections UI]
-  T1 --> T6[T6 Minimum containment]
-  T2 --> T5[T5 V5 gate honesty]
-  T1 --> T5
+  T2a --> T6[T6 Minimum containment]
+  T2c --> T5[T5 V5 gate honesty]
   T3 --> T8[T8 Rehearsal packet]
   T4 --> T8
   T5 --> T8
@@ -170,12 +186,11 @@ flowchart TD
   T9[T9 Live construction later]
 ```
 
-Parallelism that is usually safe after T0:
+Parallelism that is usually safe now:
 
-- Experience can advance T3 while Platform advances T1/T2.
-- T7 packaging can proceed in parallel with Platform apply work.
-- T4 should wait for a short Platform↔Experience read-model freeze so the UI does not invent progress fields.
-- T5/T8 stay Integrator-owned and should not be “passed” by partial prerequisite suites.
+- Experience advances T3/T4 while Platform finishes T2 (no shared write paths).
+- Discovery Gate J / live transport stays off the demo critical path.
+- T5/T8 stay Integrator-owned and must not pass on partial prerequisite suites.
 
 ## 6. Non-negotiables for every delegated task
 
