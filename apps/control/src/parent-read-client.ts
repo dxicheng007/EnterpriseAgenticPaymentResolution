@@ -1,5 +1,5 @@
 import {
-  ActivationStateV1Schema, hashTargetSnapshot, IdSchema, ParentReadQuerySchema, ParentViewSchema,
+  ActivationStateV1Schema, ConnectionStateV1Schema, hashTargetSnapshot, IdSchema, ParentReadQuerySchema, ParentViewSchema,
   type ParentReadQuery, type Scope,
 } from '@eapr/contracts';
 import type { TargetReader } from '@eapr/compiler/preview-adapters';
@@ -27,7 +27,7 @@ export function createParentReadClient(baseUrl: string, serviceToken: string, re
     return member.entry.scope;
   }
 
-  async function get(route: '/internal/parent/' | '/internal/activations/', scope: Scope, query?: ParentReadQuery) {
+  async function get(route: '/internal/parent/' | '/internal/activations/' | '/internal/connections/', scope: Scope, query?: ParentReadQuery) {
     try {
       const url = new URL(route + encodeURIComponent(scope.accountId), origin);
       if (query?.asOf !== undefined) url.searchParams.set('asOf', query.asOf);
@@ -70,6 +70,12 @@ export function createParentReadClient(baseUrl: string, serviceToken: string, re
     async readActivation(accountId: string, grants: Grants) {
       const scope = await resolve(accountId, grants);
       const state = ActivationStateV1Schema.safeParse(await get('/internal/activations/', scope));
+      if (!state.success || !sameScope(scope, state.data.scope)) throw new ParentReadError(503);
+      return state.data;
+    },
+    async readConnection(accountId: string, grants: Grants) {
+      const scope = await resolve(accountId, grants);
+      const state = ConnectionStateV1Schema.safeParse(await get('/internal/connections/', scope));
       if (!state.success || !sameScope(scope, state.data.scope)) throw new ParentReadError(503);
       return state.data;
     },
