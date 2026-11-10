@@ -141,11 +141,14 @@ async function project(client: PoolClient, run: RunRow, current: Grants): Promis
     JOIN discovery_proposal_current c ON c.run_id=i.run_id AND c.proposal_id=i.id AND c.proposal_revision=i.current_revision
     WHERE i.run_id=$1 ORDER BY i.id COLLATE "C"`, [run.id]);
   const { rows: verificationRows } = await client.query<{
-    proposalId: string; proposalRevision: number; jobId: string; accountId: string; taskGrants: Grants;
+    proposalId: string; proposalRevision: number; jobId: string; accountId: string;
+    taskGrants: Grants; jobState: string;
   }>(`
     SELECT v.proposal_id AS "proposalId", v.proposal_revision::int AS "proposalRevision",
-           v.job_id AS "jobId", v.account_id AS "accountId", t.grants AS "taskGrants"
+           v.job_id AS "jobId", v.account_id AS "accountId", t.grants AS "taskGrants",
+           j.state AS "jobState"
     FROM discovery_verification_requests v
+    JOIN verification_jobs j ON j.id = v.job_id
     JOIN discovery_tasks t ON t.run_id = v.run_id AND t.id = v.task_id
     JOIN discovery_tool_steps s
       ON s.run_id = v.run_id AND s.task_id = v.task_id AND s.id = v.request_key
@@ -153,13 +156,23 @@ async function project(client: PoolClient, run: RunRow, current: Grants): Promis
     WHERE v.run_id = $1
     ORDER BY v.proposal_id COLLATE "C", v.proposal_revision, v.job_id COLLATE "C"`, [run.id]);
   // Same-snapshot filter: original task/account must still be covered by saved and current grants.
-  const verificationJobs = verificationRows.filter(row =>
+  const authorizedVerification = verificationRows.filter(row =>
     current.allowedAccountIds.includes(row.accountId) &&
     run.grants.allowedAccountIds.includes(row.accountId) &&
     row.taskGrants.allowedAccountIds.includes(row.accountId) &&
     coversGrant(current, { sourceRead: run.grants.sourceRead, allowedAccountIds: [] }) &&
     coversGrant(run.grants, { sourceRead: row.taskGrants.sourceRead, allowedAccountIds: [] }),
-  ).map(({ proposalId, proposalRevision, jobId }) => ({ proposalId, proposalRevision, jobId }));
+  );
+  const verificationJobs = authorizedVerification.map(({ proposalId, proposalRevision, jobId }) => ({
+    proposalId, proposalRevision, jobId,
+  }));
+  // Derive current uncertainty only while an authorized association is still running.
+  const permanentDiagnostics = run.diagnostics.filter(code => code !== 'VERIFICATION_INTERRUPTED');
+  const diagnostics = [
+    ...permanentDiagnostics.map(diagnostic),
+    ...(authorizedVerification.some(row => row.jobState === 'running') ?
+      [diagnostic('VERIFICATION_INTERRUPTED')] : []),
+  ];
   return DiscoveryStateV2Schema.parse({
     schemaVersion: 2, id: run.id, revision: safeCounter(run.revision), binding: run.binding, mode: run.mode,
     modelId: run.model_id, status: run.status,
@@ -176,7 +189,7 @@ async function project(client: PoolClient, run: RunRow, current: Grants): Promis
     usage: { modelCalls: safeCounter(run.model_calls), inputTokens: safeCounter(run.input_tokens),
       outputTokens: safeCounter(run.output_tokens), unknownUsageCalls: safeCounter(run.unknown_calls),
       cost: { status: 'unavailable' } },
-    diagnostics: run.diagnostics.map(diagnostic),
+    diagnostics,
   });
 }
 
@@ -268,7 +281,9 @@ export function createDiscoveryRepository({ db, clock, resolveAuthority }: Repos
       }
       if (safeCounter(run.revision) !== input.expectedRevision || run.status === 'failed' || run.status === 'completed' ||
           (name === 'resume' && run.status !== 'paused')) throw discoveryError(409);
-      const status = name === 'pause' ? 'paused' : run.diagnostics.length ? 'blocked' : 'queued';
+      // VERIFICATION_INTERRUPTED is a nonterminal warning, not a resume blocker.
+      const blockers = run.diagnostics.filter(code => code !== 'VERIFICATION_INTERRUPTED');
+      const status = name === 'pause' ? 'paused' : blockers.length ? 'blocked' : 'queued';
       if (run.status !== status) {
         const { rows: [updated] } = await client.query<RunRow>(
           'UPDATE discovery_runs SET status=$2, revision=revision+1 WHERE id=$1 RETURNING *', [runId, status]);
