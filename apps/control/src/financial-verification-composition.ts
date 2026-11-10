@@ -31,16 +31,20 @@ export async function composeFinancialVerification(
   if (servedRoots.some(path => contains(path, evidencePinRoot) || contains(evidencePinRoot, path))) {
     throw new Error('Protected verification root conflicts with visible storage');
   }
-  return createFinancialAttestationJobs({
+  const options = {
     db: sources.dependencies.db,
     candidates: registry,
     captures: createFinancialCaptureReader({ ...sources, registry }),
     launcher: createProtectedFinancialLauncher({ registry, roots: { evidencePinRoot, servedRoots } }),
-    async selectFixture(candidate) {
+    async selectFixture(candidate: CandidateRegistration) {
       const selection = await select(candidate);
       if (selection.fixtureSetVersion !== '2') throw new Error('FINANCIAL_ATTESTATION_MISMATCH');
-      return { ...selection, fixtureSetVersion: '2' };
+      return { ...selection, fixtureSetVersion: '2' as const };
     },
     readBuildHash: readFixedFinancialBuildHash,
-  });
+  };
+  return {
+    jobs: createFinancialAttestationJobs(options),
+    discoveryVerification: options,
+  };
 }
