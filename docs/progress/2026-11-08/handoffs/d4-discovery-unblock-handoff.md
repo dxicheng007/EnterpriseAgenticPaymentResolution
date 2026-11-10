@@ -21,7 +21,13 @@ Still **recognized / unavailable** (do not advertise until unblock items land): 
 
 ---
 
-## Hard stop — blocked on someone else’s engineering
+## Platform producer checkpoint — 2026-11-09
+
+The original blocker inventory below is retained as history. Blocker A now has an implemented, independently accepted **Gate P** producer at `4af12bd79e315a0701d896666cb119095dcfec9c`, published in [PR12](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/12). See the [actual export/SQL/evidence handoff](platform-discovery-verification-producer-report.md), [independent review](../reviews/platform-discovery-verification-producer-review.md) and [current integration status](platform-continuation-dispatch.md). Control009 is assigned to the immutable verification-request mapping; do not reuse or edit it. Reviewer verification uses the current attested producer, not the legacy jobs.ts API described below.
+
+This releases the producer for separately assigned Discovery consumer implementation. It does **not** enable requestVerification/readVerification. The [accepted adapter design](platform-discovery-verification-adapter-design.md) requires **Gate J** against the actual supervisor owner connection, current authorization and historical recovery before tool mounting. No generated-account capability, repair/finish grant or live-provider configuration was added.
+
+## Original blocker inventory — superseded for Blocker A producer status
 
 ### Blocker A — Retry-safe discovery verification adapter (blocks D4b tools)
 
