@@ -524,4 +524,4 @@ export async function prepareCapturedUnit(
       events: selected.events, plan,
     }));
   });
-              }
+}
