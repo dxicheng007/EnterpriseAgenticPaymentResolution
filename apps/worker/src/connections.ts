@@ -23,8 +23,9 @@ export function createConnectionReads(db: Pool, registry: RegisteredScopeReader)
         const [target] = await one('SELECT target_version FROM parent_targets WHERE account_id = $1');
         const synced = await one('SELECT receipt, before_version, after_version FROM runtime_sync_receipts WHERE account_id = $1 ORDER BY after_version DESC LIMIT 50');
         const [total] = await one('SELECT count(*) AS total FROM runtime_sync_receipts WHERE account_id = $1');
-        const lane = 'JOIN runtime_capture_lanes l ON l.source_ref = c.source_ref AND l.manifest_hash = c.manifest_hash ' +
-          'JOIN runtime_activation_imports a ON a.activation_id = l.initial_activation_id WHERE a.account_id = $1 ';
+        // Resolve the lane from this account's own committed source and manifest; enrolled accounts share one lane.
+        const lane = 'JOIN runtime_activation_imports a ON a.account_id = $1 AND c.source_ref = a.bundle::jsonb->\'manifest\'->>\'sourceRef\' ' +
+          'AND c.manifest_hash = a.activation::jsonb->>\'manifestHash\' ';
         const streams = await one('SELECT c.source_ref, c.stream_id, c.transport, c.baseline_cursor, c.capture_cursor, c.captured_pages, c.last_captured_at ' +
           'FROM runtime_capture_checkpoints c ' + lane + 'ORDER BY c.source_ref, c.stream_id LIMIT 50');
         const incidents = await one('SELECT c.source_ref, c.stream_id, c.code, c.observed_at, c.source_ids_canonical ' +
@@ -63,7 +64,7 @@ export function createConnectionReads(db: Pool, registry: RegisteredScopeReader)
           receipts: receipts.slice(0, 50),
           counts: { appliedBatches: Number(total?.total ?? 0), pendingEvents: null, quarantinedEvents: null },
           lastReceiptId: receipts.sort((a, b) => b.afterVersion - a.afterVersion)[0]?.id ?? null,
-          runtimeModelCalls: 0,
+          runtimeModelCalls: null,
         });
       } catch (error) {
         try { await client.query('ROLLBACK'); } catch { discard = true; }

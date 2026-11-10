@@ -36,7 +36,7 @@ test('shows worker-authoritative connection state, receipts and honest unmeasure
     expect(response.status()).toBe(200);
     expect(response.request().method()).toBe('GET');
     const state = ConnectionStateV1Schema.parse(await response.json());
-    expect(state).toMatchObject({ status: 'active', epoch: 1, runtimeModelCalls: 0 });
+    expect(state).toMatchObject({ status: 'active', epoch: 1, runtimeModelCalls: null });
     expect(state.counts).toEqual({ appliedBatches: 0, pendingEvents: null, quarantinedEvents: null });
     expect(state.receipts).toHaveLength(1);
 

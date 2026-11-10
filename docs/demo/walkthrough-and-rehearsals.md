@@ -37,4 +37,4 @@ Status: script and checklist only. No rehearsal has been run. Record each run's 
 | 2 | | | | | |
 | 3 | | | | | |
 
-Reset between runs: `npm run db:down`, then restart with `npm run dev` so both acquisitions reload.
+Restart between runs: `npm run db:down` stops the cluster and retains approvals and imports; `npm run dev` then restarts on the same preserved data. It is not a reset. A fresh state needs a separately owned disposable rehearsal setup; never reset the preserved demo.
