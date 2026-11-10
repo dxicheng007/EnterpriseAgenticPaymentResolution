@@ -106,7 +106,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T5 — Integrator: make V5 machine gate prove ongoing application
 
-**Status:** bounded `demo-company-a-ai-off` gate passes on clean source `8468b7e`: six mounted transport cases, twelve CLI cases, three app unit cases and typecheck;24 parser regressions also pass. Initial `3951388` failed an evidence-only source-ID/target-ID comparison and was corrected; failed packet retained. Fresh exact-candidate independent execution and whole-branch review are in progress. Original full V5/V6 remain fail-closed and unchanged.
+**Status:** bounded `demo-company-a-ai-off` gate passes on clean source `8468b7e`: six mounted transport cases, twelve CLI cases, three app unit cases and typecheck;24 parser regressions also pass. Initial `3951388` failed an evidence-only source-ID/target-ID comparison and was corrected; failed packet retained. Fresh exact-candidate independent execution passed. Whole-branch review found one missing authenticated Connections assertion, closed in source `85023c8`; clean bounded gate and independent three-case success/containment rerun pass. Original full V5/V6 remain fail-closed and unchanged.
 **Lane:** Integrator  
 **Depends on:** T1 + T2 minimum proofs  
 **Outcome:** `verify:slice -- V5` cannot pass on capture/authority/health alone; mandatory observations include fresh conforming apply, updated money, preserved cutover, and receipt.  
@@ -133,7 +133,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T8 — Experience + Integrator: two-company or single-company rehearsal packet
 
-**Status:** not started
+**Status:** assigned to the successor Experience MVP agent under the exclusive handoff; three timed rehearsals remain outstanding. Platform verification lease released; successor owns next isolated lease.
 **Lane:** Experience leads; Integrator records  
 **Depends on:** T3 + T1–T5; T6 for replay beat  
 **Outcome:** One rehearsable runbook and evidence packet for the hackathon-style walkthrough in §3. Prefer one Company A happy path first; add Company B only when CSV/file capture apply is actually available.  
