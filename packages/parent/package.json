@@ -7,6 +7,7 @@
     "./state": "./src/state.ts",
     "./activation-store": "./src/activation-store.ts",
     "./persistence": "./src/persistence.ts",
+    "./sync-store": "./src/sync-store.ts",
     "./snapshots": "./src/snapshots.ts"
   },
   "dependencies": {
