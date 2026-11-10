@@ -470,3 +470,9 @@ Fresh Astra `demo_task1_review` owns the serial test lease in a separate exact-c
 Fresh Astra review of exact source `98bcc469d204785e34e2d0c44a3d164c43f5f718` passes specification, quality and scoped verification with no actionable findings. Independent five unit cases and two real integration cases (positive/recovery plus conflicting history) passed in a separate exact checkout/owned55442 cluster. An initial PGDATA symlink setup rejection was corrected before those tests; reviewer stopped only its own55442 cluster. Integration55441 and original demo remain untouched. [Review](company-a-task1-review.md).
 
 Task 1 is complete as an internal fixed service, not a mounted operator path. Release Task 2's private source/worker transports to the next sole Sol writer with the existing isolated integration test lease; no dependent supervisor/CLI/gate release yet.
+
+## Private transports accepted; supervisor release
+
+Source `0c3bcafe27a38d43c54c9e209c33b9d3a3d971c4` passes fresh Astra spec/quality/security and scoped verification, no findings. Independent3 app unit cases and all3 real HTTP/PG cases pass in the separate review checkout; reviewer stopped only its own55442 cluster. [Review](company-a-task2-review.md). Task3 now owns only the plan-listed supervisor/control-composition/CLI/process-proof/setup paths; existing source/capture/apply behavior remains accepted and unchanged.
+
+Periodic fetch found PR58 (`5605513`) independently replacing the same Task1 paths, materially different from accepted98bcc46. [Reconciliation request](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/58#issuecomment-6777775735) asks its owner to avoid merging competing source over the accepted service and preserve dependent transports. PR59 Experience controls (`f04bb07`) receives separate read-only Astra inspection; no UI paths are taken. Main remains49245de.
