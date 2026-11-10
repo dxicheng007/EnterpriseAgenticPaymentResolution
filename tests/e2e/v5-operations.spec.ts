@@ -45,7 +45,7 @@ test('shows dedicated authority, immutable receipts, honest AI-off posture and c
     const [overviewResponse, authorityResponse] = await Promise.all([overviewRead, authorityRead]);
     const state = ConnectionStateV1Schema.parse(await overviewResponse.json());
     const authority = CurrentAuthorityV1Schema.parse(await authorityResponse.json());
-    expect(state).toMatchObject({ status: 'active', epoch: 1, runtimeModelCalls: 0 });
+    expect(state).toMatchObject({ status: 'active', epoch: 1, runtimeModelCalls: null });
     expect(authority).toMatchObject({ status: 'active', epoch: 1, identity: { scope: { accountId: accountA } } });
 
     const stored = await system.db.runtime.query<{ receipt_id: string; activation_id: string }>(

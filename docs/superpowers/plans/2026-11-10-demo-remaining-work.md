@@ -97,7 +97,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T4 — Experience: Connections / sync observation surface
 
-**Status:** delivered on `codex/platform-company-a-demo-mount` via PR64 `a945586` — dedicated authority GET gates controls; immutable unresolved-command retry; 409 refresh/new key; nondecreasing epoch floor; honest unmeasured/AI-off model-call labeling on the base literal-`0` schema. Independent review PASS. **Main integration still needs** the post-PR61 `runtimeModelCalls: null` consumer follow-up when landing this tip. Shared-lane backend truth remains Platform (PR61/PR63).
+**Status:** delivered on `codex/platform-company-a-demo-mount` via PR64 `a945586` — dedicated authority GET gates controls; immutable unresolved-command retry; 409 refresh/new key; nondecreasing epoch floor; honest unmeasured/AI-off model-call labeling on the prior literal-`0` schema. **Step 1 follow-up (Experience tip):** port PR61 `runtimeModelCalls: null` producer/contract and keep AI-off · **Not measured** UI (never a measured zero) so the tip matches `main` before Integrator land. Shared-lane backend truth remains Platform (PR61/PR63).
 **Lane:** Experience  
 **Depends on:** T1 progress reads / receipts (design freeze with Platform first)  
 **Outcome:** Demo-visible connection state: active customer, pinned artifact, last receipt, applied vs held/gap counts, and clear AI-off posture.  
@@ -133,7 +133,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T8 — Experience + Integrator: two-company or single-company rehearsal packet
 
-**Status:** three timed single-Company-A fixture/AI-off rehearsals **passed** on isolated lease `55444/3251/3252/5184` for candidate `bac37fa` (merged PR64 / tip `a945586`). Receipts prove 80000→50000 and replayed same id; sanitized evidence under ignored `.evidence/experience-mvp-rehearsals/`. Experience lease released. **Still open:** integrate tip onto `main`, disposable staging checklist for cold operators, and **joint user** acceptance of one on-stage run. Company B stretch remains out.
+**Status:** three timed single-Company-A fixture/AI-off rehearsals **passed** on isolated lease `55444/3251/3252/5184` for candidate `bac37fa` (merged PR64 / tip `a945586`). Receipts prove 80000→50000 and replayed same id; sanitized evidence under ignored `.evidence/experience-mvp-rehearsals/`. Experience lease released. **Still open:** integrate tip onto `main` (Step 1), cold-operator [disposable staging](../../demo/disposable-staging.md) checklist for Step 2, and **joint user** acceptance of one on-stage live-API run (Step 4; staged UI off). Company B stretch remains out.
 **Lane:** Experience leads; Integrator records  
 **Depends on:** T3 + T1–T5; T6 for replay beat  
 **Outcome:** One rehearsable runbook and evidence packet for the hackathon-style walkthrough in §3. Prefer one Company A happy path first; add Company B only when CSV/file capture apply is actually available.  
@@ -199,12 +199,12 @@ Parallelism that is usually safe after T0:
 
 ## 8. Current integrator checkpoint and preserved follow-on work
 
-**Demo MVP path (authoritative next steps):** [demo-mvp-path.md](../../progress/2026-11-10/demo-mvp-path.md) — land `a945586` on `main`, disposable staging, on-stage fixture/AI-off script, joint user acceptance. Strategy remains hardcoded fixture + simulated `freshPaymentA` inject; live construction stays T9.
+**Demo MVP path (authoritative next steps):** [demo-mvp-path.md](../../progress/2026-11-10/demo-mvp-path.md) — Steps 1–4: land tip on `main` (including Experience `runtimeModelCalls: null` follow-up), [disposable staging](../../demo/disposable-staging.md), on-stage fixture/AI-off script, joint user acceptance. Staged UI is theater only. Strategy remains hardcoded fixture + simulated `freshPaymentA` inject; live construction stays T9.
 
-PR57 Platform mount and PR64 Experience T3/T4/T8 are merged on `codex/platform-company-a-demo-mount` @ `a945586`. `main` remains `12f6595` (PR57/59/61) without PR64. Open Platform drafts: PR62 (V5 evidence allowlist), PR63 (Connections boundary tests). Original demo checkout/database remain preserved. Experience lease `55444/3251/3252/5184` released after rehearsals.
+PR57 Platform mount and PR64 Experience T3/T4/T8 are merged on `codex/platform-company-a-demo-mount` @ `a945586` (+ later staged-UI tip). `main` remains `12f6595` (PR57/59/61) without PR64. Open Platform drafts: PR62 (V5 evidence allowlist), PR63 (Connections boundary tests). Original demo checkout/database remain preserved. Experience lease `55444/3251/3252/5184` released after rehearsals.
 
 General multi-customer capture/history selection, dependency journal/application scheduling, Discovery Gate J/live construction, and the explicit proposed-scope grant workflow remain preserved follow-on work. They are not blocking requirements for the one-customer pregenerated AI-off demo. See [Platform coordination](../../progress/2026-11-10/platform-coordination.md).
 
 ## 9. User-directed MVP ownership split (status)
 
-Successor Experience delivery for T3/T4/T8 is recorded in [experience-mvp-completion.md](../../progress/2026-11-10/experience-mvp-completion.md) and merged via PR64. Developer 0 retains Platform source, shared board, and **main integration**. Remaining Experience work after main land: `runtimeModelCalls: null` consumer + disposable staging checklist per [demo-mvp-path.md](../../progress/2026-11-10/demo-mvp-path.md). Historical reservation text: [experience-mvp-handoff.md](../../progress/2026-11-10/experience-mvp-handoff.md).
+Successor Experience delivery for T3/T4/T8 is recorded in [experience-mvp-completion.md](../../progress/2026-11-10/experience-mvp-completion.md) and merged via PR64. Developer 0 retains Platform source, shared board, and **main integration**. Remaining Experience work per [demo-mvp-path.md](../../progress/2026-11-10/demo-mvp-path.md): Step 1 item 3 (`runtimeModelCalls: null` consumer + tip producer align) and Step 2 disposable staging checklist. Historical reservation text: [experience-mvp-handoff.md](../../progress/2026-11-10/experience-mvp-handoff.md).

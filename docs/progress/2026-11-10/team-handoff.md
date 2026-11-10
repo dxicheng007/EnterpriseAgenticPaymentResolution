@@ -1,6 +1,6 @@
 # Current team handoff and remaining tasks — November 10, 2026
 
-**Active demo MVP path (fixture + AI-off, hardcoded connector, simulated inject):** [demo-mvp-path.md](demo-mvp-path.md). Land `codex/platform-company-a-demo-mount` @ `a945586` on `main`, disposable staging, on-stage contract script, joint user acceptance. Live construction stays deferred (T9).
+**Active demo MVP path (fixture + AI-off, hardcoded connector, simulated inject):** [demo-mvp-path.md](demo-mvp-path.md) Steps 1–4. Staged UI is optional theater only. Next Experience: Step 1 item 3 (`runtimeModelCalls: null` consumer) + Step 2 [disposable staging](../../demo/disposable-staging.md). Integrator still owns landing the platform tip on `main`, then joint user acceptance. Live construction stays deferred (T9).
 
 For Platform checkpoints and delivered owner requests, read [Platform coordination](platform-coordination.md). For the shared high-level T0–T9 board, read [demo remaining work](../../superpowers/plans/2026-11-10-demo-remaining-work.md) (T3/T4/T8 delivered on the platform tip; not yet on `main`). Frozen T0 script and identities: [demo contract](../../demo/demo-contract.md). Experience delivery: [experience-mvp-completion.md](experience-mvp-completion.md).
 

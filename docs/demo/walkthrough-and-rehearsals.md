@@ -40,4 +40,4 @@ Status: checklist for operators. Three agent-timed Company A fixture/AI-off rehe
 | 3 | 2026-11-10T21:44:55Z (~166s) | Experience agent (fresh DB) | `bac37fa` | yes | none; sync `receipt:9804e7d7-…` 80000→50000 then replayed |
 | user | | | | | |
 
-**Reset between first-apply runs:** `npm run db:down` only **stops** the cluster and retains approvals/imports. For a fresh first-apply rehearsal use a disposable leased checkout/namespace, drop/recreate that lease’s demo databases (or an Integrator-published reset procedure), then `npm run dev`. Never reset the preserved original demo.
+**Reset between first-apply runs:** `npm run db:down` only **stops** the cluster and retains approvals/imports. For a fresh first-apply rehearsal follow [disposable staging](disposable-staging.md): leased checkout/namespace, drop/recreate that lease’s demo databases, then `npm run dev`. Never reset the preserved original demo. Keep staged demo responses **off** for recorded rehearsals.

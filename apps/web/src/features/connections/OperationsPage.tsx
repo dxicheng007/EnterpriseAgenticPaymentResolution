@@ -36,7 +36,8 @@ export function ConnectionInspection({ state }: { state: ConnectionStateV1 }) {
       <dt>Applied batches</dt><dd>{counts.appliedBatches}</dd>
       <dt>Pending events</dt><dd>{counts.pendingEvents ?? unmeasured}</dd>
       <dt>Quarantined events</dt><dd>{counts.quarantinedEvents ?? unmeasured}</dd>
-      <dt>Runtime model calls</dt><dd>AI-off / forbidden by worker posture (literal {state.runtimeModelCalls}; not measured)</dd>
+      <dt>Runtime model calls</dt>
+      <dd>AI-off / forbidden by worker posture · {state.runtimeModelCalls ?? unmeasured}</dd>
     </dl>
     <p>Unmeasured values are not zero. Pending, quarantine and lag appear only when the worker records them.
       This single-customer fixture view does not establish isolation for customers that share a capture lane.</p>

@@ -892,7 +892,7 @@ test('pr44_receipt_compatibility', () => fixture(async data => {
     expect(view.streams.map(stream => [stream.streamId, stream.lagEvents])).toEqual([
       [applyFinancialStream, null], [applySemanticStream, null],
     ]);
-    expect(view.runtimeModelCalls).toBe(0);
+    expect(view.runtimeModelCalls).toBeNull();
     expect(await state(data)).toEqual(before);
     return view;
   };

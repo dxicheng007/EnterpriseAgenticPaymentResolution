@@ -17,7 +17,7 @@ Requested implementer/reviewer models `gpt-6.1-sol` / `gpt-6-astra` were unavail
 - Authority commands persist their exact schema version, account, action, epoch, and idempotency key in account-scoped session storage until resolved. Uncertain network and 503 outcomes retain an explicit original-command retry.
 - A 409 retires the rejected command, hides stale controls, refreshes both reads, and requires a new deliberate command with a new key.
 - Same-identity authority display has a nondecreasing epoch floor. Historical replay responses are reported as recovery results but never installed as current authority.
-- The browser exposes committed activation, artifact, profile, and manifest identities. Runtime model calls are described as an AI-off/forbidden posture with a literal unmeasured value on this base (`runtimeModelCalls: 0` schema), and the single-customer fixture copy disclaims shared-lane isolation.
+- The browser exposes committed activation, artifact, profile, and manifest identities. On candidate `bac37fa` runtime model calls used the tip’s literal-`0` Connections schema with AI-off/forbidden labeling (not a measured zero). **Step 1 follow-up** ports that field to PR61/`main` `null` and keeps AI-off · **Not measured**. The single-customer fixture copy disclaims shared-lane isolation.
 - The browser activation harness mounts authority admission and worker authority with distinct capabilities and uses the `local-demo-v1` fixture seed.
 - V3 browser coverage rejects missing-CSRF and wrong-account approval attempts, verifies exact deterministic receipt replay, and attaches run-specific sanitized receipt/activation/epoch/cents evidence.
 

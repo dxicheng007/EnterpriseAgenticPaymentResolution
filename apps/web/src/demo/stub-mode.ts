@@ -1,4 +1,4 @@
-/** Opt-in staged demo responses for frontend walkthroughs when local services are down. */
+/** Opt-in offline Company A responses when the local reviewer session cannot open. */
 
 const storageKey = 'eapr-demo-stub';
 const listeners = new Set<() => void>();

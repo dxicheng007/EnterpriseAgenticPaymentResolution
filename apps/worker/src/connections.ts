@@ -63,7 +63,7 @@ export function createConnectionReads(db: Pool, registry: RegisteredScopeReader)
           receipts: receipts.slice(0, 50),
           counts: { appliedBatches: Number(total?.total ?? 0), pendingEvents: null, quarantinedEvents: null },
           lastReceiptId: receipts.sort((a, b) => b.afterVersion - a.afterVersion)[0]?.id ?? null,
-          runtimeModelCalls: 0,
+          runtimeModelCalls: null,
         });
       } catch (error) {
         try { await client.query('ROLLBACK'); } catch { discard = true; }

@@ -4,7 +4,8 @@ Reconstruct an acquired company's contract-to-cash history and translate its exi
 
 **Current build:** local PostgreSQL-backed source capture, evidence inspection, registered parent-state reads, development connector previews, independent verification, and persisted discovery findings/proposals. The monitor and scripted orchestration checks exist; live agent construction, customer activation, persisted parent imports, and ongoing sync remain incomplete. Preview performs zero parent writes.
 
-- [Demo MVP path (fixture + AI-off runnable demo)](docs/progress/2026-11-10/demo-mvp-path.md) — critical path to an on-stage Company A demo with hardcoded connector and simulated inject
+- [Demo MVP path (fixture + AI-off runnable demo)](docs/progress/2026-11-10/demo-mvp-path.md) — Steps 1–4 to an on-stage Company A demo with hardcoded connector and simulated inject; staged UI is theater only
+- [Disposable staging](docs/demo/disposable-staging.md) — Step 2 cold-operator lease checklist for live APIs
 - [Demo remaining work (active track: pregenerated connector + AI-off sync)](docs/superpowers/plans/2026-11-10-demo-remaining-work.md) — shared T0–T9 board; update when dispatching or completing work
 - [Demo contract](docs/demo/demo-contract.md) — frozen T0 identities, construction modes, staged walkthrough, and pass/fail observations
 - [Current team handoff — November 10 owner tasks](docs/progress/2026-11-10/team-handoff.md)

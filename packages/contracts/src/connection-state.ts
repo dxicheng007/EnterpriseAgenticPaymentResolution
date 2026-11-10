@@ -36,7 +36,8 @@ export const ConnectionStateV1Schema = strict({
   receipts: z.array(ConnectionReceiptV1Schema).max(50),
   counts: strict({ appliedBatches: count, pendingEvents: measured, quarantinedEvents: measured }),
   lastReceiptId: IdSchema.nullable(),
-  runtimeModelCalls: z.literal(0),
+  // Null means model calls are not measured for this AI-off worker posture — never a literal zero count.
+  runtimeModelCalls: z.null(),
 });
 
 export type ConnectionStateV1 = z.infer<typeof ConnectionStateV1Schema>;
