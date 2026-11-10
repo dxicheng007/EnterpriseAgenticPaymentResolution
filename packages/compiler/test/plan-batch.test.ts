@@ -4,7 +4,7 @@ import {
   type ConnectorSpec, type CustomerProfile, type RawSourceEvent,
 } from '@eapr/contracts';
 import { compile } from '@eapr/compiler/compile';
-import { planBatch } from '@eapr/compiler/plan-batch';
+import { classifyBatch, planBatch } from '@eapr/compiler/plan-batch';
 import {
   afterLatePaymentA, ambiguousRemittanceB, baselineA, baselineEventsA, baselineEventsB,
   emptyTargetA, emptyTargetB, invoiceBeforePaymentVariant, latePaymentA, profileA, profileB,
@@ -236,4 +236,36 @@ test('a later target version changes the expected version and plan hash', () => 
   expect(next.expectedTargetVersion).toBe(7);
   expect(next.hash).not.toBe(first.hash);
   expect(next.operations).toEqual(first.operations);
+});
+
+test('classifyBatch traces every input and keeps planBatch outcomes identical', () => {
+  const subject = artifact();
+  const target = { ...baselineA, asOf: afterLatePaymentA.asOf };
+  const inputs = [...latePaymentA, baselineEventsA[0], latePaymentA[0]];
+  const result = classifyBatch(subject, profileA, inputs, target);
+  expect(result.outcome).toEqual(planBatch(subject, profileA, inputs, target));
+  if (result.details.kind !== 'classified') throw new Error('expected classified');
+  expect(result.details.items.map(item => item.inputIndex)).toEqual([0, 1, 2, 3]);
+  expect(result.details.items.map(item => item.disposition)).toEqual([
+    'financial_new', 'financial_new', 'financial_replay', 'delivery_repeat',
+  ]);
+  const allocation = result.details.items[1];
+  if (allocation.disposition !== 'financial_new') throw new Error('expected new');
+  expect(allocation.mapped.prerequisites.map(value => [value.relation, value.presence.kind])).toEqual([
+    ['allocation_funding', 'candidate'], ['allocation_invoice', 'target'],
+  ]);
+  expect(result.details.items[3]).toMatchObject({ disposition: 'delivery_repeat', primaryInputIndex: 0 });
+});
+
+test('classifyBatch marks missing prerequisites and stops without classification on conflicts', () => {
+  const { events } = invoiceBeforePaymentVariant();
+  const target = { ...baselineA, asOf: afterLatePaymentA.asOf };
+  const held = classifyBatch(artifact(), profileA, events.slice(0, 2), target);
+  if (held.details.kind !== 'classified') throw new Error('expected classified');
+  expect(held.details.groups.every(group => group.disposition === 'held')).toBe(true);
+  expect(held.details.items.every(item => item.disposition === 'held')).toBe(true);
+
+  const changed = event({ payload: { ...baselineEventsA[0].payload, amount: '3000.01' } });
+  const stopped = classifyBatch(artifact(), profileA, [...baselineEventsA, changed], emptyTargetA);
+  expect(stopped.details).toMatchObject({ kind: 'not_classified', reason: 'delivery_conflict' });
 });
