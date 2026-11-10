@@ -1,8 +1,22 @@
-# Experience MVP completion — exclusive handoff
+# Experience MVP completion — exclusive handoff (historical + status)
 
-User-directed split on November 10, 2026. Developer 0 retains Platform and integration; the receiving agent owns the Experience MVP below. Work on separate branches/worktrees, never the preserved original demo checkout.
+User-directed split on November 10, 2026. This file remains the ownership reservation record. **Current path to a runnable demo:** [demo-mvp-path.md](demo-mvp-path.md). **Delivery record:** [experience-mvp-completion.md](experience-mvp-completion.md).
 
-## Exact starting point and ownership
+## Status (updated November 10, 2026)
+
+| Item | State |
+| --- | --- |
+| Successor branch | `codex/experience-company-a-mvp` |
+| Implementation candidate | `bac37fa15cb8c085f56a27a5d928c23f413e8c58` |
+| Merged tip | [PR64](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/64) → `codex/platform-company-a-demo-mount` @ `a945586` |
+| Independent review | PASS on `bac37fa` (PR59 four authority findings closed) |
+| Three timed rehearsals | PASS on lease `55444/3251/3252/5184`; lease released |
+| On `main` | **Not yet** — `main` is `12f6595`; Integrator owns land |
+| Next Experience slice | After main has PR61 shapes: consume `runtimeModelCalls: null` as unmeasured; help disposable staging docs |
+
+Do not reopen overlapping Platform/gate/board ownership. Do not claim joint demo acceptance from the agent rehearsals alone.
+
+## Exact starting point and ownership (original reservation)
 
 Start from `85023c899367f2e93eead74b5bcd9513ef51fac1` on `origin/codex/platform-company-a-demo-mount`, plus the documentation-only handoff commit containing this file. Fetch first and record your exact base SHA. Create a separate worktree/branch `codex/experience-company-a-mvp`; do not edit Developer 0's integration worktree. Platform source at85023c8 passes the bounded gate and final independent scoped review: three selected mounted success/containment cases passed, with observation collection disabled.
 
