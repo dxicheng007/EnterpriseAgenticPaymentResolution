@@ -7,6 +7,8 @@ import type { ReviewDetailsV1 } from '../../../../../packages/contracts/src/revi
 import type { LocalSession } from '../../../../../packages/client/src/session.js';
 import { ActivationRequestSchema, type ActivationRequest, type ReviewPackage } from '../../../../../packages/contracts/src/review.js';
 import { formatUsdCents } from '../preview/preview-values.js';
+import { EvidencePanel } from '../sources/EvidencePanel.js';
+import { citationBinding, explainSafetyRule, explainValidator, lineageByOperation, mappingLabel } from '../../../../../packages/client/src/review-explain.js';
 import { Diagnostics, RequestFailure } from '../sources/review-details.js';
 
 export function ReviewPackageView({ reviewPackage }: { reviewPackage: ReviewPackage }) {
@@ -38,8 +40,17 @@ function operationLabel(operation: ReviewDetailsV1['proposedImport']['operations
   return operation.op + ' · ' + record.id + amount + ('effectiveAt' in record ? ' · effective ' + record.effectiveAt : '');
 }
 
+function EvidenceButtons({ ids, details, open }: { ids: readonly string[]; details: ReviewDetailsV1; open: (id: string) => void }) {
+  if (ids.length === 0) return <span>no evidence cited</span>;
+  return <>{ids.map(id => citationBinding(details, id)
+    ? <button type="button" key={id} className="evidence-link" onClick={() => open(id)}>Inspect {id}</button>
+    : <span key={id} role="alert"> {id} (not in the reviewed evidence set; cannot be inspected)</span>)}</>;
+}
+
 export function ReviewDetailsView({ details }: { details: ReviewDetailsV1 }) {
   const { baseline, proposedImport, profile, futureScope, artifact, evidence, capture } = details;
+  const [opened, setOpened] = useState<string>();
+  const open = (id: string) => setOpened(id);
   return <section className="review-card" aria-label="Decision details">
     <h2>What you are approving</h2>
     <h3>Proposed import (not yet applied)</h3>
@@ -51,37 +62,63 @@ export function ReviewDetailsView({ details }: { details: ReviewDetailsV1 }) {
       <dt>Source events</dt><dd>{proposedImport.eventIds.length}</dd>
       <dt>Proposed operations</dt><dd>{proposedImport.operations.length}</dd>
     </dl>
-    {proposedImport.operations.length > 0 && <ul>
-      {proposedImport.operations.map((operation, index) => <li key={index}>{operationLabel(operation)}</li>)}
-    </ul>}
+    {proposedImport.operations.length > 0 && <ol>
+      {lineageByOperation(proposedImport).map(({ operationIndex, fields }) => <li key={operationIndex}>
+        {operationLabel(proposedImport.operations[operationIndex]!)}
+        {fields.length === 0 ? <p>No field lineage recorded for this operation.</p> : <ul aria-label="Field lineage">
+          {fields.map((field, index) => <li key={index}>
+            <code>{field.targetField}</code> ← {mappingLabel(field.mapping)}
+            {field.sourcePaths.length > 0 && <> · source fields {field.sourcePaths.join(', ')}</>}
+            {field.sourceEventIds.length > 0 && <> · source events {field.sourceEventIds.join(', ')}</>}
+            {field.derivationInputs.length > 0 && <> · derived from {field.derivationInputs.join(', ')}</>}
+            {' '}<EvidenceButtons ids={[...new Set([...field.evidenceRefs, ...(field.mapping?.op === 'constant' ? [field.mapping.evidenceRef] : [])])]}
+              details={details} open={open} />
+          </li>)}
+        </ul>}
+      </li>)}
+    </ol>}
     <p>Unallocated funds do not reduce an invoice balance. Parent writes during review: {details.parentWrites}.</p>
     <h3>Customer profile and contract terms</h3>
     <dl className="review-facts">
       <dt>Profile</dt><dd>{profile.id} · version {profile.version}</dd>
-      <dt>Parent customer</dt><dd>{profile.bootstrap.customer.id} · {profile.bootstrap.customer.displayName}</dd>
+      <dt>Parent customer</dt><dd>{profile.bootstrap.customer.id} · {profile.bootstrap.customer.displayName}
+        {' '}<EvidenceButtons ids={profile.bootstrap.customer.evidenceRefs} details={details} open={open} /></dd>
       <dt>Source accounts</dt><dd>{profile.sourceAccountIds.join(', ') || 'none'}</dd>
       <dt>Reviewed semantic version</dt><dd>{profile.semanticVersion}</dd>
     </dl>
     {profile.contractTerms.length === 0 ? <p>No contract terms are in this profile.</p> : <ul>
       {profile.contractTerms.map(term => <li key={term.id}>Term {term.id} · {formatUsdCents(term.fixedMonthlyFeeCents)} {term.currency} {term.cadence} on day {term.anchorDay},
-        valid from {term.validFrom}{term.validToExclusive ? ' until ' + term.validToExclusive : ' with no end'} · evidence {term.evidenceRefs.join(', ')}</li>)}
+        valid from {term.validFrom}{term.validToExclusive ? ' until ' + term.validToExclusive : ' with no end'} · <EvidenceButtons ids={term.evidenceRefs} details={details} open={open} /></li>)}
     </ul>}
+    <h3>Approved identity lookups</h3>
+    {profile.approvedLookups.length === 0 ? <p>No identity lookups are approved in this profile.</p> :
+      profile.approvedLookups.map(lookup => <div key={lookup.id} aria-label={'Lookup ' + lookup.id}>
+        <p><strong>{lookup.id}</strong> ({lookup.valueType})</p>
+        <ul>{lookup.entries.map(entry => <li key={entry.source}>{entry.source} → {entry.target}{' '}
+          <EvidenceButtons ids={entry.evidenceRefs} details={details} open={open} /></li>)}</ul>
+      </div>)}
     <h3>Future automatic synchronization for this customer</h3>
     <dl className="review-facts">
       <dt>Allowed record kinds</dt><dd>{futureScope.allowedKinds.join(', ')}</dd>
       <dt>Maximum per transaction</dt><dd>{formatUsdCents(futureScope.limits.maxTransactionCents)}</dd>
       <dt>Maximum records per cycle</dt><dd>{futureScope.limits.maxRecordsPerCycle}</dd>
       <dt>Runtime model calls</dt><dd>{futureScope.runtimeModelCalls}</dd>
-      <dt>Safety rules</dt><dd>{futureScope.safetyRulesVersion}: {futureScope.safetyRules.join(', ')}</dd>
-      <dt>Validators</dt><dd>{futureScope.validators.join(', ')}</dd>
+      <dt>Safety rules ({futureScope.safetyRulesVersion})</dt>
+      <dd><ul>{futureScope.safetyRules.map(rule => <li key={rule}><code>{rule}</code>: {explainSafetyRule(rule)}</li>)}</ul></dd>
+      <dt>Validators</dt>
+      <dd><ul>{futureScope.validators.map(id => <li key={id}><code>{id}</code>: {explainValidator(id)}</li>)}</ul></dd>
     </dl>
     <h3>Evidence and versions</h3>
     <dl className="review-facts">
       <dt>Source</dt><dd>{details.sourceRef}</dd>
       <dt>Capture</dt><dd>{capture.manifestId} · snapshot {capture.snapshotId}</dd>
       <dt>Artifact</dt><dd>{artifact.id} · compiler {artifact.compilerVersion}, runtime {artifact.runtimeVersion}, target schema {artifact.targetSchemaVersion}</dd>
-      <dt>Referenced evidence</dt><dd>{evidence.referencedEvidenceIds.join(', ') || 'none'}</dd>
+      <dt>Referenced evidence</dt><dd><EvidenceButtons ids={evidence.referencedEvidenceIds} details={details} open={open} /></dd>
     </dl>
+    {opened && citationBinding(details, opened) && <div aria-label="Opened citation">
+      <EvidencePanel evidenceId={opened} expectedSnapshotId={evidence.snapshotId} />
+      <button type="button" onClick={() => setOpened(undefined)}>Close citation</button>
+    </div>}
   </section>;
 }
 
@@ -122,18 +159,46 @@ function browserApprovalStorage(): ApprovalStorage | undefined {
 
 export const approvalStorageKey = (accountId: string) => 'eapr-review-approval:' + accountId;
 
+const samePackage = (request: ActivationRequest, reviewPackage: Pick<ReviewPackage, 'id' | 'hash'>) =>
+  request.reviewPackageId === reviewPackage.id && request.expectedPackageHash === reviewPackage.hash;
+
+/** Unresolved approvals are kept per package; a legacy single-request value is still read. */
+function readApprovals(accountId: string, storage: ApprovalStorage | undefined): ActivationRequest[] {
+  if (!storage) return [];
+  try {
+    const raw = storage.getItem(approvalStorageKey(accountId));
+    if (!raw) return [];
+    const value: unknown = JSON.parse(raw);
+    return (Array.isArray(value) ? value : [value]).flatMap(item => {
+      const parsed = ActivationRequestSchema.safeParse(item);
+      return parsed.success ? [parsed.data] : [];
+    });
+  } catch { return []; }
+}
+
+function writeApprovals(accountId: string, requests: ActivationRequest[], storage: ApprovalStorage | undefined) {
+  if (!storage) return;
+  try {
+    if (requests.length === 0) storage.removeItem(approvalStorageKey(accountId));
+    else storage.setItem(approvalStorageKey(accountId), JSON.stringify(requests));
+  } catch { /* storage only aids recovery */ }
+}
+
 export function loadSavedApproval(
   accountId: string,
   reviewPackage: ReviewPackage,
   storage: ApprovalStorage | undefined = browserApprovalStorage(),
 ): ActivationRequest | undefined {
-  if (!storage) return undefined;
-  try {
-    const raw = storage.getItem(approvalStorageKey(accountId));
-    const parsed = raw ? ActivationRequestSchema.safeParse(JSON.parse(raw)) : undefined;
-    return parsed?.success && parsed.data.reviewPackageId === reviewPackage.id &&
-      parsed.data.expectedPackageHash === reviewPackage.hash ? parsed.data : undefined;
-  } catch { return undefined; }
+  return readApprovals(accountId, storage).find(request => samePackage(request, reviewPackage));
+}
+
+/** Unresolved approvals for packages other than the current head, offered only as explicit recovery. */
+export function loadOtherApprovals(
+  accountId: string,
+  reviewPackage: ReviewPackage | undefined,
+  storage: ApprovalStorage | undefined = browserApprovalStorage(),
+): ActivationRequest[] {
+  return readApprovals(accountId, storage).filter(request => !reviewPackage || !samePackage(request, reviewPackage));
 }
 
 export function saveApproval(
@@ -141,16 +206,19 @@ export function saveApproval(
   request: ActivationRequest,
   storage: ApprovalStorage | undefined = browserApprovalStorage(),
 ) {
-  if (!storage) return;
-  try { storage.setItem(approvalStorageKey(accountId), JSON.stringify(request)); } catch { /* storage only aids recovery */ }
+  const others = readApprovals(accountId, storage).filter(item => item.idempotencyKey !== request.idempotencyKey &&
+    !(item.reviewPackageId === request.reviewPackageId && item.expectedPackageHash === request.expectedPackageHash));
+  writeApprovals(accountId, [...others, request], storage);
 }
 
+/** Clears one resolved approval by key, or every saved approval for the account when no key is given. */
 export function clearApproval(
   accountId: string,
   storage: ApprovalStorage | undefined = browserApprovalStorage(),
+  idempotencyKey?: string,
 ) {
-  if (!storage) return;
-  try { storage.removeItem(approvalStorageKey(accountId)); } catch { /* nothing to clear */ }
+  writeApprovals(accountId, idempotencyKey === undefined ? []
+    : readApprovals(accountId, storage).filter(request => request.idempotencyKey !== idempotencyKey), storage);
 }
 
 /** Reuse a saved same-package approval; never invent a second key for that package. */
@@ -190,11 +258,15 @@ function AccountReview({ accountId, session }: { accountId: string; session: Loc
   const [savedApproval, setSavedApproval] = useState<ActivationRequest>();
   const [details, setDetails] = useState<ReviewDetailsV1>();
   const [detailsError, setDetailsError] = useState<unknown>();
+  const [detailsAttempt, setDetailsAttempt] = useState(0);
+  const [earlierApprovals, setEarlierApprovals] = useState<ActivationRequest[]>([]);
+  const [recovered, setRecovered] = useState<{ request: ActivationRequest; outcome: ActivationOutcome }>();
   const inFlight = useRef(false);
 
   function accept(value: ReviewPackage) {
     setReviewPackage(value);
     setSavedApproval(loadSavedApproval(accountId, value));
+    setEarlierApprovals(loadOtherApprovals(accountId, value));
     setStale(false);
   }
 
@@ -209,7 +281,7 @@ function AccountReview({ accountId, session }: { accountId: string; session: Loc
       if (signal?.aborted) return;
       setLoading(false);
       if (!(failure instanceof LocalApiError && failure.status === 404)) setError(failure);
-      else { setReviewPackage(undefined); setSavedApproval(undefined); }
+      else { setReviewPackage(undefined); setSavedApproval(undefined); setEarlierApprovals(loadOtherApprovals(accountId, undefined)); }
     });
   }
 
@@ -230,7 +302,7 @@ function AccountReview({ accountId, session }: { accountId: string; session: Loc
       if (!controller.signal.aborted) setDetailsError(failure);
     });
     return () => controller.abort();
-  }, [accountId, reviewPackage?.hash, session]);
+  }, [accountId, reviewPackage?.hash, session, detailsAttempt]);
 
   async function run(action: () => Promise<void>) {
     if (inFlight.current) return;
@@ -255,7 +327,19 @@ function AccountReview({ accountId, session }: { accountId: string; session: Loc
     setSavedApproval(request);
     const result = await activateReview(accountId, request);
     setOutcome(result);
-    if (result.state === 'applied') clearApproval(accountId);
+    if (result.state === 'applied') {
+      clearApproval(accountId, undefined, request.idempotencyKey);
+      setSavedApproval(undefined);
+    }
+  });
+
+  const recover = (request: ActivationRequest) => run(async () => {
+    const result = await activateReview(accountId, request);
+    setRecovered({ request, outcome: result });
+    if (result.state === 'applied') {
+      clearApproval(accountId, undefined, request.idempotencyKey);
+      setEarlierApprovals(current => current.filter(item => item.idempotencyKey !== request.idempotencyKey));
+    }
   });
 
   const detailsFor = details?.reviewPackage.hash === reviewPackage?.hash ? details : undefined;
@@ -269,9 +353,28 @@ function AccountReview({ accountId, session }: { accountId: string; session: Loc
       : 'Nothing was assumed. Check the saved state before retrying.'} />}
     {reviewPackage && <ReviewPackageView reviewPackage={reviewPackage} />}
     {reviewPackage && !detailsFor && detailsError == null && <p role="status">Loading decision details…</p>}
-    {detailsError != null && <RequestFailure error={detailsError}
-      next="Approval stays unavailable until the exact saved financial and future-scope details load." />}
+    {detailsError != null && <>
+      <RequestFailure error={detailsError}
+        next="Approval stays unavailable until the exact saved financial and future-scope details load." />
+      <button type="button" onClick={() => { setDetailsError(undefined); setDetailsAttempt(value => value + 1); }}>
+        Retry decision details</button>
+    </>}
     {detailsFor && <ReviewDetailsView details={detailsFor} />}
+    {(earlierApprovals.length > 0 || recovered) && <section className="review-card" aria-label="Unresolved earlier approvals">
+      <h3>Unresolved approval for an earlier package</h3>
+      <p>These approvals were submitted from this browser session for a package that is no longer the current one. They are
+        never sent automatically and are separate from approving the package shown above. Retrying one checks only its
+        original package and returns its original receipt.</p>
+      <ul>{earlierApprovals.map(request => <li key={request.idempotencyKey}>
+        Package {request.reviewPackageId} · hash <code>{request.expectedPackageHash}</code>
+        {' '}<button type="button" disabled={busy || loading} onClick={() => void recover(request)}>
+          Retry original approval for {request.reviewPackageId}</button>
+      </li>)}</ul>
+      {recovered && <>
+        <p>Result for original package {recovered.request.reviewPackageId}:</p>
+        <ActivationOutcomeView outcome={recovered.outcome} />
+      </>}
+    </section>}
     {pendingApproval && !stale && <p role="status">An approval for this exact package was already submitted from this
       browser session and may not have completed. Retrying sends the same approval; it is never sent automatically.</p>}
     <div className="review-actions">

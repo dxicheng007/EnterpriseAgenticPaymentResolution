@@ -10,6 +10,7 @@ import {
   authorizedAccountId,
   canApproveReview,
   clearApproval,
+  loadOtherApprovals,
   loadSavedApproval,
   nextApprovalRequest,
   saveApproval,
@@ -21,6 +22,8 @@ import { ReviewDetailsV1Schema, type ReviewDetailsV1 } from '../../contracts/src
 import { ReviewPackageSchema, type ReviewPackage } from '../../contracts/src/review.js';
 import type { LocalSession } from '../src/session.js';
 import { clearCsrfToken, LocalApiError, setCsrfToken } from '../src/http.js';
+import { explainSafetyRule, explainValidator } from '../src/review-explain.js';
+import { reviewSafetyRulesV1 } from '../../contracts/src/review-details.js';
 import { activateReview, activationRequestFor, prepareReview, readReview, readReviewDetails } from '../src/review.js';
 
 afterEach(() => {
@@ -252,4 +255,28 @@ test('ReviewPage drops unauthorized selection when session grants change', () =>
   expect(renewed).toContain('account-b');
   expect(renewed).not.toContain('>account-a<');
   expect(authorizedAccountId('account-a', ['account-b'])).toBe('');
+});
+
+test('decision details explain every frozen rule and validator and offer evidence inspection', () => {
+  const html = renderToStaticMarkup(createElement(ReviewDetailsView, { details: details() }));
+  for (const rule of reviewSafetyRulesV1) expect(explainSafetyRule(rule)).not.toContain('No reviewed explanation');
+  for (const id of ValidatorIdSchema.options) expect(explainValidator(id)).not.toContain('No reviewed explanation');
+  expect(html).toContain('Automatic sync stops');
+  expect(html).toContain('Inspect cite');
+  expect(html).toContain('Approved identity lookups');
+});
+
+test('an unresolved approval survives a newer package and is offered only as explicit recovery', () => {
+  const storage = memoryStorage();
+  const original = reviewPackage();
+  const newer = reviewPackage({ id: 'package-b', hash: hash('9') });
+  const first = activationRequestFor(original, 'key-original');
+  saveApproval('account-a', first, storage);
+  const second = activationRequestFor(newer, 'key-newer');
+  saveApproval('account-a', second, storage);
+  expect(loadSavedApproval('account-a', newer, storage)).toEqual(second);
+  expect(loadOtherApprovals('account-a', newer, storage)).toEqual([first]);
+  clearApproval('account-a', storage, 'key-original');
+  expect(loadOtherApprovals('account-a', newer, storage)).toEqual([]);
+  expect(loadSavedApproval('account-a', newer, storage)).toEqual(second);
 });

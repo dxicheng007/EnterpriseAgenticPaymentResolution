@@ -32,11 +32,11 @@ export function EvidenceCitation({ response }: { response: EvidenceResponse }) {
   );
 }
 
-export function EvidencePanel({ evidenceId }: { evidenceId: string }) {
-  return <EvidenceSelection key={evidenceId} evidenceId={evidenceId} />;
+export function EvidencePanel({ evidenceId, expectedSnapshotId }: { evidenceId: string; expectedSnapshotId?: string }) {
+  return <EvidenceSelection key={evidenceId + '@' + (expectedSnapshotId ?? '')} evidenceId={evidenceId} expectedSnapshotId={expectedSnapshotId} />;
 }
 
-function EvidenceSelection({ evidenceId }: { evidenceId: string }) {
+function EvidenceSelection({ evidenceId, expectedSnapshotId }: { evidenceId: string; expectedSnapshotId?: string }) {
   const [attempt, setAttempt] = useState(0);
   const [response, setResponse] = useState<EvidenceResponse>();
   const [error, setError] = useState<unknown>();
@@ -49,6 +49,10 @@ function EvidenceSelection({ evidenceId }: { evidenceId: string }) {
     return () => abort.abort();
   }, [evidenceId, attempt]);
 
+  if (response && expectedSnapshotId !== undefined && response.evidence.snapshotId !== expectedSnapshotId) {
+    return <p role="alert">This citation is from snapshot {response.evidence.snapshotId}, not the reviewed snapshot {expectedSnapshotId}.
+      It is not shown as support for this approval.</p>;
+  }
   if (response) return <EvidenceCitation response={response} />;
   if (!error) return <p role="status">Loading evidence…</p>;
   const action = error instanceof LocalApiError && (error.status === 403 || error.status === 404)
