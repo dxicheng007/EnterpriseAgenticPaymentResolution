@@ -45,7 +45,6 @@ const families = [
   ['packages/contracts/src/canonical.ts', true],
   ['packages/contracts/src/sync-capture.ts', true],
   ['packages/contracts/src/current-authority.ts', true],
-  ['packages/contracts/src/connection-state.ts', true],
   ['packages/contracts/src/discovery-tools.ts', true],
   ['packages/contracts/src/activation-authority.ts', true],
   ['packages/contracts/src/activation-authority-hash.ts', true],
