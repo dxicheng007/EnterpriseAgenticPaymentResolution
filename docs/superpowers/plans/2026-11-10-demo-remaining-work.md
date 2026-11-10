@@ -6,7 +6,7 @@
 
 ### How agents should use this file
 
-This is the **shared remaining-work board** for the active demo track. Cold-start agents should find it from root [`README.md`](../../../README.md), root [`AGENTS.md`](../../../AGENTS.md) (“Read before changing behavior”), the [team expansion handoff](2026-11-08-team-expansion-handoff.md) reading order, and the [progress checkpoint](../../progress/2026-11-08/README.md) latest blurb.
+This is the **shared remaining-work board** for the active demo track. Cold-start agents should find it from root [`README.md`](../../../README.md), root [`AGENTS.md`](../../../AGENTS.md) (“Read before changing behavior”), the current [November 10 team handoff](../../progress/2026-11-10/team-handoff.md), the [team expansion handoff](2026-11-08-team-expansion-handoff.md) reading order, and the [progress checkpoint](../../progress/2026-11-08/README.md) latest blurb.
 
 When the integrator dispatches a T0–T9 task, or a task finishes / is blocked / is deferred:
 

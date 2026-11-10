@@ -16,5 +16,10 @@ export function createParentProxyPlugin(client: ParentReadClient, authorize: Ret
       const { accountId } = parseParentRead(request, true);
       return reply.header('Cache-Control', 'no-store').send(await client.readActivation(accountId, reviewer));
     });
+    app.get<{ Params: { accountId: string } }>('/api/connections/:accountId', async (request, reply) => {
+      const reviewer = await authorize(request, { mutation: false });
+      const { accountId } = parseParentRead(request, true);
+      return reply.header('Cache-Control', 'no-store').send(await client.readConnection(accountId, reviewer));
+    });
   };
 }

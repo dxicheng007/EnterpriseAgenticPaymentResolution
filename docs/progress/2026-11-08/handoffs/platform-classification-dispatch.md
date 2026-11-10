@@ -1,5 +1,7 @@
 # Platform classification and V3 integration continuation
 
+**Current team handoff:** [November 10 status and remaining tasks](../../2026-11-10/team-handoff.md). PR40 is merged in main `0f0184e`; the sections below preserve the earlier exact-candidate history and evidence.
+
 Developer 0 resumed in the existing isolated Platform worktree on 2026-11-09, preserving the original repository/demo and other lanes. Completed A4/A5, capture and current-authority work remains complete for its recorded bounded scope; none was redispatched. Current authority is still an internal unmounted service, not production ingress or ongoing financial application.
 
 ## Reconciled upstream and machine evidence

@@ -144,12 +144,26 @@ export function verificationToolResult(job: VerificationJob): RequestVerificatio
   return RequestVerificationResultSchema.parse({ ok: true as const, job });
 }
 
+export type DiscoveryAdmissionClaim = {
+  run: RunRow;
+  task: TaskRow;
+  step: NonNullable<Awaited<ReturnType<typeof loadToolStep>>>;
+  proposalId: string;
+  proposalRevision: number;
+};
+
 export type DiscoveryVerificationGateOptions = {
   runOnOwner: OwnerGateTransaction;
   generation: () => number;
   permits: (run: RunRow, task: TaskRow) => boolean;
   admissions: VerificationAdmissionStore;
-  /** Test-only: after producer SQL, before final authority recheck + COMMIT. */
+  /**
+   * Claim the Discovery tool step and publish allowlisted activity on the same owner
+   * transaction as reservation/mapping insert.
+   */
+  claimAdmission: (client: PoolClient, claim: DiscoveryAdmissionClaim) =>
+    Promise<void | { kind: 'denied'; code: GateDenial }>;
+  /** Test-only: after producer SQL + Discovery claim, before final authority recheck + COMMIT. */
   beforeAdmitCommit?: () => Promise<void>;
 };
 
@@ -160,7 +174,7 @@ export type DiscoveryVerificationGateOptions = {
 export function createDiscoveryVerificationOwnerGate(
   options: DiscoveryVerificationGateOptions,
 ): DiscoveryVerificationOwnerGate {
-  const { runOnOwner, generation, permits, admissions, beforeAdmitCommit } = options;
+  const { runOnOwner, generation, permits, admissions, claimAdmission, beforeAdmitCommit } = options;
 
   async function authorizeStep(
     client: PoolClient,
@@ -183,7 +197,16 @@ export function createDiscoveryVerificationOwnerGate(
     if (mode === 'admit') {
       if (!runnable(run)) return { kind: 'denied', code: 'DISCOVERY_PAUSED' };
       if (task.status !== 'running') return { kind: 'denied', code: 'DISCOVERY_CONFLICT' };
-      if (step.state !== 'running' || safeCounter(step.generation) !== generation()) {
+      // Pending/interrupted before claim; running with this generation after same-txn claim.
+      if (step.state === 'running') {
+        if (safeCounter(step.generation) !== generation()) {
+          return { kind: 'denied', code: 'DISCOVERY_CONFLICT' };
+        }
+      } else if (step.state === 'pending' || step.state === 'interrupted') {
+        if (safeCounter(step.generation) > generation()) {
+          return { kind: 'denied', code: 'DISCOVERY_CONFLICT' };
+        }
+      } else {
         return { kind: 'denied', code: 'DISCOVERY_CONFLICT' };
       }
     }
@@ -265,6 +288,12 @@ export function createDiscoveryVerificationOwnerGate(
           subjectBytes: prepared.subjectBytes,
         };
         const value = await sql(client, original);
+        const claimed = await claimAdmission(client, {
+          run, task, step,
+          proposalId: subject.proposalId,
+          proposalRevision: subject.proposalRevision,
+        });
+        if (claimed && 'kind' in claimed) return claimed;
         const again = await reauthorizeAfterSql(client, input, 'admit', prepared.accountId);
         if ('kind' in again) return again;
         return value;

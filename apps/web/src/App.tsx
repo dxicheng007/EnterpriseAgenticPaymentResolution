@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { onSessionExpiration } from '../../../packages/client/src/http.js';
 import { getLocalSession, type LocalSession } from '../../../packages/client/src/session.js';
+import { OperationsPage } from './features/connections/OperationsPage.js';
 import { ParentView } from './features/connections/ParentView.js';
 import { ReviewPage } from './features/connections/ReviewPage.js';
 import { DiscoveryPage } from './features/discovery/DiscoveryPage.js';
@@ -11,11 +12,11 @@ import './features/sources/review.css';
 
 const pages = [
   { id: 'health', label: 'Health' }, { id: 'sources', label: 'Sources' }, { id: 'preview', label: 'Preview' },
-  { id: 'review', label: 'Review' }, { id: 'parent', label: 'Parent' }, { id: 'discovery', label: 'Discovery' },
+  { id: 'review', label: 'Review' }, { id: 'parent', label: 'Parent' }, { id: 'operations', label: 'Operations' }, { id: 'discovery', label: 'Discovery' },
 ] as const;
 
 const titles = {
-  sources: 'Sources and evidence', review: 'Customer review', preview: 'Connector preview', parent: 'Parent records', discovery: 'Discovery',
+  sources: 'Sources and evidence', review: 'Customer review', preview: 'Connector preview', parent: 'Parent records', operations: 'Operations', discovery: 'Discovery',
 } as const;
 
 function currentPage() {
@@ -65,6 +66,7 @@ export function App() {
       </main>
       : page === 'sources' ? <SourcesPage allowedSourceRefs={session.allowedSourceRefs} />
         : page === 'discovery' ? <DiscoveryPage /> : page === 'parent' ? <ParentView session={session} />
+          : page === 'operations' ? <OperationsPage session={session} />
           : page === 'review' ? <ReviewPage session={session} /> : <PreviewPage />}
   </>;
 }

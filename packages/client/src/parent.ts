@@ -6,6 +6,7 @@ import {
   CustomerActivationSchema, ParentReadQuerySchema, ParentViewSchema, SyncReceiptSchema,
   type ParentReadQuery, type ParentView,
 } from '../../contracts/src/runtime.js';
+import { ConnectionStateV1Schema } from '../../contracts/src/connection-state.js';
 import { LocalApiError, requestLocal } from './http.js';
 
 function sameScope(left: Scope, right: Scope) {
@@ -65,6 +66,15 @@ export async function readAccountActivation(accountId: string, signal?: AbortSig
   );
   if (state.scope.accountId !== id) {
     throw new LocalApiError(200, 'MALFORMED_RESPONSE', 'The activation state did not match the selected account.');
+  }
+  return state;
+}
+
+export async function readConnectionState(accountId: string, signal?: AbortSignal) {
+  const id = accountIdOf(accountId);
+  const state = await requestLocal('/api/connections/' + encodeURIComponent(id), ConnectionStateV1Schema, { signal });
+  if (state.scope.accountId !== id) {
+    throw new LocalApiError(200, 'MALFORMED_RESPONSE', 'The connection state did not match the selected account.');
   }
   return state;
 }
