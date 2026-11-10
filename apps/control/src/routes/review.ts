@@ -1,8 +1,9 @@
-import { IdSchema, strict } from '@eapr/contracts';
+import { HashSchema, IdSchema, strict } from '@eapr/contracts';
 import { FinancialAttestationFailure } from '@eapr/evaluator/financial-attestation-registry';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { LocalSessionError, type createLocalSessionService } from '../local-session.js';
 import { ParentReadError } from '../../../worker/src/routes/parent.js';
+import type { createReviewDetails } from '../review-details.js';
 import type { ReviewPreparation } from '../review-preparation.js';
 import { ReviewError } from '../review-repository.js';
 
@@ -49,6 +50,28 @@ export function createReviewPlugin(preparation: Pick<ReviewPreparation, 'prepare
       const accountId = parseReviewAccount(request);
       if (!empty.safeParse(request.body).success) throw new ReviewError(400, 'REVIEW_REQUEST_INVALID');
       return reply.header('Cache-Control', 'no-store').send(await preparation.prepare(accountId, grants));
+    });
+  };
+}
+
+export const reviewDetailsRoute = '/api/review/:accountId/packages/:packageHash/details';
+
+export function createReviewDetailsPlugin(
+  details: ReturnType<typeof createReviewDetails>, authorize: ReviewAuthorize,
+): FastifyPluginAsync {
+  return async app => {
+    app.setErrorHandler(sendReviewError);
+    app.get<{ Params: { accountId: string; packageHash: string } }>(reviewDetailsRoute, {
+      onRequest: async request => {
+        if ((request.headers['content-length'] !== undefined && request.headers['content-length'] !== '0') ||
+            request.headers['transfer-encoding'] !== undefined) throw new ReviewError(400, 'REVIEW_REQUEST_INVALID');
+      },
+    }, async (request, reply) => {
+      const grants = await authorize(request, { mutation: false });
+      const accountId = parseReviewAccount(request);
+      const hash = HashSchema.safeParse(request.params.packageHash);
+      if (!hash.success || request.body !== undefined) throw new ReviewError(400, 'REVIEW_REQUEST_INVALID');
+      return reply.header('Cache-Control', 'no-store').send(await details.get(accountId, hash.data, grants));
     });
   };
 }

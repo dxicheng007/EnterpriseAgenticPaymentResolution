@@ -5,6 +5,7 @@ export * from './connector.js';
 export * from './runtime.js';
 export * from './model.js';
 export * from './review.js';
+export * from './review-details.js';
 export * from './activity.js';
 export * from './canonical.js';
 export * from './local-demo.js';
