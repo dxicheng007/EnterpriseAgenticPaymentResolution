@@ -342,6 +342,349 @@ async function readPriorUnits(client: PoolClient, audit: SyncUnitAudit, stored: 
   const { coverage: cut } = audit;
   const origins = new Map(cut.historyOrigins.map(origin => [origin.recordId, origin]));
   const verified: UnitBindings[] = [];
+import { z } from 'zod';
+import {
+  AllocationSchema, CommittedAuthorityIdentityV1Schema, FullReversalSchema, FundingSchema, HashSchema, InvoiceSchema,
+  MutationPlanSchema, RawSourceEventSchema, ScopeSchema, SyncReceiptSchema, canonicalJson, hashCanonical, hashEvent,
+  hashPlan, hashTargetSnapshot, targetRecordId, unique,
+  type CommittedAuthorityIdentityV1, type MutationPlan, type RawSourceEvent, type ReceiptResponse,
+  type Scope, type SyncReceipt, type TargetState, type EconomicIdentity,
+} from '@eapr/contracts';
+import { computeBalance } from '@eapr/finance/balance';
+import { financialRecords, sameScope, type FinancialRecord } from '@eapr/finance/validate';
+import { sqlState } from '@eapr/storage/transaction';
+import { readStoredActivation, type StoredActivation } from './activation-store.js';
+import { requireImportIdentityLocks, type ImportIdentityLocks } from './persistence.js';
+import {
+  decodeCanonical, decodeSnapshot, encodeCanonical, readVersion, scopeOf, scopeValues, validateSnapshot,
+  type ScopeRow, type SnapshotRow, type StoredTarget,
+} from './snapshots.js';
+import { projectTarget, type FinancialMutation } from './state.js';
+import { ReceiptOriginSchema, SyncEventOutcomeSchema, SyncUnitAuditSchema, syncEventRef, type CoverageCut, type ReceiptOrigin, type ReplayResponse, type SyncUnitAudit, type UnitMember } from './sync-types.js';
+
+export * from './sync-types.js';
+
+export type SyncUnitCommit = {
+  audit: SyncUnitAudit; previous: StoredTarget; next: TargetState;
+  plan: MutationPlan | null; receipt: SyncReceipt | null; members: UnitMember[];
+  identities: readonly EconomicIdentity[]; identityLocks: ImportIdentityLocks;
+  expectedHeads: CoverageCut['applicationHeads'];
+};
+
+export class SyncStoreError extends Error {
+  constructor(readonly code: 'SYNC_STORE_INVALID', message: string) {
+    super(message);
+    this.name = 'SyncStoreError';
+  }
+}
+
+function valid(condition: unknown): asserts condition {
+  if (!condition) throw new SyncStoreError('SYNC_STORE_INVALID', 'Invalid synchronization history binding');
+}
+
+async function storageRead<T>(read: () => Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (error) {
+    if (error instanceof SyncStoreError || /^[0-9A-Z]{5}$/.test(sqlState(error) ?? '')) throw error;
+    throw new SyncStoreError('SYNC_STORE_INVALID', 'Invalid synchronization history');
+  }
+}
+
+const equal = (left: unknown, right: unknown) => canonicalJson(left) === canonicalJson(right);
+const financialRecord = z.union([InvoiceSchema, FundingSchema, AllocationSchema, FullReversalSchema]);
+
+type ReceiptRow = ScopeRow & {
+  receipt_id: string; plan_hash: string; activation_id: string; epoch: string; before_version: string; after_version: string;
+  after_snapshot_hash: string; receipt: string; receipt_digest: string; plan: string; plan_digest: string;
+};
+type UnitRow = ScopeRow & {
+  unit_hash: string; activation_id: string; bundle_hash: string; source_ref: string; manifest_hash: string; stream_id: string;
+  epoch: string; from_cursor: string; through_cursor: string; before_version: string; before_snapshot_hash: string;
+  after_version: string; after_snapshot_hash: string; receipt_id: string | null; audit: string; audit_digest: string;
+};
+type FinancialOriginRow = ScopeRow & {
+  record_id: string; source_ref: string; kind: string; source_record_id: string; source_record_version: string; event_id: string;
+  canonical: string; digest: string; initial_import_key: string | null; initial_receipt_id: string | null;
+  sync_receipt_id: string | null; initial_count: number; sync_count: number;
+  initial_key: string | null; initial_id: string | null; sync_id: string | null;
+};
+
+function activationIdentity(stored: StoredActivation): CommittedAuthorityIdentityV1 {
+  return { scope: stored.activation.scope, activationId: stored.activation.id, bundleHash: stored.bundleHash };
+}
+
+async function readActivation(client: PoolClient, scope: Scope, identity?: CommittedAuthorityIdentityV1) {
+  const stored = await readStoredActivation(client, scope);
+  valid(stored && (!identity || equal(identity, activationIdentity(stored))));
+  return stored;
+}
+
+function lineageBindsOperation(plan: MutationPlan) {
+  return plan.lineage.every(lineage => {
+    let value: unknown = plan.operations[lineage.operationIndex]?.record;
+    for (const segment of lineage.targetField.slice(1).split('/')) {
+      const key = segment.replaceAll('~1', '/').replaceAll('~0', '~');
+      if (value === null || typeof value !== 'object' || !Object.hasOwn(value, key)) return false;
+      value = (value as Record<string, unknown>)[key];
+    }
+    return value !== undefined && lineage.sourceEventIds.every(id => plan.eventIds.includes(id));
+  });
+}
+
+type VerifiedReceipt = Awaited<ReturnType<typeof readReceiptCore>>;
+type HistoryRead = {
+  receipts: Map<string, VerifiedReceipt>;
+  snapshots: Map<number, StoredTarget>;
+};
+
+function historyRead(stored: StoredActivation): HistoryRead {
+  return {
+    receipts: new Map(),
+    snapshots: new Map([[stored.approvedTarget.records.version, stored.approvedTarget]]),
+  };
+}
+
+async function readHistoricalSnapshot(
+  client: PoolClient, scope: Scope, version: number, history: HistoryRead, expectedHash?: string,
+) {
+  let snapshot = history.snapshots.get(version);
+  if (!snapshot) {
+    const { rows: [row] } = await client.query<SnapshotRow>(
+      `SELECT * FROM parent_snapshots WHERE account_id = $1 AND company_id = $2 AND seller_entity_id = $3
+        AND target_version = $4`, [...scopeValues(scope), version],
+    );
+    valid(row);
+    snapshot = decodeSnapshot(row);
+    valid(sameScope(snapshot.records.scope, scope) && snapshot.records.version === version);
+    history.snapshots.set(version, snapshot);
+  }
+  valid(expectedHash === undefined || snapshot.snapshotHash === expectedHash);
+  return snapshot;
+}
+
+async function readReceiptCore(client: PoolClient, row: ReceiptRow, stored: StoredActivation, history: HistoryRead) {
+  const { activation, bundle } = stored;
+  const { scope } = activation;
+  const plan = decodeCanonical(MutationPlanSchema, row.plan, row.plan_digest);
+  const receipt = decodeCanonical(SyncReceiptSchema, row.receipt, row.receipt_digest);
+  const beforeVersion = readVersion(row.before_version);
+  const afterVersion = readVersion(row.after_version);
+  const operations = plan.operations.filter((operation): operation is FinancialMutation => 'identity' in operation.record);
+  const records = operations.map(operation => operation.record);
+  valid(sameScope(scopeOf(row), scope) && sameScope(plan.scope, scope) && sameScope(receipt.scope, scope) &&
+    plan.hash === row.plan_hash && hashPlan(plan) === plan.hash &&
+    receipt.id === row.receipt_id && receipt.planHash === plan.hash &&
+    row.activation_id === activation.id && receipt.activationId === activation.id && receipt.epoch === readVersion(row.epoch) &&
+    receipt.artifactHash === activation.artifactHash && plan.artifactHash === activation.artifactHash &&
+    plan.profileHash === activation.profileHash && plan.expectedTargetVersion === beforeVersion &&
+    beforeVersion >= stored.approvedTarget.records.version && afterVersion === beforeVersion + 1 &&
+    operations.length === plan.operations.length && operations.length > 0 &&
+    plan.eventIds.length > 0 && plan.eventIds.length <= activation.limits.maxRecordsPerCycle &&
+    operations.length <= activation.limits.maxRecordsPerCycle &&
+    unique(plan.eventIds, id => id) && unique(records, record => record.id) &&
+    records.every(record => sameScope(record.scope, scope) && record.identity.sourceRef === bundle.manifest.sourceRef &&
+      activation.allowedKinds.includes(record.kind) && plan.eventIds.includes(record.sourceEventId)) &&
+    equal(plan.eventIds, receipt.eventIds) && equal(records.map(record => record.id), receipt.targetRecordIds) &&
+    lineageBindsOperation(plan));
+
+  const before = await readHistoricalSnapshot(client, scope, beforeVersion, history);
+  const after = await readHistoricalSnapshot(client, scope, afterVersion, history, row.after_snapshot_hash);
+  const projected = { ...projectTarget({ ...before.records, asOf: plan.asOf }, operations), version: afterVersion };
+  valid(equal(projected, after.records) && receipt.beforeBalanceCents === computeBalance(before.records, plan.asOf) &&
+    receipt.afterBalanceCents === computeBalance(after.records, plan.asOf) &&
+    receipt.afterBalanceCents === plan.expectedBalanceCents);
+  return { receipt, plan, records, before, after };
+}
+
+function receiptByPlan(client: PoolClient, scope: Scope, hash: string) {
+  return client.query<ReceiptRow>(
+    'SELECT * FROM runtime_sync_receipts WHERE account_id = $1 AND plan_hash = $2', [scope.accountId, hash],
+  ).then(result => result.rows[0]);
+}
+
+async function readHistoricalReceipt(client: PoolClient, receiptId: string, stored: StoredActivation, history: HistoryRead) {
+  let saved = history.receipts.get(receiptId);
+  if (!saved) {
+    const { rows: [row] } = await client.query<ReceiptRow>(
+      'SELECT * FROM runtime_sync_receipts WHERE receipt_id = $1', [receiptId],
+    );
+    valid(row && row.receipt_id === receiptId);
+    saved = await readReceiptCore(client, row, stored, history);
+    history.receipts.set(receiptId, saved);
+  }
+  return saved;
+}
+
+function recordForEvent(scope: Scope, event: RawSourceEvent) {
+  valid(event.kind !== 'semantic_change' && event.rawIdentity.companyId === scope.companyId &&
+    event.rawIdentity.sellerEntityId === scope.sellerEntityId);
+  return targetRecordId({
+    sourceRef: event.sourceRef, sellerEntityId: scope.sellerEntityId, kind: event.kind, recordId: event.recordId,
+  });
+}
+
+type DeliveryRow = { event_id: string; source_ref: string; canonical: string; digest: string; content_hash: string };
+function readDelivery(row: DeliveryRow) {
+  const event = decodeCanonical(RawSourceEventSchema, row.canonical, row.digest);
+  valid(event.id === row.event_id && event.sourceRef === row.source_ref &&
+    event.contentHash === row.content_hash && hashEvent(event) === event.contentHash);
+  return event;
+}
+
+async function verifyLegacyReceiptDeliveries(client: PoolClient, stored: StoredActivation, receipt: SyncReceipt,
+  records: readonly FinancialRecord[],
+) {
+  const { scope } = receipt;
+  const { sourceRef } = stored.bundle.manifest;
+  const profile = stored.bundle.profiles.find(candidate => candidate.hash === stored.activation.profileHash);
+  valid(profile);
+  const { rows } = await client.query<DeliveryRow & ScopeRow & { receipt_id: string; initial_association: boolean }>(`
+    SELECT o.*, d.canonical, d.digest, d.content_hash, (i.event_id IS NOT NULL) AS initial_association
+    FROM runtime_sync_delivery_outcomes o JOIN runtime_deliveries d USING (source_ref, event_id)
+    LEFT JOIN runtime_delivery_outcomes i USING (source_ref, event_id)
+    WHERE o.receipt_id = $1 OR (o.source_ref = $2 AND o.event_id = ANY($3))
+  `, [receipt.id, sourceRef, receipt.eventIds]);
+  const byId = new Map(records.map(record => [record.id, record]));
+  valid(rows.length === receipt.eventIds.length && rows.every(row => {
+    const event = readDelivery(row);
+    const record = byId.get(recordForEvent(scope, event));
+    return !row.initial_association && row.receipt_id === receipt.id && sameScope(scopeOf(row), scope) &&
+      row.source_ref === sourceRef && receipt.eventIds.includes(row.event_id) &&
+      profile.sourceAccountIds.includes(event.rawIdentity.sourceAccountId ?? '') && record !== undefined &&
+      (record.sourceEventId !== event.id || record.sourceRecordVersion === event.recordVersion);
+  }));
+}
+
+async function readOrigins(
+  client: PoolClient, scope: Scope, records: readonly FinancialRecord[], stored: StoredActivation, history = historyRead(stored),
+) {
+  if (records.length === 0) return [];
+  const { rows } = await client.query<FinancialOriginRow>(`
+    SELECT r.*, o.initial_import_key, o.initial_receipt_id, o.sync_receipt_id,
+      i.count AS initial_count, i.import_key AS initial_key, i.receipt_id AS initial_id,
+      (s.record_id IS NOT NULL)::int AS sync_count, s.receipt_id AS sync_id
+    FROM parent_financial_records r JOIN runtime_financial_origins o USING (account_id, company_id, seller_entity_id, record_id)
+    JOIN LATERAL (
+      SELECT count(*)::int AS count, min(idempotency_key) AS import_key, min(receipt_id) AS receipt_id
+      FROM runtime_economic_outcomes e
+      WHERE e.record_id = r.record_id AND
+        (e.account_id, e.company_id, e.seller_entity_id, e.source_ref, e.kind, e.source_record_id) =
+        (r.account_id, r.company_id, r.seller_entity_id, r.source_ref, r.kind, r.source_record_id)
+    ) i ON TRUE
+    LEFT JOIN runtime_sync_economic_outcomes s USING (account_id, company_id, seller_entity_id, record_id)
+    WHERE r.record_id = ANY($1)
+  `, [records.map(record => record.id)]);
+  const byId = new Map(rows.map(row => [row.record_id, row]));
+  const initialRecords = new Map(financialRecords(stored.approvedTarget.records).map(record => [record.id, record]));
+  const origins: ReceiptOrigin[] = [];
+  for (const record of records) {
+    const row = byId.get(record.id);
+    valid(row && sameScope(scopeOf(row), scope) && sameScope(record.scope, scope) &&
+      record.id === targetRecordId(record.identity) && record.identity.sellerEntityId === scope.sellerEntityId &&
+      row.source_ref === record.identity.sourceRef && row.kind === record.kind && row.source_record_id === record.identity.recordId &&
+      row.event_id === record.sourceEventId && readVersion(row.source_record_version) === record.sourceRecordVersion &&
+      equal(record, decodeCanonical(financialRecord, row.canonical, row.digest)));
+    if (row.sync_receipt_id === null) {
+      valid(row.initial_count === 1 && row.sync_count === 0 &&
+        row.initial_import_key === row.initial_key && row.initial_receipt_id === row.initial_id &&
+        row.initial_import_key === stored.request.idempotencyKey && row.initial_receipt_id === stored.receipt.id &&
+        initialRecords.has(record.id) && equal(initialRecords.get(record.id), record));
+      origins.push(ReceiptOriginSchema.parse({
+        kind: 'initial', recordId: record.id, importKey: row.initial_import_key, receipt: stored.receipt,
+      }));
+    } else {
+      valid(row.sync_count === 1 && row.initial_count === 0 && row.sync_receipt_id === row.sync_id &&
+        row.initial_import_key === null && row.initial_receipt_id === null);
+      const committed = await readHistoricalReceipt(client, row.sync_receipt_id, stored, history);
+      valid(committed.records.some(candidate => candidate.id === record.id && equal(candidate, record)));
+      origins.push(ReceiptOriginSchema.parse({ kind: 'sync', recordId: record.id, receipt: committed.receipt }));
+    }
+  }
+
+  await verifyOldAssociations(client, scope, records.map((record, index) => ({
+    sourceRef: record.identity.sourceRef, eventId: record.sourceEventId, origin: origins[index]!,
+  })));
+  return origins;
+}
+
+async function verifyOldAssociations(client: PoolClient, scope: Scope, events: readonly {
+  sourceRef: string; eventId: string; origin: ReceiptOrigin;
+}[]) {
+  const { rows } = await client.query<ScopeRow & {
+    source_ref: string; event_id: string; import_key: string | null; receipt_id: string;
+  }>(`
+    SELECT account_id, company_id, seller_entity_id, source_ref, event_id, idempotency_key AS import_key, receipt_id
+      FROM runtime_delivery_outcomes WHERE (source_ref, event_id) IN (SELECT * FROM unnest($1::text[], $2::text[]))
+    UNION ALL
+    SELECT account_id, company_id, seller_entity_id, source_ref, event_id, NULL AS import_key, receipt_id
+      FROM runtime_sync_delivery_outcomes WHERE (source_ref, event_id) IN (SELECT * FROM unnest($1::text[], $2::text[]))
+  `, [events.map(event => event.sourceRef), events.map(event => event.eventId)]);
+  const byDelivery = new Map(events.map(event => [canonicalJson([event.sourceRef, event.eventId]), event.origin]));
+  valid(rows.every(row => {
+    const origin = byDelivery.get(canonicalJson([row.source_ref, row.event_id]));
+    return origin && sameScope(scopeOf(row), scope) && origin.receipt.id === row.receipt_id &&
+      (origin.kind === 'initial' ? origin.importKey === row.import_key : row.import_key === null);
+  }));
+}
+
+/** Resolve every requested record against both immutable origin domains. */
+export async function readFinancialOrigins(
+  client: PoolClient, inputScope: Scope, records: readonly FinancialRecord[],
+): Promise<ReceiptOrigin[]> {
+  return storageRead(async () => {
+    const scope = ScopeSchema.parse(inputScope);
+    if (records.length === 0) return [];
+    return readOrigins(client, scope, records, await readActivation(client, scope));
+  });
+}
+
+function decodeUnit(row: UnitRow) {
+  const audit = decodeCanonical(SyncUnitAuditSchema, row.audit, row.audit_digest);
+  valid(equal(audit.identity, { scope: scopeOf(row), activationId: row.activation_id, bundleHash: row.bundle_hash }) &&
+    audit.lane.sourceRef === row.source_ref && audit.lane.manifestHash === row.manifest_hash && audit.streamId === row.stream_id &&
+    audit.unitHash === row.unit_hash && audit.expectedEpoch === readVersion(row.epoch) &&
+    audit.fromCursor === row.from_cursor && audit.throughCursor === row.through_cursor &&
+    audit.expectedTargetVersion === readVersion(row.before_version) && audit.beforeSnapshotHash === row.before_snapshot_hash &&
+    audit.afterTargetVersion === readVersion(row.after_version) && audit.afterSnapshotHash === row.after_snapshot_hash &&
+    audit.receiptId === row.receipt_id);
+  return audit;
+}
+
+function verifyUnitGrant(audit: SyncUnitAudit, stored: StoredActivation) {
+  const { coverage, semanticObservation } = audit;
+  const { bundle, activation } = stored;
+  const profile = bundle.profiles.find(profile => profile.hash === activation.profileHash);
+  valid(profile && equal(audit.identity, activationIdentity(stored)) && equal(coverage.manifest, bundle.manifest) && equal(coverage.capture, bundle.artifact.normalizedPlan.capture) &&
+    coverage.baseline.importKey === stored.request.idempotencyKey && coverage.baseline.receiptId === stored.receipt.id &&
+    coverage.baseline.activationDigest === hashCanonical(activation) && coverage.baseline.bundleDigest === hashCanonical(bundle) &&
+    coverage.baseline.approvedSnapshotHash === stored.approvedTarget.snapshotHash &&
+    coverage.baseline.approvedTargetVersion === stored.approvedTarget.records.version &&
+    !Object.hasOwn(semanticObservation.versions, '*') && !Object.hasOwn(bundle.manifest.semanticVersions, '*') &&
+    profile.sourceAccountIds.every(id => {
+      const key = profile.scope.sellerEntityId + '/' + id;
+      return semanticObservation.versions[key] === profile.semanticVersion && bundle.manifest.semanticVersions[key] === profile.semanticVersion;
+    }) && coverage.deliveries.every(({ event }) => profile.sourceAccountIds.includes(event.rawIdentity.sourceAccountId ?? '')));
+}
+
+async function verifyUnitLane(client: PoolClient, { lane, coverage }: SyncUnitAudit) {
+  const { rows: [laneRow] } = await client.query<{
+    manifest_canonical: string; manifest_digest: string; capture_canonical: string; capture_digest: string;
+    initial_activation_id: string; initialized_at: string;
+  }>(`
+    SELECT * FROM runtime_capture_lanes WHERE source_ref = $1 AND manifest_hash = $2
+  `, [lane.sourceRef, lane.manifestHash]);
+  valid(laneRow?.initial_activation_id === coverage.initialActivationId && laneRow.initialized_at === coverage.initializedAt &&
+    laneRow.manifest_digest === coverage.manifestDigest && laneRow.capture_digest === coverage.captureDigest &&
+    laneRow.manifest_canonical === canonicalJson(coverage.manifest) && laneRow.capture_canonical === canonicalJson(coverage.capture));
+}
+
+type UnitBindings = Omit<SyncUnitAudit, 'coverage'>;
+
+async function readPriorUnits(client: PoolClient, audit: SyncUnitAudit, stored: StoredActivation) {
+  const { coverage: cut } = audit;
+  const origins = new Map(cut.historyOrigins.map(origin => [origin.recordId, origin]));
+  const verified: UnitBindings[] = [];
   // Each stored audit contains a growing witness. Retain only its validated
   // bindings and members, and limit how many full audit rows are loaded at once.
   const batchSize = 16;
@@ -763,4 +1106,4 @@ export async function persistSyncUnit(client: PoolClient, input: SyncUnitCommit)
     await advanceApplicationHeads(client, audit, binding);
     return receipt ? { receipt, replayed: false } : replayResponse(audit, false);
   });
-        }
+}
