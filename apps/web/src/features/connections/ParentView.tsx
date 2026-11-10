@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { readAccountActivation, readParentAccount } from '../../../../../packages/client/src/parent.js';
 import { LocalApiError } from '../../../../../packages/client/src/http.js';
-import { getLocalSession, type LocalSession } from '../../../../../packages/client/src/session.js';
+import type { LocalSession } from '../../../../../packages/client/src/session.js';
 import type { ActivationStateV1 } from '../../../../../packages/contracts/src/activation-authority.js';
 import { ParentReadQuerySchema } from '../../../../../packages/contracts/src/runtime.js';
 import type { ParentReadQuery, ParentView as ParentViewState, SyncReceipt } from '../../../../../packages/contracts/src/runtime.js';
@@ -100,7 +100,7 @@ export function ParentInspection({ accountId, view, activation }: {
   </section>;
 }
 
-function AccountInspection({ accountId }: { accountId: string }) {
+function AccountInspection({ accountId, session }: { accountId: string; session: LocalSession }) {
   const [asOf, setAsOf] = useState('');
   const [snapshotHash, setSnapshotHash] = useState('');
   const [applied, setApplied] = useState<ParentReadQuery>({});
@@ -121,7 +121,7 @@ function AccountInspection({ accountId }: { accountId: string }) {
       if (!controller.signal.aborted) setActivationError(failure);
     });
     return () => controller.abort();
-  }, [accountId]);
+  }, [accountId, session]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -135,7 +135,7 @@ function AccountInspection({ accountId }: { accountId: string }) {
       if (!controller.signal.aborted) setParentError(failure);
     });
     return () => controller.abort();
-  }, [accountId, applied, attempt]);
+  }, [accountId, applied, attempt, session]);
 
   function applySelectors(event: FormEvent) {
     event.preventDefault();
@@ -172,20 +172,9 @@ function AccountInspection({ accountId }: { accountId: string }) {
   </>;
 }
 
-export function ParentView() {
-  const [session, setSession] = useState<LocalSession>();
-  const [failed, setFailed] = useState(false);
-  const [accountId, setAccountId] = useState('');
-  const [attempt, setAttempt] = useState(0);
-  useEffect(() => {
-    let active = true;
-    setFailed(false);
-    void getLocalSession().then(
-      value => { if (active) setSession(value); },
-      () => { if (active) setFailed(true); },
-    );
-    return () => { active = false; };
-  }, [attempt]);
+export function ParentView({ session }: { session: LocalSession }) {
+  const [chosen, setAccountId] = useState('');
+  const accountId = session.allowedAccountIds.includes(chosen) ? chosen : '';
 
   return <main className="review-main">
     <header>
@@ -193,21 +182,15 @@ export function ParentView() {
       <h1>Parent records</h1>
       <p>Parent reads return the stored records and activation state for one account.</p>
     </header>
-    {failed && <>
-      <RequestFailure error={new LocalApiError(401, 'SESSION_REQUIRED', 'The demo reviewer session is unavailable.')}
-        next="Retry the demo session." />
-      <button type="button" onClick={() => setAttempt(value => value + 1)}>Retry demo session</button>
-    </>}
-    {!failed && !session && <p role="status">Loading registered accounts…</p>}
-    {session && session.allowedAccountIds.length === 0 && <p>No accounts are authorized for this reviewer session.</p>}
-    {session && session.allowedAccountIds.length > 0 && <>
+    {session.allowedAccountIds.length === 0 && <p>No accounts are authorized for this reviewer session.</p>}
+    {session.allowedAccountIds.length > 0 && <>
       <label className="review-selection">Registered account
         <select value={accountId} onChange={event => setAccountId(event.target.value)}>
           <option value="">Select an account</option>
           {session.allowedAccountIds.map(id => <option key={id} value={id}>{id}</option>)}
         </select>
       </label>
-      {accountId && <AccountInspection key={accountId} accountId={accountId} />}
+      {accountId && <AccountInspection key={accountId} accountId={accountId} session={session} />}
     </>}
   </main>;
 }

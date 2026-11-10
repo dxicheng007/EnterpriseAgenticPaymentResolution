@@ -64,7 +64,7 @@ export function App() {
         <p>{sessionFailed ? 'The demo reviewer session is required to open this workspace.' : 'Opening local demo session…'}</p>
       </main>
       : page === 'sources' ? <SourcesPage allowedSourceRefs={session.allowedSourceRefs} />
-        : page === 'discovery' ? <DiscoveryPage /> : page === 'parent' ? <ParentView />
+        : page === 'discovery' ? <DiscoveryPage /> : page === 'parent' ? <ParentView session={session} />
           : page === 'review' ? <ReviewPage session={session} /> : <PreviewPage />}
   </>;
 }
