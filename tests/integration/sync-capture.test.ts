@@ -232,8 +232,9 @@ test('applies the additive runtime catalog and reapplies it without changing ori
     { version: 1, sha256: 'c09e49970e4fc3394294f643035acba224b9f19bdc4f6e46b66c6679fd82c2f3' },
     { version: 2, sha256: 'a06874e335f6acfd6f62d89760c00c76059c95b9ab05782707999ff70f8ddc56' },
     { version: 3, sha256: 'aedc4cdec78c5d4cecf02a41f5f68e0e706bb195cf36182890e3af0f5e039b8c' },
-    { version: 4, sha256: hashBytes(await readFile(new URL('../../db/runtime/004_current_authority.sql', import.meta.url))) },
-    { version: 5, sha256: hashBytes(await readFile(new URL('../../db/runtime/005_sync_apply.sql', import.meta.url))) },
+    { version: 4, sha256: 'f232c9e552362618e785cc0bb23e847e4d7f319e0c0fae9084fb9aebc98deab7' },
+    { version: 5, sha256: '7c35563ed3504766153aa6b7706c4a448dd4c50f3f1d0203345525c215f3ef96' },
+    { version: 6, sha256: '3bad0cc496ff74aa4a480e9bdc5783a1f4fd2326401c4452ee3f8976558d6836' },
   ]);
   await migrate(pair, ['runtime'], readMigrationCatalog());
   expect(await read()).toEqual(before);
@@ -251,6 +252,7 @@ test('applies the additive runtime catalog and reapplies it without changing ori
   expect(constraints('runtime_capture_checkpoints')).toEqual([
     'FOREIGN KEY (source_ref, manifest_hash) REFERENCES runtime_capture_lanes(source_ref, manifest_hash)',
     'PRIMARY KEY (source_ref, manifest_hash, stream_id)',
+    'UNIQUE (source_ref, manifest_hash, stream_id, baseline_cursor)',
   ]);
   expect(constraints('runtime_source_positions')).toEqual([
     'FOREIGN KEY (source_ref, event_id) REFERENCES runtime_deliveries(source_ref, event_id)',
@@ -270,6 +272,7 @@ test('applies the additive runtime catalog and reapplies it without changing ori
       'REFERENCES runtime_source_positions(source_ref, stream_id, sequence, event_id)',
     'PRIMARY KEY (source_ref, manifest_hash, stream_id, sequence)',
     'UNIQUE (source_ref, manifest_hash, event_id)',
+    'UNIQUE (source_ref, manifest_hash, stream_id, sequence, event_id)',
   ]);
   expect(constraints('runtime_capture_incidents')).toEqual([checkpoint,
     'PRIMARY KEY (source_ref, manifest_hash, stream_id, incident_hash)',
