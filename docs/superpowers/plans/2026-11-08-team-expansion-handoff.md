@@ -10,6 +10,8 @@
 
 **Spec:** [PRD v2](../../../prdv2.md), [original implementation plan](2026-11-08-implementation-plan.md), [shared contracts/ownership](2026-11-08-shared-contracts.md), [verification playbook](2026-11-08-verification-playbook.md). This is a coordination and dispatch plan, not a replacement financial specification or evidence of completion.
 
+**Active demo track:** Prefer [demo remaining work](2026-11-10-demo-remaining-work.md) for the current product goal (pregenerated connector + AI-off sync), high-level T0–T9 tasks, and what to update after dispatch or completion. This handoff remains the lane-ownership and older dependency record; it does not supersede that shared task board.
+
 ## 1. Read this first
 
 There will be **three developer ownership lanes**, not five: the existing team becomes the platform/integration lane; two new developers take discovery and reviewer/operations presentation. The earlier A/B/C labels described the user's agent workstreams. They were not three additional human developers. Historical task labels such as A4, C2 and C3 remain useful identifiers but do not name the new developers.
@@ -27,9 +29,10 @@ This split reduces active cross-cutting implementation by the existing team. The
 ### Authority and reading order
 
 1. Read root and applicable area `AGENTS.md`; then PRD §§1, 7, 10–14, 17–21.
-2. Read [freeze v1](2026-11-08-contract-freeze.md), [activation shapes](2026-11-08-contract-freeze-v2-activation-shapes.md), [bootstrap claims](2026-11-08-contract-freeze-v3-bootstrap-verification.md), [discovery shapes](2026-11-08-contract-freeze-v3-discovery-shapes.md), and [activation authority](2026-11-08-contract-freeze-v4-activation-authority.md).
-3. Read the **latest sections** of [progress checkpoint](../../progress/2026-11-08/README.md), followed by your task's tracked handoff and exact-candidate review. Its earlier sections are historical checkpoints.
-4. Treat old illustrative paths, migration numbers and API signatures in the original plan as superseded where later freezes/accepted code say otherwise. In particular, there is no current `packages/runtime` workspace; A5 uses worker app modules. Discovery persistence is control007, not the original illustrative control005.
+2. Read the active [demo remaining work](2026-11-10-demo-remaining-work.md) board for demo strategy, remaining high-level tasks, and update expectations.
+3. Read [freeze v1](2026-11-08-contract-freeze.md), [activation shapes](2026-11-08-contract-freeze-v2-activation-shapes.md), [bootstrap claims](2026-11-08-contract-freeze-v3-bootstrap-verification.md), [discovery shapes](2026-11-08-contract-freeze-v3-discovery-shapes.md), and [activation authority](2026-11-08-contract-freeze-v4-activation-authority.md).
+4. Read the **latest sections** of [progress checkpoint](../../progress/2026-11-08/README.md), followed by your task's tracked handoff and exact-candidate review. Its earlier sections are historical checkpoints.
+5. Treat old illustrative paths, migration numbers and API signatures in the original plan as superseded where later freezes/accepted code say otherwise. In particular, there is no current `packages/runtime` workspace; A5 uses worker app modules. Discovery persistence is control007, not the original illustrative control005.
 
 ## 2. Evidence-qualified current state
 

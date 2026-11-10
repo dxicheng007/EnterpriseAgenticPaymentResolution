@@ -1,0 +1,201 @@
+# Demo remaining work — pregenerated connector + AI-off sync
+
+**Date:** November 10, 2026  
+**Status:** Shared coordination doc for remaining product work. Not acceptance evidence, not a path reservation, and not an implementation plan for any single task.  
+**Audience:** Integrator and later delegated agents.
+
+### How agents should use this file
+
+This is the **shared remaining-work board** for the active demo track. Cold-start agents should find it from root [`README.md`](../../../README.md), root [`AGENTS.md`](../../../AGENTS.md) (“Read before changing behavior”), the [team expansion handoff](2026-11-08-team-expansion-handoff.md) reading order, and the [progress checkpoint](../../progress/2026-11-08/README.md) latest blurb.
+
+When the integrator dispatches a T0–T9 task, or a task finishes / is blocked / is deferred:
+
+1. Update the matching task’s status notes in §4 (owner, base/candidate SHA if known, blocked-on, done/partial).
+2. Keep §2 “what already exists” current when a capability materially changes.
+3. Do **not** treat this file as path/DDL reservation or joint acceptance; record those in the task handoff, review, and progress checkpoint as usual.
+
+## 1. Demo strategy (locked for this track)
+
+We will **not** require on-stage live model construction for the primary demo.
+
+1. **Pregenerate or otherwise construct** the connector offline (operator-pinned fixture candidate and/or a separately recorded live/scripted build).
+2. Label construction truthfully in the UI and evidence packet (`fixture` or captured-run), never as live-on-the-spot generation if it was not.
+3. Show the product thesis on stage as: **review → explicit customer activate → inject a new conforming source record → deterministic worker sync with AI disabled**.
+
+This keeps the PRD operating half of the thesis ([`prdv2.md`](../../../prdv2.md) §§1, 17, 19; playbook G5) while treating live G4 construction as optional follow-on evidence, not a demo blocker.
+
+**Out of scope for this track unless explicitly reopened:** live OpenAI-backed construction in the default composition, Gate J acceptance as a demo prerequisite, V8 repair/reapproval, production auth, real ERP writes, bidirectional sync.
+
+## 2. What already exists (do not rebuild)
+
+| Capability | Status | Notes |
+| --- | --- | --- |
+| V0 foundation | Machine gate passing | Isolated control/runtime PostgreSQL, health, durable activity |
+| V1 source evidence | Machine gate passing | Two synthetic acquisitions, dossiers, citations, captures |
+| V2 preview + independent checks | Machine gate passing | Fixture connectors, protected evaluator, empty-target preview, zero parent writes |
+| Discovery scaffolding | Partial | Lifecycle/delegation, monitor, findings/proposals, compilation/replay paths; default composition has **no model client** |
+| Activation backend | Partial / not V3-accepted | Review prep, durable intents, worker first import/receipt recovery, package-detail reads |
+| Sync capture | Partial | Internal API/semantic capture accepted in reviews; unmounted for product demo; CSV lanes rejected |
+| Sync classification | Partial | Compiler companion accepted as classification metadata; not authoritative apply |
+| Atomic apply | Design | Bounded ongoing-apply design exists; writer/scheduler not product-mounted |
+| Authority head | Partial | Current-authority storage/commands exist as prerequisites |
+
+Authoritative status claims also live in root [`AGENTS.md`](../../../AGENTS.md), [`docs/progress/2026-11-08/README.md`](../../progress/2026-11-08/README.md), and the [team expansion handoff](2026-11-08-team-expansion-handoff.md). Prefer those for exact SHAs and review links.
+
+## 3. End-state demo walkthrough (acceptance target for this track)
+
+A successful demo rehearsal for this track proves:
+
+1. Sources and parent schema are inspectable (existing V1).
+2. A **pregenerated** connector/profile is reviewable with independent verification results (existing V2 path; labeled).
+3. Reviewer explicitly **Approve and enable** one customer; parent shows the initial reconstruction and a durable receipt (V3).
+4. Model client remains disabled / worker has no model key.
+5. Operator injects a **new** post-activation conforming record (illustrative Company A payment or invoice; Company B CSV only if CSV capture is in scope for that rehearsal).
+6. Worker captures/classifies/applies through the pinned artifact; parent balance updates; cutover/opening balance is preserved; a sync receipt exists (V5).
+7. Replaying the same source identity does not create a second economic effect (minimum V6 for the demo path).
+
+Optional stretch (not required to call the track demo-ready): schema-drift pause with peer continuity; second company enrollment; labeled captured construction replay in the Discovery UI.
+
+## 4. High-level tasks for later delegation
+
+Each task is intentionally coarse. Before dispatch, the integrator must freeze owned paths, migration numbers, exact base SHA, and whether the task is design-only, implementation, gate repair, or UI. Agents must not start dependent work from this list alone.
+
+Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** (reviewer/ops UI + browser proof), **Discovery** (offline construction packaging only for this track), **Integrator** (composition, gates, rehearsal).
+
+### T0 — Integrator: freeze the demo contract
+
+**Status:** not started  
+**Lane:** Integrator  
+**Depends on:** none  
+**Outcome:** Written demo script + labeled modes (`fixture` vs `captured-run` vs later `live`) + exact customer/account IDs + expected cents for cutover and post-sync balances.  
+**Done when:** One page lists the staged clicks, injection method, and pass/fail observations; no ambiguity about claiming live construction.  
+**Not in scope:** Implementing sync or UI.
+
+### T1 — Platform: mount post-activation apply for one authorized customer
+
+**Status:** not started  
+**Lane:** Platform  
+**Depends on:** accepted activation grant (A5 import), classification pin, current-authority fence, capture inbox facts for the chosen transport  
+**Outcome:** Worker can take already-captured conforming deliveries for one enrolled customer and atomically apply a nonempty financial unit with an authoritative sync receipt, without model calls.  
+**Done when:** Focused integration proof shows new money applied once, replay returns the same economic effect, cutover balance preserved, AI-off/worker isolation evidence labeled partial or full as appropriate.  
+**Not in scope:** Scheduler polish, Connections UI, CSV if unsupported by capture, Gate J, live construction.  
+**Pointers:** [atomic apply design](../../progress/2026-11-08/handoffs/platform-sync-atomic-apply-design.md), [classification plan](2026-11-09-sync-classification.md), [capture plan](2026-11-09-sync-capture.md).
+
+### T2 — Platform: post-activation injection + capture path for the demo event
+
+**Status:** not started  
+**Lane:** Platform (sources/worker composition as reserved)  
+**Depends on:** T1 or a jointly agreed temporary harness seam owned by Integrator  
+**Outcome:** A controlled way to introduce one new Company A API (and optionally later Company B) event after activation and durably capture it into the inbox the applier consumes.  
+**Done when:** Inject → capture → apply chain works in an isolated test without `FEATURE_NOT_IMPLEMENTED` stubs pretending to be the proof.  
+**Not in scope:** General source productization or live agent tools.
+
+### T3 — Experience: finish Approve-and-enable browser workflow
+
+**Status:** not started  
+**Lane:** Experience  
+**Depends on:** activation backend already mounted; Integrator gate/parser fixes if still open  
+**Outcome:** Reviewer can prepare, inspect package details/evidence, approve one customer, and see parent import + receipt without inventing authority in the UI.  
+**Done when:** Browser scenarios cover approve, replay/idempotent second click, and rejection of stale/unauthorized attempts; V3 packet retains run-specific public evidence.  
+**Not in scope:** Inventing financial rules; claiming V3 joint acceptance without Integrator gate pass.  
+**Pointers:** [activation review setup](../../demo/activation-review-setup.md), [worker activation setup](../../demo/worker-activation-setup.md), V3 review findings under `docs/progress/2026-11-08/reviews/`.
+
+### T4 — Experience: Connections / sync observation surface
+
+**Status:** not started  
+**Lane:** Experience  
+**Depends on:** T1 progress reads / receipts (design freeze with Platform first)  
+**Outcome:** Demo-visible connection state: active customer, pinned artifact, last receipt, applied vs held/gap counts, and clear AI-off posture.  
+**Done when:** UI shows worker-authored facts only; no UI-computed balances or inferred authorization.  
+**Not in scope:** Pause/revoke command UX beyond what Platform exposes; repair flows.
+
+### T5 — Integrator: make V5 machine gate prove ongoing application
+
+**Status:** not started  
+**Lane:** Integrator  
+**Depends on:** T1 + T2 minimum proofs  
+**Outcome:** `verify:slice -- V5` cannot pass on capture/authority/health alone; mandatory observations include fresh conforming apply, updated money, preserved cutover, and receipt.  
+**Done when:** Gate fails closed without apply proof; passes only with the required named cases.  
+**Pointers:** [V5/V6 gate review](../../progress/2026-11-08/reviews/platform-v5-v6-gate-9866847-review.md).
+
+### T6 — Platform: minimum containment for the demo path
+
+**Status:** not started  
+**Lane:** Platform  
+**Depends on:** T1  
+**Outcome:** Enough V6 behavior that the demo (and gate) can show: exact delivery replay is harmless; crash/retry around apply does not double-count; unknown/out-of-scope input does not corrupt enrolled money.  
+**Done when:** Focused tests cover those three; schema-drift peer-continuity and payment-before-invoice release may remain stretch unless pulled into the demo script by T0.  
+**Not in scope:** Full G6 matrix or V8 repair.
+
+### T7 — Discovery (optional for this track): package a truthful pregenerated artifact
+
+**Status:** not started  
+**Lane:** Discovery  
+**Depends on:** T0 labeling decision  
+**Outcome:** One clearly labeled artifact/profile package (fixture pin and/or offline generated candidate) mounted for review/activation, with instructions so the demo never implies live construction.  
+**Done when:** Operator setup doc + hashes; Discovery UI can show a captured-run replay **only if labeled**.  
+**Not in scope:** Default live model client, Gate J acceptance, holdout live builds (separate later track).
+
+### T8 — Experience + Integrator: two-company or single-company rehearsal packet
+
+**Status:** not started  
+**Lane:** Experience leads; Integrator records  
+**Depends on:** T3 + T1–T5; T6 for replay beat  
+**Outcome:** One rehearsable runbook and evidence packet for the hackathon-style walkthrough in §3. Prefer one Company A happy path first; add Company B only when CSV/file capture apply is actually available.  
+**Done when:** Three timed rehearsals recorded or explicitly waived by the user; limitations section states fixture/pregenerated construction and any missing containment.
+
+### T9 — Later track (explicitly deferred): genuine live construction
+
+**Status:** deferred  
+**Lane:** Discovery + Integrator  
+**Depends on:** user-configured model key; Gate J corrections; live holdouts  
+**Outcome:** G4/V4 acceptance with real provider evidence and independently checked A/B builds.  
+**Done when:** Playbook G4 pass evidence exists.  
+**Not required** to ship the §3 demo track.
+
+## 5. Suggested dependency order
+
+```mermaid
+flowchart TD
+  T0[T0 Demo contract freeze]
+  T0 --> T7[T7 Pregenerated artifact packaging]
+  T0 --> T3[T3 Approve browser workflow]
+  T7 --> T3
+  T1[T1 Atomic apply mount]
+  T2[T2 Inject and capture]
+  T1 --> T2
+  T1 --> T4[T4 Connections UI]
+  T1 --> T6[T6 Minimum containment]
+  T2 --> T5[T5 V5 gate honesty]
+  T1 --> T5
+  T3 --> T8[T8 Rehearsal packet]
+  T4 --> T8
+  T5 --> T8
+  T6 --> T8
+  T9[T9 Live construction later]
+```
+
+Parallelism that is usually safe after T0:
+
+- Experience can advance T3 while Platform advances T1/T2.
+- T7 packaging can proceed in parallel with Platform apply work.
+- T4 should wait for a short Platform↔Experience read-model freeze so the UI does not invent progress fields.
+- T5/T8 stay Integrator-owned and should not be “passed” by partial prerequisite suites.
+
+## 6. Non-negotiables for every delegated task
+
+- Keep evidence, interpretations, approvals, and imported records distinct.
+- Preview and discovery write zero parent money; only explicit per-customer approval grants standing sync authority; worker receipts are authoritative.
+- Runtime has no model SDK/key; control and runtime databases stay isolated.
+- Machine checks ≠ independent review ≠ joint user acceptance.
+- Fixture/pregenerated mode must be labeled; do not present hardcoded company mappings as live agent discoveries ([`prdv2.md`](../../../prdv2.md) §6 / §18).
+- Implement only reserved paths for the dispatched task; raise specification gaps instead of inventing financial behavior.
+
+## 7. Related documents
+
+- [PRD v2](../../../prdv2.md) — thesis, demo walkthrough, acceptance criteria
+- [Implementation plan](2026-11-08-implementation-plan.md) — original V0–V8 slices
+- [Verification playbook](2026-11-08-verification-playbook.md) — G0–G7 gates
+- [Team expansion handoff](2026-11-08-team-expansion-handoff.md) — lane ownership and older dependency graph
+- [Progress checkpoint](../../progress/2026-11-08/README.md) — historical integration status
+- Demo setup guides under [`docs/demo/`](../../demo/)
