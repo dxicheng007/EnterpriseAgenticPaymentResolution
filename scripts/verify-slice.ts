@@ -4,7 +4,7 @@ import { join, relative, resolve } from 'node:path';
 import { z } from 'zod';
 import { hashBytes, hashCanonical } from '../packages/contracts/src/canonical.js';
 import {
-  chromiumVersion, collectScreenshots, commandResult, normalizeReport, v1ExitCode, v3ExitCode, v4ExitCode,
+  chromiumVersion, collectScreenshots, commandResult, normalizeReport, v1ExitCode, v3ExitCode, v4GateOutcome,
 } from './verify-slice-evidence.js';
 
 const registry = {
@@ -560,7 +560,7 @@ async function verifyV3() {
   process.exitCode = exitCode;
 }
 
-const requiredV4Cases = {
+const v4PrerequisiteCases = {
   'tests/integration/v4-agent-tools.test.ts': [
     'denies unknown and role-incompatible tools while keeping repair/finish unavailable',
     'stops at attempt and tool-round budgets without accepting further tool steps',
@@ -571,25 +571,21 @@ const requiredV4Cases = {
     'default local discovery reports unavailable model and start',
     'monitors durable scripted activity and persists pause, resume, and usage across reload',
   ],
-  'tests/live/v4-build-connectors.test.ts': [
-    'fails closed when live provider configuration is missing',
-  ],
-} satisfies Record<typeof registry.V4[number], string[]>;
+} satisfies Partial<Record<typeof registry.V4[number], string[]>>;
 
-const v4Commands = [
+const v4PrerequisiteCommands = [
   { script: 'test:integration', file: 'tests/integration/v4-agent-tools.test.ts' as const },
   { script: 'test:e2e', file: 'tests/e2e/v4-monitor.spec.ts' as const },
-  { script: 'test:live', file: 'tests/live/v4-build-connectors.test.ts' as const },
   { script: 'typecheck', file: undefined },
 ] as const;
 
-function readV4Report(report: string, kind: 'vitest' | 'playwright' | 'live', file: typeof registry.V4[number]) {
+function readV4Report(report: string, browser: boolean, file: keyof typeof v4PrerequisiteCases) {
   try {
     const stat = lstatSync(report);
     if (!stat.isFile() || stat.size > 8 * 1024 * 1024) throw new Error();
     return normalizeReport(
-      kind === 'playwright' ? 'playwright' : 'vitest', JSON.parse(readFileSync(report, 'utf8')),
-      process.cwd(), file, requiredV4Cases[file],
+      browser ? 'playwright' : 'vitest', JSON.parse(readFileSync(report, 'utf8')),
+      process.cwd(), file, v4PrerequisiteCases[file],
     );
   } catch {
     return { cases: [], diagnostics: ['report-unavailable-or-invalid'] };
@@ -618,7 +614,7 @@ async function verifyV4() {
   let temp: string | undefined;
 
   try {
-    const missing = registry.V4.filter(file => !existsSync(file) || !lstatSync(file).isFile());
+    const missing = Object.keys(v4PrerequisiteCases).filter(file => !existsSync(file) || !lstatSync(file).isFile());
     if (missing.length) diagnostics.push('required-test-files-missing');
     for (const file of missing) console.error('V4 required test file unavailable: ' + file);
 
@@ -647,17 +643,13 @@ async function verifyV4() {
       mkdirSync('.local', { recursive: true, mode: 0o700 });
       temp = mkdtempSync(resolve('.local', 'verify-v4-'));
       const browserOutput = join(temp, 'browser');
-      for (const [index, { script, file }] of v4Commands.entries()) {
+      for (const [index, { script, file }] of v4PrerequisiteCommands.entries()) {
         const report = join(temp, 'report-' + index + '.json');
         const args = ['run', script];
         const browser = script === 'test:e2e';
-        const live = script === 'test:live';
         if (file) {
-          if (live) args.push('--', '--evidence', file, '--reporter=json', '--outputFile=' + report);
-          else {
-            args.push('--', file, '--reporter=json');
-            args.push(browser ? '--trace=off' : '--outputFile=' + report);
-          }
+          args.push('--', file, '--reporter=json');
+          args.push(browser ? '--trace=off' : '--outputFile=' + report);
         }
         const command = ['npm', ...args.map(arg => arg === '--outputFile=' + report
           ? '--outputFile=<private-report>' : arg)].join(' ');
@@ -669,10 +661,9 @@ async function verifyV4() {
           },
           encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 8 * 1024 * 1024, timeout: 600_000,
         });
-        const reportKind = browser ? 'playwright' as const : live ? 'live' as const : 'vitest' as const;
-        const result = commandResult(command, child, file ? readV4Report(report, reportKind, file) : undefined);
+        const result = commandResult(command, child, file ? readV4Report(report, browser, file) : undefined);
         commands.push(result);
-        console.log('V4 ' + result.result + ' ' + command +
+        console.log('V4 prerequisite ' + result.result + ' ' + command +
           (result.diagnostics.length ? ' (' + result.diagnostics.join(', ') + ')' : ''));
       }
 
@@ -693,20 +684,19 @@ async function verifyV4() {
     }
   }
 
-  const exitCode = v4ExitCode(commands, diagnostics, chromium);
+  const { exitCode, ...outcome } = v4GateOutcome(commands, diagnostics, chromium);
   const packet = {
-    schemaVersion: 1, runId, slice: 'V4', source, jointAcceptance: 'pending',
-    result: exitCode === 0 ? 'passed' : 'failed',
-    mode: { sourceFixtures: 'development-only', model: 'live-fail-closed-proof', database: 'native' },
+    schemaVersion: 1, runId, slice: 'V4', source, independentReview: 'pending', jointAcceptance: 'pending',
+    ...outcome,
+    mode: { sourceFixtures: 'development-only', model: 'scripted-prerequisites', database: 'native' },
     runtime: { ...runtime, chromium: chromium ? [chromium] : [] },
     contract, configuration, migrations,
-    requiredTests: registry.V4, requiredCases: requiredV4Cases, commands, screenshots: [], diagnostics,
+    requiredTests: registry.V4, prerequisiteCases: v4PrerequisiteCases, commands, screenshots: [],
     authenticatedTrace: 'disabled',
     limitations: [
       'Development sources only',
-      'Successful live connector builds and joint G4 acceptance remain pending',
+      'Genuine live connector builds and holdout verification are unavailable',
       'Blocker D product live composition mount remains unmounted',
-      'Independent review pending',
     ],
   };
   const write = (file: string, value: unknown) =>
@@ -715,7 +705,7 @@ async function verifyV4() {
   write('assertions.json', commands.flatMap(command => command.cases));
   write('manifest.json', packet);
   console.log('V4 verification ' + packet.result + '. Evidence: ' + relative(process.cwd(), evidence));
-  if (diagnostics.length) console.error('V4 diagnostics: ' + diagnostics.join(', '));
+  console.error('V4 diagnostics: ' + packet.diagnostics.join(', '));
   process.exitCode = exitCode;
 }
 

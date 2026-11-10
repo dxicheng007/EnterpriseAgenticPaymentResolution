@@ -203,9 +203,15 @@ export function v3ExitCode(
     diagnostics.length === 0 && chromium ? 0 : 1;
 }
 
-export function v4ExitCode(
+export function v4GateOutcome(
   commands: readonly ReturnType<typeof commandResult>[], diagnostics: readonly string[], chromium?: string,
 ) {
-  return commands.length === 4 && commands.every(command => command.result === 'passed') &&
-    diagnostics.length === 0 && chromium ? 0 : 1;
+  const prerequisitesPassed = commands.length === 3 && commands.every(command => command.result === 'passed') &&
+    diagnostics.length === 0 && Boolean(chromium);
+  return {
+    prerequisiteResult: prerequisitesPassed ? 'passed' as const : 'failed' as const,
+    diagnostics: [...diagnostics, 'live-construction-unavailable'],
+    result: 'failed' as const,
+    exitCode: 1,
+  };
 }
