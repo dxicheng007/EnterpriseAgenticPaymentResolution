@@ -44,7 +44,7 @@ test('compiler, finance, contracts, evaluator and lock mutations each change the
       'packages/compiler/src/plan-batch.ts', 'packages/finance/src/validate.ts',
       'packages/contracts/src/activation-authority.ts', 'packages/evaluator/src/financial-evaluate.ts',
       'packages/evaluator/src/financial-attestation-evaluator.ts', 'package-lock.json',
-      'packages/evaluator/src/financial-attestation-jobs.ts', 'packages/evaluator/src/financial-attestation-registry.ts',
+      'packages/evaluator/src/discovery-verification.ts', 'packages/evaluator/src/financial-attestation-jobs.ts', 'packages/evaluator/src/financial-attestation-registry.ts',
     ]) {
       const target = new URL(name, root);
       const bytes = await readFile(target);
