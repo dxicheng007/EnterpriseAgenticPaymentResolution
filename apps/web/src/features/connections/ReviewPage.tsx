@@ -260,7 +260,7 @@ function AccountReview({ accountId, session }: { accountId: string; session: Loc
 
   const detailsFor = details?.reviewPackage.hash === reviewPackage?.hash ? details : undefined;
   const pendingApproval = outcome?.state === 'pending' || (savedApproval !== undefined && outcome === undefined);
-  const canApprove = canApproveReview({ reviewPackage, loading, busy, stale, outcome });
+  const canApprove = canApproveReview({ reviewPackage, loading, busy, stale, outcome }) && detailsFor !== undefined;
   return <>
     {loading && <p role="status">Loading saved review package…</p>}
     {!loading && !reviewPackage && error == null && <p>No review package is prepared for this account.</p>}
