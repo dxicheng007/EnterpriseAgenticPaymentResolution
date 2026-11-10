@@ -1,13 +1,14 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, expect, test, vi } from 'vitest';
-import { ParentInspection } from '../../../apps/web/src/features/connections/ParentView.js';
+import { ParentInspection, ParentView as ParentViewPage } from '../../../apps/web/src/features/connections/ParentView.js';
 import { ActivationStateV1Schema, type ActivationStateV1 } from '../../contracts/src/activation-authority.js';
 import { hashTargetSnapshot } from '../../contracts/src/canonical.js';
 import { ParentViewSchema, type ParentView, type TargetState } from '../../contracts/src/runtime.js';
 import { baselineA, emptyTargetA, emptyTargetB, scopeA, scopeB } from '../../../tests/fixtures/index.js';
 import { clearCsrfToken, onSessionExpiration, setCsrfToken } from '../src/http.js';
 import { readAccountActivation, readParentAccount } from '../src/parent.js';
+import type { LocalSession } from '../src/session.js';
 
 afterEach(() => {
   clearCsrfToken();
@@ -202,6 +203,23 @@ test('accepts paired and inactive activation and rejects a substituted parent sn
   await expect(readParentAccount(emptyTargetA.scope.accountId, { asOf: view.asOf })).rejects
     .toMatchObject({ code: 'MALFORMED_RESPONSE' });
   expect(fetch).toHaveBeenCalledTimes(7);
+});
+
+test('ParentView account options follow renewed session grants', () => {
+  const session = (allowedAccountIds: string[]): LocalSession => ({
+    demoOnly: true,
+    reviewer: { reviewerId: 'reviewer', sessionId: 'session-1' },
+    allowedSourceRefs: ['legacy-a'],
+    allowedAccountIds,
+  });
+  const first = renderToStaticMarkup(createElement(ParentViewPage, { session: session(['account-a', 'account-b']) }));
+  expect(first).toContain('account-a');
+  expect(first).toContain('account-b');
+  const renewed = renderToStaticMarkup(createElement(ParentViewPage, { session: session(['account-b']) }));
+  expect(renewed).toContain('account-b');
+  expect(renewed).not.toContain('>account-a<');
+  const empty = renderToStaticMarkup(createElement(ParentViewPage, { session: session([]) }));
+  expect(empty).toContain('No accounts are authorized for this reviewer session.');
 });
 
 test('matches ActivationStateV1 acceptance for inactive, paired and conflicting bodies', async () => {

@@ -33,6 +33,8 @@ Put Node 24 and PostgreSQL 18 binaries on PATH for the [native database script](
 
 Use `npm run typecheck`, `npm run test:unit`, `npm run test:integration`, `npm run test:e2e`, and `npm run verify:slice -- V0`. Record focused checks as partial. Machine results, independent review for the exact candidate, and joint user acceptance are separate. Live, financial, and later-slice claims require their own evidence.
 
+Pull requests run the same typecheck, unit, integration, and e2e commands through [GitHub Actions](.github/workflows/pr.yml) on Node 24 with native PostgreSQL 18. Slice verify packets and live model runs stay out of that PR gate. After merge, mark the three workflow jobs as required checks on `main`.
+
 ## Area guides
 
 - [Apps](apps/AGENTS.md)
