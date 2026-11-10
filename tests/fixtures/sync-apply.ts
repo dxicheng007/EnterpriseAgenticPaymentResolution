@@ -109,19 +109,37 @@ async function activate(
 }
 
 export async function createSyncApplyFixture(runtimeThrough?: number, baselineVersion?: number) {
-  const namespace = testNamespace('apply');
-  const root = await mkdtemp(join(await realpath(tmpdir()), 'eapr-sync-apply-'));
-  await startNativeDb();
-  const pair = await provisionTest(namespace);
-  const db = createRuntimeDb({ connectionString: pair.runtime.appUrl });
-  const owner = createRuntimeDb({ connectionString: pair.runtime.migrationUrl });
-  const control = createControlDb({ connectionString: pair.control.appUrl });
-  async function close() {
-    await Promise.all([db.end(), owner.end(), control.end()]);
-    await dropTest(namespace);
-    await rm(root, { recursive: true, force: true });
+  const cleanupActions: Array<() => Promise<void>> = [];
+  let closePromise: Promise<void> | undefined;
+  function close(): Promise<void> {
+    closePromise ??= Promise.resolve().then(async () => {
+      const failures: unknown[] = [];
+      for (const cleanup of cleanupActions.toReversed()) {
+        try {
+          await cleanup();
+        } catch (failure) {
+          failures.push(failure);
+        }
+      }
+      if (failures.length) throw new AggregateError(failures, 'Sync apply fixture cleanup failed');
+    });
+    return closePromise;
   }
+
   try {
+    const namespace = testNamespace('apply');
+    const root = await mkdtemp(join(await realpath(tmpdir()), 'eapr-sync-apply-'));
+    cleanupActions.push(() => rm(root, { recursive: true, force: true }));
+    await startNativeDb();
+    const pair = await provisionTest(namespace);
+    cleanupActions.push(() => dropTest(namespace));
+    const db = createRuntimeDb({ connectionString: pair.runtime.appUrl });
+    cleanupActions.push(() => db.end());
+    const owner = createRuntimeDb({ connectionString: pair.runtime.migrationUrl });
+    cleanupActions.push(() => owner.end());
+    const control = createControlDb({ connectionString: pair.control.appUrl });
+    cleanupActions.push(() => control.end());
+
     const catalog = readMigrationCatalog();
     await migrate(pair, ['control', 'runtime'], {
       ...catalog, runtime: catalog.runtime.filter(row => row.version <= (runtimeThrough ?? Infinity)),
@@ -165,7 +183,12 @@ export async function createSyncApplyFixture(runtimeThrough?: number, baselineVe
     });
     return { db, owner, pair, close, source, addInvoice, addPayment, addSemantic, scopeReader: proofs.scopeReader, ...activation };
   } catch (error) {
-    await close();
+    try {
+      await close();
+    } catch (cleanupError) {
+      const failures = cleanupError instanceof AggregateError ? cleanupError.errors : [cleanupError];
+      throw new AggregateError(failures, 'Sync apply fixture construction and cleanup failed', { cause: error });
+    }
     throw error;
   }
 }
