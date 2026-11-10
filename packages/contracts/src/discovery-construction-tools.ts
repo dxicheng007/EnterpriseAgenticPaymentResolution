@@ -6,6 +6,7 @@ import { CustomerProfileDraftSchema, DiscoveryFindingV2Schema, DiscoveryProposal
 import { DiscoveryReadToolFailureSchema } from './discovery-tools.js';
 import { FindingSchema } from './model.js';
 import { PlanOutcomeSchema } from './runtime.js';
+import { VerificationJobSchema } from './review.js';
 
 const fitsToolBytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength <= 65_536;
 
@@ -220,4 +221,46 @@ export const discoveryCompareToolSchemas = [
   { name: 'compareArtifacts',
     description: 'Compare two same-run proposal revisions by deterministic field, rule, profile, hash, and scope digests.',
     inputSchema: z.toJSONSchema(CompareArtifactsInputSchema, { io: 'input', reused: 'ref', unrepresentable: 'any' }) },
+];
+
+export const RequestVerificationInputSchema = strict({
+  proposalId: IdSchema, revision: VersionSchema, profileHash: HashSchema,
+}).refine(fitsProposalBytes, 'Invalid canonical input or input exceeds 65,536 UTF-8 bytes');
+
+export const ReadVerificationInputSchema = strict({
+  jobId: IdSchema,
+}).refine(fitsProposalBytes, 'Invalid canonical input or input exceeds 65,536 UTF-8 bytes');
+
+/** Safe job observation only. No holdout, report truth, pins, or reservation bytes. */
+const SafeVerificationJobSchema = VerificationJobSchema;
+
+export const DiscoveryVerificationToolFailureSchema = strict({
+  ok: z.literal(false),
+  code: z.enum([
+    'DISCOVERY_INVALID', 'DISCOVERY_FORBIDDEN', 'DISCOVERY_CONFLICT', 'DISCOVERY_PAUSED',
+    'VERIFICATION_SCOPE_REQUIRED', 'SOURCE_UNAVAILABLE', 'TOOL_RESULT_LIMIT', 'TOOL_FORBIDDEN',
+    'TOOL_UNAVAILABLE',
+  ]),
+});
+
+export const RequestVerificationResultSchema = z.union([
+  strict({ ok: z.literal(true), job: SafeVerificationJobSchema }),
+  DiscoveryVerificationToolFailureSchema,
+]).refine(fitsProposalBytes, 'Tool result exceeds 65,536 UTF-8 bytes');
+
+export const ReadVerificationResultSchema = RequestVerificationResultSchema;
+
+export type RequestVerificationInput = z.infer<typeof RequestVerificationInputSchema>;
+export type ReadVerificationInput = z.infer<typeof ReadVerificationInputSchema>;
+export type RequestVerificationResult = z.infer<typeof RequestVerificationResultSchema>;
+export type ReadVerificationResult = z.infer<typeof ReadVerificationResultSchema>;
+export type DiscoveryVerificationToolFailure = z.infer<typeof DiscoveryVerificationToolFailureSchema>;
+
+export const discoveryVerificationToolSchemas = [
+  { name: 'requestVerification',
+    description: 'Enqueue protected financial verification for the exact one-profile compiled proposal revision under trusted account scope.',
+    inputSchema: z.toJSONSchema(RequestVerificationInputSchema, { io: 'input', reused: 'ref', unrepresentable: 'any' }) },
+  { name: 'readVerification',
+    description: 'Read a same-run authorized verification job and safe summary. Holdout and report truth are never returned.',
+    inputSchema: z.toJSONSchema(ReadVerificationInputSchema, { io: 'input', reused: 'ref', unrepresentable: 'any' }) },
 ];
