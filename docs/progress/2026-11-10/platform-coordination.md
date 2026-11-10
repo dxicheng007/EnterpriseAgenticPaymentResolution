@@ -424,3 +424,11 @@ Fresh independent [design review](proposed-scope-grants-design-review.md), SHA-2
 Platform reserves `db/control/011_discovery_scope_grants.sql` after inspecting128 local/origin refs and all9 local worktree control directories; none has controlDDL above010. Recheck before source release. Prior migrations remain immutable. The original architect is writing only the producer implementation plan. Discovery consumers and Experience UI keep separate release/review gates; no grant implementation is claimed.
 
 Task5 complete catalog run passed14/14 in358.59s with identical source pre/after maps; typecheck and65 unchanged selector units pass. A test-only combined-target precision refinement is receiving focused verification; production remains byte-identical to that full run. Source review and main integration remain next.
+
+## Latest main integrated; simplification requested
+
+User requested another pull. Main advanced to `088f719` with the shared pregenerated-connector/AI-off demo board; it is now merged at `2dab8e9` on `codex/platform-sync-selection-readers` and pushed. Direct diff from tested catalog74cd969 across all source/SQL/tests/scripts/packages is empty. The board is reconciled with existing accepted P1/authority/fixture prerequisites and the current catalog candidate.
+
+User next requested behavior-preserving simplification and allowed more fixed choices. Fresh Astra selection_catalog_reader_review is performing Task5's exact spec/quality gate with a concrete simplification assessment. New source implementation is held; source/SQL leases returned to root. General selector/history/journal and dynamic Discovery grants remain preserved follow-on rather than blocking the minimal Company A demo. The grant plan author is finishing a concise deferred producer plan only; no grant or Task6 source release.
+
+Grant migration reservation and future consumer requirements were delivered in [PR46 comment6775072167](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/46#issuecomment-6775072167). Current source/stream contract and other owner corrections remain outstanding, without turning optional live/Gate J work into demo acceptance requirements.
