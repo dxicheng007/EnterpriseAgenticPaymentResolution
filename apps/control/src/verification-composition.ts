@@ -90,14 +90,14 @@ export async function composeVerification(
   await access(root, constants.R_OK | constants.W_OK | constants.X_OK);
 
   const registry = createCandidateRegistry(db, root);
-  const jobs = await composeFinancialVerification(sources, registry, options.roots, select);
+  const financial = await composeFinancialVerification(sources, registry, options.roots, select);
   const plugin = createVerificationPlugin({
-    registry, jobs,
+    registry, jobs: financial.jobs,
     async authorizeVerification(request) {
       const { reviewer, allowedSourceRefs, allowedAccountIds } =
         await authorizeReviewer(request, { mutation: request.method === 'POST' });
       return { caller: 'reviewer', reviewer, allowedSourceRefs, allowedAccountIds };
     },
   });
-  return { registry, plugin };
+  return { registry, plugin, discoveryVerification: financial.discoveryVerification };
 }
