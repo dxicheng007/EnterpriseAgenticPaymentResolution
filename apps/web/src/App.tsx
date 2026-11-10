@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { onSessionExpiration } from '../../../packages/client/src/http.js';
 import { getLocalSession, type LocalSession } from '../../../packages/client/src/session.js';
 import { ParentView } from './features/connections/ParentView.js';
+import { ReviewPage } from './features/connections/ReviewPage.js';
 import { DiscoveryPage } from './features/discovery/DiscoveryPage.js';
 import { HealthPage } from './features/health/HealthPage.js';
 import { PreviewPage } from './features/preview/PreviewPage.js';
@@ -10,11 +11,11 @@ import './features/sources/review.css';
 
 const pages = [
   { id: 'health', label: 'Health' }, { id: 'sources', label: 'Sources' }, { id: 'preview', label: 'Preview' },
-  { id: 'parent', label: 'Parent' }, { id: 'discovery', label: 'Discovery' },
+  { id: 'review', label: 'Review' }, { id: 'parent', label: 'Parent' }, { id: 'discovery', label: 'Discovery' },
 ] as const;
 
 const titles = {
-  sources: 'Sources and evidence', preview: 'Connector preview', parent: 'Parent records', discovery: 'Discovery',
+  sources: 'Sources and evidence', review: 'Customer review', preview: 'Connector preview', parent: 'Parent records', discovery: 'Discovery',
 } as const;
 
 function currentPage() {
@@ -63,6 +64,7 @@ export function App() {
         <p>{sessionFailed ? 'The demo reviewer session is required to open this workspace.' : 'Opening local demo session…'}</p>
       </main>
       : page === 'sources' ? <SourcesPage allowedSourceRefs={session.allowedSourceRefs} />
-        : page === 'discovery' ? <DiscoveryPage /> : page === 'parent' ? <ParentView /> : <PreviewPage />}
+        : page === 'discovery' ? <DiscoveryPage /> : page === 'parent' ? <ParentView session={session} />
+          : page === 'review' ? <ReviewPage session={session} /> : <PreviewPage />}
   </>;
 }
