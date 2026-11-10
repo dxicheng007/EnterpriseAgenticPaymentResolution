@@ -6,7 +6,7 @@ import type {
 import type { DiscoveryReadTools } from './read-tools.js';
 import type { ModelClient } from './model.js';
 import { coversGrant, createDiscoveryRepository, discoveryError, type Grants, type RepositoryOptions } from './repository.js';
-import { acquireDiscoverySupervisor } from './supervisor.js';
+import { acquireDiscoverySupervisor, type DiscoveryVerificationDeps } from './supervisor.js';
 import type { CaptureAccess, CaptureFacts } from './tasks.js';
 
 export type DiscoveryReviewer = {
@@ -20,6 +20,7 @@ type Options = RepositoryOptions & CaptureAccess & {
   constructionCapture?: ConstructionCaptureReader;
   registerCandidate?: CompileRegisterCandidate;
   getArtifact?: ReplayGetArtifact;
+  verification?: DiscoveryVerificationDeps;
   sourceRefForCompany: (companyId: string) => string | undefined;
 };
 
@@ -31,6 +32,7 @@ export async function createDiscoveryService(options: Options) {
     constructionCapture: options.constructionCapture,
     registerCandidate: options.registerCandidate,
     getArtifact: options.getArtifact,
+    verification: options.verification,
   });
   let owner = modelClient && await acquireDiscoverySupervisor(supervisorOptions());
   let closed = false;

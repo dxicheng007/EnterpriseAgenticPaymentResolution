@@ -60,7 +60,21 @@ const diagnostics: Record<string, string> = {
 };
 
 function diagnostic(code: string): Diagnostic {
+  if (code === 'VERIFICATION_INTERRUPTED') {
+    return {
+      code, severity: 'warning',
+      message: 'Protected verification execution outcome is uncertain; automatic relaunch is unavailable',
+      sourceIds: [], fieldPaths: [],
+    };
+  }
   return { code, severity: 'blocker', message: diagnostics[code] ?? code, sourceIds: [], fieldPaths: [] };
+}
+
+/** Append a non-blocking run diagnostic without changing status. */
+export async function appendRunDiagnostic(client: PoolClient, runId: string, code: string) {
+  await client.query(`UPDATE discovery_runs SET revision=revision+1,
+    diagnostics=CASE WHEN $2=ANY(diagnostics) THEN diagnostics ELSE array_append(diagnostics,$2) END WHERE id=$1`,
+  [runId, code]);
 }
 
 export function coversGrant(current: Grants | undefined, saved: Grants): boolean {
@@ -126,6 +140,13 @@ async function project(client: PoolClient, run: RunRow): Promise<DiscoveryStateV
     SELECT c.result FROM discovery_proposal_identities i
     JOIN discovery_proposal_current c ON c.run_id=i.run_id AND c.proposal_id=i.id AND c.proposal_revision=i.current_revision
     WHERE i.run_id=$1 ORDER BY i.id COLLATE "C"`, [run.id]);
+  const { rows: verificationJobs } = await client.query<{
+    proposalId: string; proposalRevision: number; jobId: string;
+  }>(`
+    SELECT proposal_id AS "proposalId", proposal_revision::int AS "proposalRevision", job_id AS "jobId"
+    FROM discovery_verification_requests
+    WHERE run_id=$1
+    ORDER BY proposal_id COLLATE "C", proposal_revision, job_id COLLATE "C"`, [run.id]);
   return DiscoveryStateV2Schema.parse({
     schemaVersion: 2, id: run.id, revision: safeCounter(run.revision), binding: run.binding, mode: run.mode,
     modelId: run.model_id, status: run.status,
@@ -138,7 +159,7 @@ async function project(client: PoolClient, run: RunRow): Promise<DiscoveryStateV
       attempt: task.attempt, revision: safeCounter(task.revision), toolRounds: task.tool_rounds,
       repairRound: task.repair_round, diagnosticCodes: task.diagnostics,
     })),
-    findings, proposals: proposals.map(row => row.result), verificationJobs: [],
+    findings, proposals: proposals.map(row => row.result), verificationJobs,
     usage: { modelCalls: safeCounter(run.model_calls), inputTokens: safeCounter(run.input_tokens),
       outputTokens: safeCounter(run.output_tokens), unknownUsageCalls: safeCounter(run.unknown_calls),
       cost: { status: 'unavailable' } },

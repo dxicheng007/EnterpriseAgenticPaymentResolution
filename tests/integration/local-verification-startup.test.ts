@@ -153,7 +153,7 @@ test('real reviewer jobs use operator pins for the registered source captures', 
           const sources = { dependencies, catalog: localSourceCatalog, service: createSourceService(dependencies, localSourceCatalog) };
           const reopenedRegistry = createCandidateRegistry(services.db, registryRoot);
           const select = createVerificationSelector(pins, pins);
-          const jobs = await composeFinancialVerification(sources, reopenedRegistry, options.verification.roots, select);
+          const { jobs } = await composeFinancialVerification(sources, reopenedRegistry, options.verification.roots, select);
           expect((await jobs.get(jobId)).job).toMatchObject({ state: 'completed', summary: { reportId: report.id } });
           const capture = await createFinancialCaptureReader({ ...sources, registry: reopenedRegistry })
             .readCapture({ artifactHash: report.artifactHash, manifestId });

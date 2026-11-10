@@ -238,6 +238,7 @@ export async function createLocalComposition(dependencies: UploadDependencies, o
         catalog: localSourceCatalog, store, reviewer, authorizeReviewer: session.authorizeReviewer,
         registerCandidate: registry?.registerCandidate.bind(registry),
         getArtifact: registry?.getArtifact.bind(registry),
+        verification: verification?.discoveryVerification,
       }),
       createSourcePlugin({ catalog: localSourceCatalog, authorizeSource, store }),
       createPreviewPlugin({

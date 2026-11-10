@@ -61,7 +61,7 @@ const shared = [
     'activation-authority', 'activation-authority-hash', 'activation-bundle-v2',
     'activity', 'bootstrap-verification-hash', 'bootstrap-verification', 'canonical', 'common', 'connector',
     'discovery-helpers', 'discovery-tools', 'discovery', 'evidence', 'index', 'local-demo', 'model', 'review-details', 'review', 'runtime',
-    'source-coverage', 'source',
+    'source-coverage', 'source', 'sync-capture',
   ].map(name => 'packages/contracts/src/' + name + '.ts'),
 ];
 const subjectSources = [

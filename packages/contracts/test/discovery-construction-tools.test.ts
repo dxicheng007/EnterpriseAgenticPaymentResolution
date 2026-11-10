@@ -170,3 +170,118 @@ test('sandbox replay and compare schemas accept only exact refs and sandbox lite
   expect(discoveryCompareToolSchemas).toHaveLength(1);
   expect(discoveryCompareToolSchemas[0]).toMatchObject({ name: 'compareArtifacts' });
 });
+
+test('requestVerification and readVerification accept only safe job shapes', async () => {
+  const {
+    RequestVerificationInputSchema, ReadVerificationInputSchema,
+    RequestVerificationResultSchema, ReadVerificationResultSchema,
+    discoveryVerificationToolSchemas,
+  } = await import('../src/discovery-construction-tools.js');
+  const request = { proposalId: 'proposal', revision: 1, profileHash: 'a'.repeat(64) };
+  expect(RequestVerificationInputSchema.parse(request)).toEqual(request);
+  for (const invalid of [
+    { ...request, accountId: 'account' },
+    { ...request, requestKey: 'step' },
+    { ...request, revision: 0 },
+    { proposalId: 'proposal', revision: 1 },
+    { profileHash: 'a'.repeat(64) },
+  ]) expect(RequestVerificationInputSchema.safeParse(invalid).success).toBe(false);
+
+  const read = { jobId: 'job-1' };
+  expect(ReadVerificationInputSchema.parse(read)).toEqual(read);
+  for (const invalid of [
+    { ...read, proposalId: 'proposal' },
+    { jobId: '' },
+    {},
+  ]) expect(ReadVerificationInputSchema.safeParse(invalid).success).toBe(false);
+
+  const job = { jobId: 'job-1', state: 'queued' as const, diagnostics: [] };
+  const success = { ok: true as const, job };
+  expect(RequestVerificationResultSchema.parse(success)).toEqual(success);
+  expect(ReadVerificationResultSchema.parse(success)).toEqual(success);
+  const completed = {
+    ok: true as const,
+    job: {
+      ...job, state: 'completed' as const,
+      summary: {
+        reportId: 'report', artifactHash: 'b'.repeat(64), profileHashes: ['a'.repeat(64)],
+        manifestHash: 'c'.repeat(64), eligible: true, coverageComplete: true,
+        checks: [{ id: 'baseline_reconcile' as const, status: 'passed' as const, diagnosticCodes: [] }],
+      },
+    },
+  };
+  expect(RequestVerificationResultSchema.parse(completed)).toEqual(completed);
+  for (const invalid of [
+    { ok: true, job: { ...job, holdout: true } },
+    { ok: true, job: { ...job, report: { id: 'secret' } } },
+    { ok: true, job, expectedResults: [] },
+    { ok: true, job: { jobId: 'job-1', state: 'queued' } },
+  ]) expect(RequestVerificationResultSchema.safeParse(invalid).success).toBe(false);
+
+  for (const code of [
+    'TOOL_UNAVAILABLE', 'VERIFICATION_SCOPE_REQUIRED', 'DISCOVERY_PAUSED', 'DISCOVERY_FORBIDDEN',
+  ] as const) {
+    expect(RequestVerificationResultSchema.parse({ ok: false, code })).toEqual({ ok: false, code });
+  }
+  expect(RequestVerificationResultSchema.safeParse({ ok: false, code: 'DISCOVERY_OWNER_LOST' }).success)
+    .toBe(false);
+
+  expect(discoveryVerificationToolSchemas).toHaveLength(2);
+  expect(discoveryVerificationToolSchemas.map(tool => tool.name))
+    .toEqual(['requestVerification', 'readVerification']);
+  expect(Buffer.byteLength(JSON.stringify(discoveryVerificationToolSchemas))).toBeLessThan(8 * 1024);
+});
+
+test('requestInvestigation accepts bounded subject requests and stays advertisement-only', async () => {
+  const {
+    RequestInvestigationInputSchema, RequestInvestigationResultSchema, discoveryInvestigationToolSchemas,
+  } = await import('../src/discovery-construction-tools.js');
+
+  const source = {
+    subject: { kind: 'source' as const },
+    question: 'What accounts appear in the capture?',
+    dependencyFindingRefs: [{ findingId: 'finding-a', revision: 1 }],
+  };
+  expect(RequestInvestigationInputSchema.parse(source)).toEqual(source);
+
+  const account = {
+    subject: {
+      kind: 'source_account' as const, sellerEntityId: 'seller-a', sourceAccountId: 'account-a',
+    },
+    question: 'Resolve the captured tuple.',
+    dependencyFindingRefs: [],
+  };
+  expect(RequestInvestigationInputSchema.parse(account)).toEqual(account);
+
+  for (const invalid of [
+    { ...source, question: '' },
+    { ...source, question: 'x'.repeat(8193) },
+    { ...source, dependencyFindingRefs: [
+      { findingId: 'finding-a', revision: 1 }, { findingId: 'finding-a', revision: 1 },
+    ] },
+    { ...source, grants: [] },
+    { subject: source.subject, question: source.question },
+    { subject: { kind: 'source' }, question: source.question, dependencyFindingRefs: [{ findingId: 'f', revision: 0 }] },
+  ]) expect(RequestInvestigationInputSchema.safeParse(invalid).success).toBe(false);
+
+  const success = { ok: true as const, requestId: 'request-1' };
+  expect(RequestInvestigationResultSchema.parse(success)).toEqual(success);
+  expect(RequestInvestigationResultSchema.parse({ ok: false, code: 'TOOL_UNAVAILABLE' }))
+    .toEqual({ ok: false, code: 'TOOL_UNAVAILABLE' });
+  for (const code of [
+    'DISCOVERY_INVALID', 'DISCOVERY_FORBIDDEN', 'DISCOVERY_CONFLICT', 'DISCOVERY_PAUSED',
+    'SOURCE_UNAVAILABLE', 'TOOL_RESULT_LIMIT', 'TOOL_FORBIDDEN',
+  ] as const) {
+    expect(RequestInvestigationResultSchema.parse({ ok: false, code })).toEqual({ ok: false, code });
+  }
+  for (const invalid of [
+    { ok: true, requestId: 'request-1', grants: [] },
+    { ok: true },
+    { ok: false, code: 'VERIFICATION_SCOPE_REQUIRED' },
+    { ok: false, code: 'DISCOVERY_OWNER_LOST' },
+  ]) expect(RequestInvestigationResultSchema.safeParse(invalid).success).toBe(false);
+
+  expect(discoveryInvestigationToolSchemas).toHaveLength(1);
+  expect(discoveryInvestigationToolSchemas[0]).toMatchObject({ name: 'requestInvestigation' });
+  expect(Buffer.byteLength(JSON.stringify(discoveryInvestigationToolSchemas))).toBeLessThan(8 * 1024);
+});
