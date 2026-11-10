@@ -39,3 +39,52 @@ button { font: inherit; padding: .4rem .7rem; }
   font-weight: 700;
   background: color-mix(in srgb, currentColor 12%, transparent);
 }
+
+.demo-stub-banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .75rem 1.25rem;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0;
+  padding: .85rem max(1.5rem, calc((100vw - 70rem) / 2));
+  border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  background: color-mix(in srgb, currentColor 6%, transparent);
+}
+.demo-stub-banner p { margin: 0; max-width: 52rem; font-size: .92rem; }
+.demo-stub-note {
+  margin-top: 1rem;
+  font-size: .9rem;
+  opacity: .9;
+}
+.demo-working {
+  margin-block: 1rem;
+}
+.demo-working-card {
+  padding: 1rem 1.15rem;
+  border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+  border-radius: .65rem;
+  background: color-mix(in srgb, currentColor 5%, transparent);
+}
+.demo-working-meter {
+  height: .35rem;
+  margin: .85rem 0 1rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+.demo-working-meter span {
+  display: block;
+  height: 100%;
+  width: 40%;
+  border-radius: inherit;
+  background: currentColor;
+  animation: demo-working-slide linear infinite;
+}
+.demo-working ol { margin: 0; padding-inline-start: 1.2rem; }
+.demo-working li { opacity: .55; margin: .2rem 0; }
+.demo-working-active { opacity: 1; font-weight: 600; }
+@keyframes demo-working-slide {
+  from { transform: translateX(-120%); }
+  to { transform: translateX(280%); }
+}
