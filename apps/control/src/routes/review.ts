@@ -11,6 +11,20 @@ export type ReviewAuthorize = ReturnType<typeof createLocalSessionService>['auth
 export type ReviewParams = { Params: { accountId: string } };
 const empty = strict({});
 
+/** Fail-closed reject for reviewer corrections until E3 authority is accepted. Never writes. */
+export class CorrectionReject extends Error {
+  constructor(readonly statusCode: 422, readonly code: 'UNSUPPORTED_AMOUNT' | 'CORRECTION_UNSUPPORTED') {
+    super(code);
+  }
+}
+
+const inventedMoneyKeys = new Set(['amountCents', 'priceCents', 'fixedMonthlyFeeCents', 'balanceCents']);
+
+export function inventedMoneyCorrection(body: unknown): boolean {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
+  return Object.keys(body).some(key => inventedMoneyKeys.has(key));
+}
+
 export function parseReviewAccount(request: FastifyRequest<ReviewParams>) {
   const account = IdSchema.safeParse(request.params.accountId);
   if (!account.success || request.url.includes('?')) throw new ReviewError(400, 'REVIEW_REQUEST_INVALID');
@@ -20,7 +34,10 @@ export function parseReviewAccount(request: FastifyRequest<ReviewParams>) {
 export function sendReviewError(error: unknown, request: FastifyRequest, reply: FastifyReply) {
   let status = 503;
   let code = 'REVIEW_UNAVAILABLE';
-  if (error instanceof ReviewError || error instanceof LocalSessionError) {
+  if (error instanceof CorrectionReject) {
+    status = error.statusCode;
+    code = error.code;
+  } else if (error instanceof ReviewError || error instanceof LocalSessionError) {
     status = error.statusCode;
     code = error.code;
   } else if (error instanceof FinancialAttestationFailure) {
@@ -50,6 +67,14 @@ export function createReviewPlugin(preparation: Pick<ReviewPreparation, 'prepare
       const accountId = parseReviewAccount(request);
       if (!empty.safeParse(request.body).success) throw new ReviewError(400, 'REVIEW_REQUEST_INVALID');
       return reply.header('Cache-Control', 'no-store').send(await preparation.prepare(accountId, grants));
+    });
+    // Fail closed: no accepted correction write authority. Invented money never becomes a fact.
+    app.post<ReviewParams>('/api/review/:accountId/corrections', async (request, reply) => {
+      const grants = await authorize(request, { mutation: true });
+      const accountId = parseReviewAccount(request);
+      if (!grants.allowedAccountIds.includes(accountId)) throw new ReviewError(403, 'REVIEW_FORBIDDEN');
+      if (inventedMoneyCorrection(request.body)) throw new CorrectionReject(422, 'UNSUPPORTED_AMOUNT');
+      throw new CorrectionReject(422, 'CORRECTION_UNSUPPORTED');
     });
   };
 }

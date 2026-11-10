@@ -74,3 +74,19 @@ export async function activateReview(
   }
   return { state: 'applied', receipt: result.receipt, replayed: result.replayed };
 }
+
+/**
+ * Posts a reviewer correction attempt. Until E3 authority is accepted the control route
+ * fail-closes (422); invented money never becomes a successful write.
+ */
+export async function submitReviewCorrection(
+  accountId: string, body: unknown, signal?: AbortSignal,
+): Promise<never> {
+  await requestLocal(
+    accountPath(accountId) + '/corrections',
+    z.never(),
+    jsonPost(body, signal),
+    true,
+  );
+  throw new LocalApiError(200, 'MALFORMED_RESPONSE', 'A correction write was returned unexpectedly.');
+}
