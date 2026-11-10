@@ -68,7 +68,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T1 — Platform: mount post-activation apply for one authorized customer
 
-**Status:** worker-private `POST /internal/apply` merged in PR56 at `49245de`; existing P1 is reused. Upstream focused proof shows 80000→50000, preserved cutover and second-trigger `no_work`, with in-process observe/capture and non-T0 fixture seed; exact frozen operator chain and receipt recovery remain T2/T6 work. Platform continuation `codex/platform-company-a-demo-mount` integrated PR56 before implementation: Fresh Astra reconciliation retains only T2 fixed capture/receipt recovery; Sol Task 1 candidate `98bcc46` adds fixed T2 capture/recovery using the existing fixture; fresh Astra exact-candidate review is running. Generic mount remains unchanged. No general selector/journal prerequisite or full V5/V6 claim.
+**Status:** worker-private `POST /internal/apply` merged in PR56 at `49245de`; existing P1 is reused. Upstream focused proof shows 80000→50000, preserved cutover and second-trigger `no_work`, with in-process observe/capture and non-T0 fixture seed; exact frozen operator chain and receipt recovery remain T2/T6 work. Platform continuation `codex/platform-company-a-demo-mount` integrated PR56 before implementation: Fresh Astra reconciliation retains only T2 fixed capture/receipt recovery; Sol Task 1 candidate `98bcc46` adds fixed T2 capture/recovery using the existing fixture; fresh Astra specification, quality and scoped verification review passes with no findings. Generic mount remains unchanged. No general selector/journal prerequisite or full V5/V6 claim.
 **Lane:** Platform  
 **Depends on:** accepted activation grant (A5 import), classification pin, current-authority fence, capture inbox facts for the chosen transport  
 **Outcome:** Worker can take already-captured conforming deliveries for one enrolled customer and atomically apply a nonempty financial unit with an authoritative sync receipt, without model calls.  
@@ -78,7 +78,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T2 — Platform: post-activation injection + capture path for the demo event
 
-**Status:** Task 1 candidate `98bcc46` (base `f860564`) passes typecheck, 698 unit tests, 12 exact Company A integrations and 10 fixture/mount compatibility cases; independent review running. Transport/supervisor remain unmounted. Exact Company A event is frozen by T0; fixed operator HTTP transport and owned paths are specified by the bounded plan; transport implementation waits for Task 1 acceptance. No implementation acceptance yet.
+**Status:** Task 1 candidate `98bcc46` (base `f860564`) passes typecheck, 698 unit tests, 12 exact Company A integrations and 10 fixture/mount compatibility cases; independent review passes with independent5 unit/2 integration reruns. Task 2 private HTTP transports now released to one Sol writer; supervisor/CLI remain unmounted. Exact Company A event is frozen by T0; fixed operator HTTP transport and owned paths are specified by the bounded plan; transport implementation waits for Task 1 acceptance. No implementation acceptance yet.
 **Lane:** Platform (sources/worker composition as reserved)  
 **Depends on:** T1 or a jointly agreed temporary harness seam owned by Integrator  
 **Outcome:** A controlled way to introduce one new Company A API (and optionally later Company B) event after activation and durably capture it into the inbox the applier consumes.  

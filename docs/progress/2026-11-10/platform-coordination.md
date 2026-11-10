@@ -464,3 +464,9 @@ Owner communications: Experience T3/T4/T8 request comment6775785377 and exact re
 Candidate `98bcc469d204785e34e2d0c44a3d164c43f5f718` on base `f8605642bb391f2bb5c7ec348a03494f3fc20253` changes exactly six reserved source/test paths. It reuses genuine `local-demo-v1` activation through the existing fixture, accepted capture/P1 and validated receipt/unit recovery; PR56's generic mount remains unchanged. Typecheck, five focused unit cases, full unit suite698, twelve real Company A integration cases and ten default-seed fixture/mount compatibility cases passed. Behavioral RED/setup limitations are retained in the ignored Task1 report.
 
 Fresh Astra `demo_task1_review` owns the serial test lease in a separate exact-candidate checkout. No dependent source writer is released. Runtime compiled artifact binds actual approved specHash; connector display ID/version is asserted in fixture registration rather than adding a runtime metadata port. This candidate remains unmounted T2 service proof, not full V5/V6 or joint acceptance.
+
+## T2 service accepted; private transport release
+
+Fresh Astra review of exact source `98bcc469d204785e34e2d0c44a3d164c43f5f718` passes specification, quality and scoped verification with no actionable findings. Independent five unit cases and two real integration cases (positive/recovery plus conflicting history) passed in a separate exact checkout/owned55442 cluster. An initial PGDATA symlink setup rejection was corrected before those tests; reviewer stopped only its own55442 cluster. Integration55441 and original demo remain untouched. [Review](company-a-task1-review.md).
+
+Task 1 is complete as an internal fixed service, not a mounted operator path. Release Task 2's private source/worker transports to the next sole Sol writer with the existing isolated integration test lease; no dependent supervisor/CLI/gate release yet.
