@@ -476,7 +476,7 @@ async function observeMountedCompanyA(data: SyncApplyFixture, collectObservation
         })));
       const payment = current.records.payments.find(record => record.sourceEventId === demo.eventIds[0])!;
       const allocation = current.records.allocations.find(record => record.sourceEventId === demo.eventIds[1])!;
-      expect(allocation.fundingRecordId).toBe(payment.id);
+      expect(allocation.fundingRecordId).toBe(payment.identity.recordId);
       expect(savedReceipt!.targetRecordIds).toEqual(expect.arrayContaining([payment.id, allocation.id]));
       expect(savedReceipt!.targetRecordIds).toHaveLength(2);
 
