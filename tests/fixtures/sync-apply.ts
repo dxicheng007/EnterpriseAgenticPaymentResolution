@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Pool } from 'pg';
 import { expect } from 'vitest';
-import { hashEvent, LocalSessionResponseSchema, ReviewPackageSchema, type RawSourceEvent } from '@eapr/contracts';
+import { hashEvent, hashTargetSnapshot, LocalSessionResponseSchema, ReviewPackageSchema, type RawSourceEvent, type TargetState } from '@eapr/contracts';
+import { encodeCanonical, scopeValues } from '@eapr/parent/snapshots';
 import { readStoredActivation } from '@eapr/parent/activation-store';
 import { createSourceService } from '@eapr/sources';
 import { loadActivationPolicy } from '@eapr/storage/activation-policy';
@@ -107,7 +108,7 @@ async function activate(
   }
 }
 
-export async function createSyncApplyFixture(runtimeThrough?: number) {
+export async function createSyncApplyFixture(runtimeThrough?: number, baselineVersion?: number) {
   const namespace = testNamespace('apply');
   const root = await mkdtemp(join(await realpath(tmpdir()), 'eapr-sync-apply-'));
   await startNativeDb();
@@ -130,6 +131,27 @@ export async function createSyncApplyFixture(runtimeThrough?: number) {
     const operator = createScenarioAdmin(proofs.dependencies, {
       DEMO_OPERATOR_ENABLED: 'true', DEMO_OPERATOR_TOKEN: operatorToken,
     });
+    if (baselineVersion !== undefined) {
+      const entry = (await proofs.scopeReader.readSnapshot()).resolveRegisteredScope(proofs.a.accountId)!.entry;
+      const target: TargetState = {
+        scope: entry.scope, version: baselineVersion, asOf: entry.manifestAsOf,
+        invoices: [], payments: [], credits: [], allocations: [], reversals: [],
+        customers: [], accounts: [], billingConfigurations: [],
+      };
+      const values = scopeValues(entry.scope);
+      const snapshotHash = hashTargetSnapshot(target);
+      await withTransaction(owner, async client => {
+        await client.query('INSERT INTO parent_scopes (account_id, company_id, seller_entity_id) VALUES ($1,$2,$3)', values);
+        await client.query(`
+          INSERT INTO parent_snapshots (account_id, company_id, seller_entity_id, target_version, snapshot_hash, recorded_as_of, canonical, digest)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        `, [...values, baselineVersion, snapshotHash, target.asOf, ...encodeCanonical(target)]);
+        await client.query(`
+          INSERT INTO parent_targets (account_id, company_id, seller_entity_id, target_version, snapshot_hash)
+          VALUES ($1,$2,$3,$4,$5)
+        `, [...values, baselineVersion, snapshotHash]);
+      });
+    }
     const activation = await activate(db, proofs, source, runtimeThrough);
     const addInvoice = (id: string, sourceAccountId: string) => operator.freshInvoiceA(operatorToken, {
       id, accountId: sourceAccountId, amount: '12.00', dueDate: '2026-10-31',
@@ -141,7 +163,7 @@ export async function createSyncApplyFixture(runtimeThrough?: number) {
     const addSemantic = (id: string, sourceAccountId: string, revision: string) => operator.semanticChangeA(operatorToken, {
       id, accountId: sourceAccountId, revision, effectiveDate: '2026-10-02', observedAt: syncApplyInstant,
     });
-    return { db, owner, pair, close, source, addInvoice, addPayment, addSemantic, ...activation };
+    return { db, owner, pair, close, source, addInvoice, addPayment, addSemantic, scopeReader: proofs.scopeReader, ...activation };
   } catch (error) {
     await close();
     throw error;
