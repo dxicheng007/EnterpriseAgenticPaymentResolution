@@ -289,6 +289,23 @@ const v6Prerequisites = [
   ...v5Prerequisites,
 ];
 
+test('V5 required case titles match real v5-sync test names', () => {
+  // Title drift previously required "applies a fresh invoice..." while the suite only
+  // declared "applies a captured invoice...". Prerequisites must fail closed on mismatch.
+  const allowlist = readFileSync(resolve('scripts/verify-slice.ts'), 'utf8');
+  const suite = readFileSync(resolve('tests/integration/v5-sync.test.ts'), 'utf8');
+  const required = [
+    'admits standing authority for the activated customer and denies unknown accounts',
+    'captures a fresh post-activation API page without parent writes or model credentials',
+    'applies a captured invoice once, recovers its receipt and fences stale input',
+  ];
+  for (const title of required) {
+    expect(allowlist.includes("'" + title + "'") || allowlist.includes('"' + title + '"')).toBe(true);
+    expect(suite).toContain("test('" + title + "'");
+  }
+  expect(allowlist).not.toContain('applies a fresh invoice once, replays the receipt and fences stale input');
+});
+
 test.each([
   { slice: 'V5', unavailable: 'ai-off-sync-proof-unavailable', prerequisites: v5Prerequisites },
   { slice: 'V6', unavailable: 'application-recovery-proof-unavailable', prerequisites: v6Prerequisites },
