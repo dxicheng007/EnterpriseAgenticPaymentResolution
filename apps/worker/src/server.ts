@@ -2,6 +2,8 @@ import { timingSafeEqual } from 'node:crypto';
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyPluginAsync, type FastifyReply, type FastifyRequest } from 'fastify';
 import { authorizeWorkerParentRead } from './parent-read-composition.js';
 import { authorizeActivationService, invalidActivationRequest, sendActivationError } from './routes/activation.js';
+import { authorizeAuthorityService, sendAuthorityError } from './routes/authority.js';
+import { authorityError } from './sync/current-authority-errors.js';
 import { ParentReadError, sendParentReadError } from './routes/parent.js';
 import type { Pool } from 'pg';
 import type { Clock } from '../../../packages/storage/src/control-db.js';
@@ -15,12 +17,40 @@ export type WorkerServices = {
 
 type WorkerDependencies = WorkerServices & { expectedMigrations: readonly MigrationIdentity[]; featurePlugins?: FastifyPluginAsync<WorkerServices>[] };
 
+function authorityFrameworkRoute(request: FastifyRequest) {
+  const path = request.url.replace(/^https?:\/\/[^/?#]+/i, '').split(/[?#]/, 1)[0]!;
+  const [root, internal, connections, account, suffix, extra] = path.split('/', 6);
+  if (root !== '' || !internal || !connections || !account || !suffix || extra !== undefined) return;
+  try {
+    // Decode fixed segments as the router does and leave the potentially malformed account opaque.
+    if (decodeURI(internal) !== 'internal' || decodeURI(connections) !== 'connections') return;
+    const action = decodeURI(suffix);
+    if (request.method === 'GET' && action === 'authority') {
+      return { method: 'GET' as const, url: '/internal/connections/:accountId/authority' };
+    }
+    if (request.method === 'POST' && (action === 'pause' || action === 'resume' || action === 'revoke')) {
+      return { method: 'POST' as const, url: '/internal/connections/:accountId/' + action };
+    }
+  } catch {
+    return;
+  }
+}
+
 export function buildWorker({ db, serviceToken, clock, expectedMigrations, featurePlugins = [] }: WorkerDependencies): FastifyInstance {
   if (!serviceToken) throw new Error('Worker service credential is required');
   const worker: FastifyInstance = Fastify({
     routerOptions: { maxParamLength: 160 },
     frameworkErrors(error: FastifyError, request: FastifyRequest, reply: FastifyReply) {
       if (error.code === 'FST_ERR_BAD_URL' || error.code === 'FST_ERR_MAX_PARAM_LENGTH') {
+        const authorityRoute = authorityFrameworkRoute(request);
+        if (authorityRoute && worker.hasRoute(authorityRoute)) {
+          try {
+            authorizeAuthorityService(request, serviceToken);
+          } catch (failure) {
+            return sendAuthorityError(failure, request, reply);
+          }
+          return sendAuthorityError(authorityError('AUTHORITY_INPUT_INVALID'), request, reply);
+        }
         if (request.method === 'GET' && /^(?:https?:\/\/[^/?#]+)?\/internal\/receipts\/[^/?#]+(?:\?|$)/.test(request.url) &&
             worker.hasRoute({ method: 'GET', url: '/internal/receipts/:key' })) {
           try {
