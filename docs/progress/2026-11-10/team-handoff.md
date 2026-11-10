@@ -1,6 +1,6 @@
 # Current team handoff and remaining tasks — November 10, 2026
 
-This is the current coordination snapshot at main `0f0184e13d63df435aedda17810b07a08e9fcedc`, which merged [PR40](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/40). Earlier progress reports and the original team-expansion plan remain historical evidence; use their exact-candidate reviews rather than their old completion summaries. No open PRs were observed when preparing this handoff. This task list is not a source-path or migration reservation.
+For the latest implementation checkpoints and delivered owner requests, read [Platform coordination](platform-coordination.md). The following is the roadmap snapshot at main `0f0184e13d63df435aedda17810b07a08e9fcedc`, which merged [PR40](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/40). Earlier progress reports and the original team-expansion plan remain historical evidence; use their exact-candidate reviews rather than their old completion summaries. No open PRs were observed when preparing this handoff. This task list is not a source-path or migration reservation.
 
 ## Completed work to preserve
 
@@ -38,3 +38,31 @@ The [Discovery unblock inventory](../2026-11-08/handoffs/d4-discovery-unblock-ha
 ## Developer 2 — Experience
 
 | Task | Deliverable and completion boundary | Dependency |
+| --- | --- | --- |
+| E1 — Finish reviewer browser proof | Exercise field/identity evidence and originals before approval; real earlier-intent/receipt recovery after head advancement; duplicate submission/lost-response handling; delayed/mismatched details; unsupported material terms blocking approval. Correct the explanation of expected parent version as an import prerequisite. | Existing reviewer APIs and controls. Follow the [latest V3/Experience review](../2026-11-08/reviews/platform-v3-v4-9680b05-review.md), retaining its supersession of older source defects. |
+| E2 — Complete discovery and operations presentation | Finish bounded discovery detail inspection. Consume authoritative connection states, receipt history, captured/applied/pending/quarantined counts, lag/gaps and versions; wire scoped pause/resume/revoke controls and honest pending/error states. | Discovery's accepted safe reads; Platform P3 for operations. UI must not infer authority or invent backend transitions. |
+| E3 — Reviewer correction/unresolved workflow | Implement the agreed evidence-backed correction experience and verification invalidation rules. Preserve unresolved state while authority semantics are absent; the current deny endpoint is not a complete correction service. | Joint Platform/Discovery/Experience contract work. No unsupported monetary value becomes a fact through review. |
+| E4 — Final walkthrough and rehearsals | Coordinate the complete two-company workflow, before/after financial and receipt observations, AI-off fresh inputs, replay/restart and drift containment; execute three full rehearsals and obtain clarity/workflow feedback. | Accepted V3–V6 behavior and genuine live A/B artifacts. Full V7 remains unavailable until its real proof exists. |
+
+## Shared verification and release work
+
+- Experience supplies run-bound public browser/activation observations and safe screenshots; Platform integrates strict schema/allowlist validation and retention in evidence packets. Actual bindings, counts, cents and receipt identities must survive disposal of test databases. Passing test names alone are insufficient. See the [V3 packet finding](../2026-11-08/reviews/platform-v3-v4-9680b05-review.md).
+- Platform integrates accepted owner changes and obtains exact-candidate independent review. Machine checks, independent review, full slice acceptance and joint user acceptance remain separate.
+- CI requires account/operator follow-up. Latest observed PR40 workflow `42777912197` at `ae350c0` ended `startup_failure`; the earlier inspected workflow `42777441189` had zero jobs. No CI pass is claimed, and no billing/settings change has been made. Recheck current runs before making a later status claim.
+- User-provided live access is needed only after the offline transport/configuration boundaries are ready. Optional V8 repair/version switching is a later assignment, not a prerequisite silently added to mandatory V0–V7.
+
+## Next execution order
+
+1. Platform prepares the bounded PR39 repair plan. Discovery can correct Gate J and transport independently. Experience can close existing reviewer browser/wording gaps.
+2. Platform publishes remaining capability/grant and operations contracts; consumers implement only the released scope. Continue capture/application scheduling after accepted atomic application.
+3. Run genuine construction and AI-off synchronization, then the complete crash/replay/revocation/drift matrix.
+4. Complete V7 rehearsals, independent final review and joint acceptance.
+
+## Recorded evidence and continuation safeguards
+
+- Post-merge unit suite: 555 tests / 79 files passed. Fixture storage candidate `62a76be9375a1e8875424ff50287eddb94f5a8ec`: 53 compiler tests and typecheck passed in both implementation and independent review. These are recorded checks, not fresh tests performed for this documentation update.
+- Actual V6 at documentation commit `b12c6fa` with an untracked review note: all eight prerequisite commands / 30 cases passed; full result correctly failed with `application-recovery-proof-unavailable`. Exact packet location and prior clean V3 evidence are in the [Platform handoff](../2026-11-08/handoffs/platform-classification-dispatch.md). Full V4/V5/V6/V7 acceptance is not established.
+- Runtime001–005 are immutable. Runtime004 SHA-256: `f232c9e552362618e785cc0bb23e847e4d7f319e0c0fae9084fb9aebc98deab7`; runtime005: `7c35563ed3504766153aa6b7706c4a448dd4c50f3f1d0203345525c215f3ef96`. Check accepted and in-flight catalogs before reserving additive DDL.
+- Continue in the isolated Platform worktree `/Users/devincheng/.codex/worktrees/platform-activation-integration/EnterpriseAgenticPaymentResolution`; preserve the original demo and other developers' worktrees. Fetch while writers/tests are active; integrate main at clean checkpoints. Check current ownership before any new source writer.
+- Use one Sol source implementer at a time and fresh Astra design/exact-candidate reviews under the existing team protocol. A task listed above does not authorize taking another owner's files. Preserve durable coordination in `.superpowers/sdd/2026-11-08-team-expansion-handoff/progress.md`.
+- Previous Platform test lease: PostgreSQL55441, control3241, worker3242, web5182, prefix `eapr_test_review_t2`, namespace `eapr_review_t2`. Reconfirm ownership and availability before reuse. Do not stop another lane's processes or database.
