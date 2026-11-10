@@ -181,7 +181,10 @@ export async function createSyncApplyFixture(runtimeThrough?: number, baselineVe
     const addSemantic = (id: string, sourceAccountId: string, revision: string) => operator.semanticChangeA(operatorToken, {
       id, accountId: sourceAccountId, revision, effectiveDate: '2026-10-02', observedAt: syncApplyInstant,
     });
-    return { db, owner, pair, close, source, addInvoice, addPayment, addSemantic, scopeReader: proofs.scopeReader, ...activation };
+    return {
+      db, owner, pair, close, source, operator, operatorToken, registryRoot: proofs.registryRoot,
+      addInvoice, addPayment, addSemantic, scopeReader: proofs.scopeReader, ...activation,
+    };
   } catch (error) {
     try {
       await close();

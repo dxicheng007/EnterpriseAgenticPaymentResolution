@@ -13,6 +13,7 @@ import { composeWorkerAuthority } from '../apps/worker/src/authority-composition
 import { composeWorkerActivation } from '../apps/worker/src/activation-composition.js';
 import { composeWorkerParentReads } from '../apps/worker/src/parent-read-composition.js';
 import { launchWorker } from '../apps/worker/src/server.js';
+import { composeWorkerSync } from '../apps/worker/src/sync-composition.js';
 import { createControlDb } from '../packages/storage/src/control-db.js';
 import { createRuntimeDb } from '../packages/storage/src/runtime-db.js';
 import { migrate, migrationIdentities, readMigrationCatalog } from './migrate.js';
@@ -113,6 +114,9 @@ async function serve(role: 'worker' | 'control') {
           }),
           composeWorkerAuthority({
             admissionOrigin: controlOrigin, admissionToken: required('EAPR_AUTHORITY_ADMISSION_TOKEN'),
+            source: { origin: controlOrigin, token: sourceReadToken, sourceRefs },
+          }),
+          composeWorkerSync({
             source: { origin: controlOrigin, token: sourceReadToken, sourceRefs },
           }),
         ],

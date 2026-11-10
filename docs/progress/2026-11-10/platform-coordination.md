@@ -452,3 +452,9 @@ The designated integration worktree was clean at `7de9366c8543ba4ae9c455006e55c7
 Fresh Astra `t1_t2_design` is read-only against that base, preparing actual composition seams, narrow operator transport, exact owned paths and test criteria. No source/SQL/service implementation lease is released. Integrator owns only this coordination file and the shared board during design. Sol implementation and fresh Astra candidate review follow the accepted design. General selector, scheduling, grants and live construction remain deferred.
 
 Latest PR44/46 comments contain no new owner replies. Latest CI runs `42873005041`, `42872902546`, `42872595578` all report startup failure; no CI acceptance.
+
+## PR56 arrives at the Task 1 boundary
+
+Periodic fetch found externally merged PR56 at `49245de4832d4d41f9cb9d28ac74fda42e92cfb4`, adding authenticated worker-private `/internal/apply` and supervisor mount. Sol Task1 was held immediately; only an empty untracked `apps/worker/src/demo-sync.ts` exists, with no tests/DB/commits or source content changes. Main is integrated before resetting the implementation base; the sole board conflict preserves PR56's partial proof and existing PR54 acceptance. Fresh Astra is reconciling remaining T2 orchestration to reuse PR56. Upstream uses non-T0 activation-policy seed and in-process observe/capture; exact operator chain, durable receipt recovery and full V5/V6 are not implied.
+
+Owner communications: Experience T3/T4/T8 request comment6775785377 and exact read-model agreement6775915071 on PR44; source-wrapper notification6775854070 on PR46.
