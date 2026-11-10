@@ -1,8 +1,22 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, expect, test, vi } from 'vitest';
-import { ActivationOutcomeView, ReviewPackageView } from '../../../apps/web/src/features/connections/ReviewPage.js';
+import {
+  ActivationOutcomeView,
+  ReviewPackageView,
+  ReviewPage,
+  approvalStorageKey,
+  authorizedAccountId,
+  canApproveReview,
+  clearApproval,
+  loadSavedApproval,
+  nextApprovalRequest,
+  saveApproval,
+  staleError,
+  type ApprovalStorage,
+} from '../../../apps/web/src/features/connections/ReviewPage.js';
 import { ReviewPackageSchema, type ReviewPackage } from '../../contracts/src/review.js';
+import type { LocalSession } from '../src/session.js';
 import { clearCsrfToken, LocalApiError, setCsrfToken } from '../src/http.js';
 import { activateReview, activationRequestFor, prepareReview, readReview } from '../src/review.js';
 
@@ -10,6 +24,25 @@ afterEach(() => {
   clearCsrfToken();
   vi.unstubAllGlobals();
 });
+
+function memoryStorage(): ApprovalStorage & { values: Map<string, string> } {
+  const values = new Map<string, string>();
+  return {
+    values,
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => { values.set(key, value); },
+    removeItem: key => { values.delete(key); },
+  };
+}
+
+function reviewerSession(allowedAccountIds: string[]): LocalSession {
+  return {
+    demoOnly: true,
+    reviewer: { sessionId: 'session-a', reviewerId: 'demo-reviewer' },
+    allowedSourceRefs: ['legacy-a'],
+    allowedAccountIds,
+  };
+}
 
 const hash = (char: string) => char.repeat(64);
 const scope = { companyId: 'company-a', sellerEntityId: 'seller-a', accountId: 'account-a' };
@@ -98,4 +131,82 @@ test('package view shows exact hashes, blockers and withholds ready wording; rec
     outcome: { state: 'applied', receipt: receipt as never, replayed: true } }));
   expect(applied).toContain('replayed');
   expect(applied).toContain('$800.00');
+});
+
+test('staleError treats STALE_REVIEW like REVIEW_STALE and ignores other failures', () => {
+  expect(staleError(new LocalApiError(409, 'STALE_REVIEW', 'stale'))).toBe(true);
+  expect(staleError(new LocalApiError(409, 'REVIEW_STALE', 'stale'))).toBe(true);
+  expect(staleError(new LocalApiError(409, 'ACTIVATION_POLICY_MISMATCH', 'mismatch'))).toBe(true);
+  expect(staleError(new LocalApiError(409, 'FINANCIAL_ATTESTATION_MISMATCH', 'mismatch'))).toBe(true);
+  expect(staleError(new LocalApiError(409, 'OTHER', 'nope'))).toBe(false);
+  expect(staleError(new LocalApiError(400, 'STALE_REVIEW', 'wrong status'))).toBe(false);
+  expect(staleError(new Error('nope'))).toBe(false);
+});
+
+test('approval storage round-trips the same idempotency key for the same package and never auto-activates', () => {
+  const storage = memoryStorage();
+  const pkg = reviewPackage();
+  const request = activationRequestFor(pkg, 'key-keep');
+  const fetchMock = vi.fn();
+  vi.stubGlobal('fetch', fetchMock);
+
+  saveApproval('account-a', request, storage);
+  expect(storage.values.get(approvalStorageKey('account-a'))).toContain('key-keep');
+  expect(loadSavedApproval('account-a', pkg, storage)).toEqual(request);
+  expect(loadSavedApproval('account-a', reviewPackage({ hash: hash('9') }), storage)).toBeUndefined();
+  expect(loadSavedApproval('account-a', reviewPackage({ id: 'package-b' }), storage)).toBeUndefined();
+  expect(nextApprovalRequest(pkg, loadSavedApproval('account-a', pkg, storage), () => 'key-new'))
+    .toMatchObject({ idempotencyKey: 'key-keep' });
+  clearApproval('account-a', storage);
+  expect(loadSavedApproval('account-a', pkg, storage)).toBeUndefined();
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+test('canApprove stays disabled through load, busy, stale, and failed refresh until a successful replacement', () => {
+  const pkg = reviewPackage();
+  expect(canApproveReview({ reviewPackage: pkg, loading: true, busy: false, stale: true })).toBe(false);
+  expect(canApproveReview({ reviewPackage: pkg, loading: false, busy: true, stale: true })).toBe(false);
+  expect(canApproveReview({ reviewPackage: pkg, loading: false, busy: false, stale: true })).toBe(false);
+  expect(canApproveReview({
+    reviewPackage: pkg, loading: false, busy: false, stale: false,
+    outcome: { state: 'applied', receipt: receipt as never, replayed: false },
+  })).toBe(false);
+  expect(canApproveReview({ reviewPackage: pkg, loading: false, busy: false, stale: false })).toBe(true);
+  expect(canApproveReview({
+    reviewPackage: reviewPackage({
+      ready: false,
+      diagnostics: [{ code: 'UNSUPPORTED_TERM', severity: 'blocker', message: 'Unsupported', sourceIds: [], fieldPaths: [] }],
+    }),
+    loading: false, busy: false, stale: false,
+  })).toBe(false);
+});
+
+test('retrying approval reuses the saved key instead of minting another', () => {
+  const pkg = reviewPackage();
+  const saved = activationRequestFor(pkg, 'key-original');
+  const first = nextApprovalRequest(pkg, saved, () => 'key-other');
+  const second = nextApprovalRequest(pkg, first, () => 'key-other-2');
+  expect(first.idempotencyKey).toBe('key-original');
+  expect(second.idempotencyKey).toBe('key-original');
+  expect(nextApprovalRequest(pkg, undefined, () => 'key-fresh').idempotencyKey).toBe('key-fresh');
+});
+
+test('ReviewPage drops unauthorized selection when session grants change', () => {
+  expect(authorizedAccountId('account-a', ['account-a', 'account-b'])).toBe('account-a');
+  expect(authorizedAccountId('account-a', ['account-b'])).toBe('');
+  expect(authorizedAccountId('account-a', [])).toBe('');
+
+  const withGrant = renderToStaticMarkup(createElement(ReviewPage, {
+    session: reviewerSession(['account-a', 'account-b']),
+  }));
+  expect(withGrant).toContain('account-a');
+  expect(withGrant).toContain('account-b');
+  expect(withGrant).not.toContain('No accounts are authorized');
+
+  const renewed = renderToStaticMarkup(createElement(ReviewPage, {
+    session: reviewerSession(['account-b']),
+  }));
+  expect(renewed).toContain('account-b');
+  expect(renewed).not.toContain('>account-a<');
+  expect(authorizedAccountId('account-a', ['account-b'])).toBe('');
 });
