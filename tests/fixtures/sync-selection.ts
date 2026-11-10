@@ -129,6 +129,7 @@ async function authorOriginals({ visibleRoot, truthRoot }: Roots) {
     'package-lock.json', 'packages/sources/src/canonical-fixtures.ts',
     'packages/sources/src/company-a.ts', 'tests/fixtures/sync-selection.ts',
     'tests/fixtures/sync-selection-enrollment.ts',
+    'tests/fixtures/sync-selection-reviewer.ts',
   ].toSorted();
   const buildHash = hashCanonical(await Promise.all(generatorPaths.map(async path => ({
     path, sha256: hashBytes(await readFile(join(repositoryRoot, path))),
