@@ -183,7 +183,7 @@ export async function createSyncApplyFixture(runtimeThrough?: number, baselineVe
     });
     return {
       db, owner, pair, close, source, operator, operatorToken, registryRoot: proofs.registryRoot,
-      addInvoice, addPayment, addSemantic, scopeReader: proofs.scopeReader, ...activation,
+      addInvoice, addPayment, addSemantic, dependencies: proofs.dependencies, scopeReader: proofs.scopeReader, ...activation,
     };
   } catch (error) {
     try {
