@@ -68,7 +68,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T1 — Platform: mount post-activation apply for one authorized customer
 
-**Status:** partial — atomic writer prerequisites are accepted at `7e49e552` (PR48/main); product/demo mount and isolated end-to-end proof remain. Platform continuation `codex/platform-company-a-demo-mount` starts at current main `7de9366c8543ba4ae9c455006e55c70af16e33fd`. Fresh Astra T1/T2 design is dispatched read-only; no source/SQL/service lease released yet. Do not rebuild P1 or require the general multi-customer selector/journal merely to stage the bounded one-customer demo.
+**Status:** partial — atomic writer prerequisites are accepted at `7e49e552` (PR48/main); product/demo mount and isolated end-to-end proof remain. Platform continuation `codex/platform-company-a-demo-mount` starts at current main `7de9366c8543ba4ae9c455006e55c70af16e33fd`. Fresh Astra design and independent review are complete with binding recovery corrections. Task 1 worker orchestration is released to one Sol writer under the [bounded plan](2026-11-10-company-a-demo-mount.md); transports/supervisor await its acceptance. Do not rebuild P1 or require the general multi-customer selector/journal merely to stage the bounded one-customer demo.
 **Lane:** Platform  
 **Depends on:** accepted activation grant (A5 import), classification pin, current-authority fence, capture inbox facts for the chosen transport  
 **Outcome:** Worker can take already-captured conforming deliveries for one enrolled customer and atomically apply a nonempty financial unit with an authoritative sync receipt, without model calls.  
@@ -78,7 +78,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T2 — Platform: post-activation injection + capture path for the demo event
 
-**Status:** design in progress with T1 at base `7de9366`; existing internal capture is reusable. Exact Company A event is frozen by T0; operator transport and owned paths await the bounded design. No implementation acceptance yet.
+**Status:** bounded design reviewed with T1 at base `7de9366`; existing internal capture is reusable. Exact Company A event is frozen by T0; fixed operator HTTP transport and owned paths are specified by the bounded plan; transport implementation waits for Task 1 acceptance. No implementation acceptance yet.
 **Lane:** Platform (sources/worker composition as reserved)  
 **Depends on:** T1 or a jointly agreed temporary harness seam owned by Integrator  
 **Outcome:** A controlled way to introduce one new Company A API (and optionally later Company B) event after activation and durably capture it into the inbox the applier consumes.  
@@ -200,6 +200,6 @@ Parallelism that is usually safe after T0:
 
 PR54 merged at `7de9366c8543ba4ae9c455006e55c70af16e33fd`; its complete tree equals reviewed continuation head `01bc534`. PR55/T0 is already merged. On November 10 the integrator checked the clean designated worktree and pulled main (already current), then created `codex/platform-company-a-demo-mount`. The original demo checkout and database remain preserved.
 
-Fresh Astra is designing only the narrow T1/T2 Company A mount/injection against that exact base. Integrator owns board/coordination documents; no implementation source/SQL/service writer has been released. Once design and paths are frozen, one Sol implementer will own the source and isolated tests, followed by fresh Astra exact-candidate review. Latest inspected CI runs `42873005041`, `42872902546`, and `42872595578` report startup failure; no green CI claim is made.
+Fresh Astra design and independent review freeze the narrow T1/T2 mount; required receipt recovery corrections are incorporated. Integrator owns board/coordination documents; the sole Sol Task 1 source writer receives only its six plan-listed paths and isolated test lease. Once design and paths are frozen, one Sol implementer will own the source and isolated tests, followed by fresh Astra exact-candidate review. Latest inspected CI runs `42873005041`, `42872902546`, and `42872595578` report startup failure; no green CI claim is made.
 
 General multi-customer capture/history selection, dependency journal/application scheduling, Discovery Gate J/live construction, and the explicit proposed-scope grant workflow remain preserved follow-on work, with their accepted designs/reviews and unresolved owner contracts. They are not new blocking requirements for this board's one-customer pregenerated AI-off demo. The user's explicit read/verification grant decision remains binding if that workflow is later implemented; no automatic grant is permitted. See [Platform coordination](../../progress/2026-11-10/platform-coordination.md) for exact source ownership, reviews, policy decision and delivered requests.
