@@ -6,7 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { createServer } from 'vite';
 import { launchControl, createWorkerClient, type ControlServices } from '../apps/control/src/server.js';
+import type { ActivationWorkerClient } from '../apps/control/src/activation-worker-client.js';
 import { createParentReadClient } from '../apps/control/src/parent-read-client.js';
+import { composeWorkerActivation } from '../apps/worker/src/activation-composition.js';
 import { composeWorkerParentReads } from '../apps/worker/src/parent-read-composition.js';
 import { launchWorker } from '../apps/worker/src/server.js';
 import { createControlDb } from '../packages/storage/src/control-db.js';
@@ -25,11 +27,12 @@ function shutdownSignal(): Promise<void> {
   return Promise.race([once(process, 'SIGINT'), once(process, 'SIGTERM'), once(process, 'disconnect')]).then(() => {});
 }
 
+const policyPath = fileURLToPath(new URL('../.local/activation-policy/current.json', import.meta.url));
 const registryRoot = fileURLToPath(new URL('../.local/artifacts', import.meta.url));
 
 async function localFeaturePlugins(
   db: ControlServices['db'], clock: ControlServices['clock'], expectedMigrations: ReturnType<typeof migrationIdentities>,
-  parentReads: ReturnType<typeof createParentReadClient>,
+  parentReads: ReturnType<typeof createParentReadClient>, worker: ActivationWorkerClient,
 ) {
   const { safeVerificationPins } = await import('../apps/control/src/verification-composition.js');
   const { createLocalComposition } = await import('../apps/control/src/composition.js');
@@ -41,6 +44,13 @@ async function localFeaturePlugins(
   })).parse(JSON.parse(required('EAPR_DEMO_CAPTURES')));
   const store = await createEvidenceStore(required('EAPR_DEMO_EVIDENCE_ROOT'));
   const webOrigin = 'http://127.0.0.1:' + localPort('EAPR_WEB_PORT', 5173);
+  const evidencePinRoot = fileURLToPath(new URL('../.local/protected-evaluator', import.meta.url));
+  const servedRoots = [
+    resolve(required('EAPR_DEMO_EVIDENCE_ROOT')),
+    fileURLToPath(new URL('../.local/demo/visible', import.meta.url)),
+    fileURLToPath(new URL('../apps/web', import.meta.url)),
+    registryRoot,
+  ];
   let verificationSetupDiagnostic: 'VERIFICATION_FIXTURE_SETUP_REQUIRED' | 'VERIFICATION_FIXTURE_CONFLICT' | undefined;
   let verification;
   const code = process.env.EAPR_VERIFICATION_SETUP_CODE;
@@ -51,15 +61,7 @@ async function localFeaturePlugins(
       verification = {
         pins: safeVerificationPins.parse(JSON.parse(process.env.EAPR_VERIFICATION_PINS)),
         registryRoot,
-        roots: {
-          evidencePinRoot: fileURLToPath(new URL('../.local/protected-evaluator', import.meta.url)),
-          servedRoots: [
-            resolve(required('EAPR_DEMO_EVIDENCE_ROOT')),
-            fileURLToPath(new URL('../.local/demo/visible', import.meta.url)),
-            fileURLToPath(new URL('../apps/web', import.meta.url)),
-            registryRoot,
-          ],
-        },
+        roots: { evidencePinRoot, servedRoots },
         expectedMigrations,
       };
     } catch {
@@ -68,6 +70,16 @@ async function localFeaturePlugins(
   }
   return (await createLocalComposition({ db, clock, store }, {
     webOrigin, captures, verification, verificationSetupDiagnostic, parentReads,
+    sourceReadToken: required('EAPR_SOURCE_READ_TOKEN'),
+    activationReview: {
+      registryRoot,
+      policyPath, worker,
+      selectionPath: process.env.EAPR_REVIEW_SELECTION_FILE,
+      bootstrapRoots: {
+        evidencePinRoot, servedRoots,
+        sidecarRoot: fileURLToPath(new URL('../.local/protected-bootstrap', import.meta.url)),
+      },
+    },
     registry: createCandidateRegistry(db, registryRoot),
   })).featurePlugins;
 }
@@ -85,12 +97,20 @@ async function serve(role: 'worker' | 'control') {
     const workerOrigin = 'http://127.0.0.1:' + workerPort;
     const app = role === 'worker'
       ? await launchWorker({
-          db: pool, clock, serviceToken, expectedMigrations, featurePlugins: [composeWorkerParentReads(registryRoot)],
+          db: pool, clock, serviceToken, expectedMigrations, featurePlugins: [
+            composeWorkerParentReads(registryRoot),
+            composeWorkerActivation({
+              registryRoot, policyPath, sourceOrigin: 'http://127.0.0.1:' + localPort('EAPR_CONTROL_PORT', 3001),
+              sourceReadToken: required('EAPR_SOURCE_READ_TOKEN'),
+              sourceRefs: z.array(z.string()).parse(JSON.parse(required('EAPR_SOURCE_READ_REFS'))),
+            }),
+          ],
         }, workerPort)
       : await launchControl({
           db: pool, clock, expectedMigrations,
           featurePlugins: await localFeaturePlugins(pool, clock, expectedMigrations,
-            createParentReadClient(workerOrigin, serviceToken, registryRoot)),
+            createParentReadClient(workerOrigin, serviceToken, registryRoot),
+            (await import('../apps/control/src/activation-worker-client.js')).createActivationWorkerClient(workerOrigin, serviceToken)),
           workerClient: createWorkerClient(workerOrigin, serviceToken),
         }, localPort('EAPR_CONTROL_PORT', 3001));
     try {
@@ -125,6 +145,7 @@ async function runLocal() {
   await migrate(db);
   await seed(db);
 
+  const { localSourceCatalog } = await import('../apps/control/src/composition.js');
   const { loadDemo } = await import('./load-demo.js');
   const { prepareSelectedVerificationPins, VerificationSetupError } = await import('./prepare-verification.js');
   const { createEvidenceStore } = await import('@eapr/evidence');
@@ -153,6 +174,7 @@ async function runLocal() {
     await controlDb.end();
   }
 
+  const sourceReadToken = randomBytes(32).toString('hex');
   const serviceToken = randomBytes(32).toString('hex');
   const controlPort = localPort('EAPR_CONTROL_PORT', 3001);
   const workerPort = localPort('EAPR_WORKER_PORT', 3002);
@@ -176,9 +198,14 @@ async function runLocal() {
   }
   try {
     const workerAccess = { EAPR_SERVICE_TOKEN: serviceToken, EAPR_WORKER_PORT: String(workerPort) };
-    await start('worker', { ...workerAccess, RUNTIME_DATABASE_URL: db.runtime.appUrl });
+    await start('worker', {
+      ...workerAccess, RUNTIME_DATABASE_URL: db.runtime.appUrl, EAPR_CONTROL_PORT: String(controlPort),
+      EAPR_SOURCE_READ_TOKEN: sourceReadToken,
+      EAPR_SOURCE_READ_REFS: JSON.stringify([...localSourceCatalog.values()].map(source => source.sourceRef)),
+    });
     await start('control', {
       ...workerAccess, ...verificationEnv, CONTROL_DATABASE_URL: db.control.appUrl, EAPR_CONTROL_PORT: String(controlPort),
+      EAPR_SOURCE_READ_TOKEN: sourceReadToken, EAPR_REVIEW_SELECTION_FILE: process.env.EAPR_REVIEW_SELECTION_FILE,
       EAPR_WEB_PORT: String(webPort), EAPR_DEMO_EVIDENCE_ROOT: evidenceRoot, EAPR_DEMO_CAPTURES: JSON.stringify(captures),
     });
     // Vite installs its own process signal handler. Keep it outside the supervising process.

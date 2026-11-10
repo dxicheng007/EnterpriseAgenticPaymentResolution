@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./discovery-verification": "./src/discovery-verification.ts",
     "./financial-attestation-registry": "./src/financial-attestation-registry.ts",
     "./financial-attestation-jobs": "./src/financial-attestation-jobs.ts",
     "./financial-attestation-launcher": "./src/financial-attestation-launcher.ts",
