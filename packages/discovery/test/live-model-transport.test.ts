@@ -78,6 +78,24 @@ it('fails closed on non-OK provider responses', async () => {
   }).run(turn())).rejects.toThrow('MODEL_PROVIDER_ERROR');
 });
 
+it('maps malformed tool-call arguments to MODEL_PROVIDER_ERROR', async () => {
+  await expect(createLiveModelTransport({
+    configured: true, modelId: 'gpt-test', baseUrl: 'https://example.test/v1', apiKey: 'secret',
+    fetch: vi.fn().mockResolvedValue(Response.json({
+      id: 'chatcmpl-bad',
+      choices: [{
+        finish_reason: 'tool_calls',
+        message: {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'describeSource', arguments: '{' } }],
+        },
+      }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    })) as typeof fetch,
+  }).run(turn())).rejects.toThrow('MODEL_PROVIDER_ERROR');
+});
+
 it('keeps product env reads out of the transport module', () => {
   const source = readFileSync(fileURLToPath(new URL('../src/live-model-transport.ts', import.meta.url)), 'utf8');
   expect(source).not.toMatch(/process\.env|OPENAI_|ANTHROPIC_|EAPR_MODEL_/);
