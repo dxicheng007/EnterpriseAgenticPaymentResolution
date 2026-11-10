@@ -59,7 +59,11 @@ async function counts() {
 }
 
 async function reset() {
-  await admin.query('TRUNCATE ' + tables.filter(table => table !== 'activity_counter').join(', '));
+  const captureDependents = [
+    'runtime_capture_lanes', 'runtime_capture_checkpoints', 'runtime_source_positions',
+    'runtime_capture_pages', 'runtime_inbox', 'runtime_capture_incidents',
+  ];
+  await admin.query('TRUNCATE ' + [...tables.filter(table => table !== 'activity_counter'), ...captureDependents].join(', '));
   await admin.query('UPDATE activity_counter SET sequence = 0');
 }
 

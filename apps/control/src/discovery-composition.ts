@@ -13,6 +13,7 @@ import {
 import type { ModelClient } from '../../../packages/discovery/src/model.js';
 import { discoveryError } from '../../../packages/discovery/src/repository.js';
 import { createDiscoveryService } from '../../../packages/discovery/src/service.js';
+import type { DiscoveryVerificationDeps } from '../../../packages/discovery/src/supervisor.js';
 import type { CaptureFacts } from '../../../packages/discovery/src/tasks.js';
 import { readDiscoveryCaptureContents } from '../../../packages/sources/src/discovery-reads.js';
 import { aggregateHash, readSnapshot } from '../../../packages/sources/src/dossier.js';
@@ -138,8 +139,11 @@ export function composeDiscovery(options: {
   modelClient?: ModelClient;
   registerCandidate?: CompileRegisterCandidate;
   getArtifact?: ReplayGetArtifact;
+  verification?: DiscoveryVerificationDeps;
 }): FastifyPluginAsync<Omit<UploadDependencies, 'store'>> {
-  const { catalog, store, reviewer, authorizeReviewer, modelClient, registerCandidate, getArtifact } = options;
+  const {
+    catalog, store, reviewer, authorizeReviewer, modelClient, registerCandidate, getArtifact, verification,
+  } = options;
   return async (app, { db, clock }) => {
     const service = await createDiscoveryService({
       db, clock, modelClient,
@@ -152,6 +156,7 @@ export function composeDiscovery(options: {
         ...(getArtifact ? { getArtifact } : {}),
         constructionCapture: selection => readConstructionCapture({ db, store }, catalog, selection),
       } : {}),
+      ...(verification ? { verification } : {}),
       resolveAuthority(reviewerId, { companyId, sourceRef }) {
         if (reviewerId !== reviewer.reviewerId || catalog.get(companyId)?.sourceRef !== sourceRef ||
             !reviewer.allowedSourceRefs.includes(sourceRef)) return;

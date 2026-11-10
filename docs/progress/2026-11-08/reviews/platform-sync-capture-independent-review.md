@@ -1,0 +1,26 @@
+# Independent exact-candidate capture review
+
+Reviewed base `44bed0c0dc91d0361bf399a6463ace7eeca05afd` through candidate `efce3de8e83b6003e2eac8185b26820c2ef3351a` using the supplied exact review package, binding task brief, builder report, and applicable repository/area guidance. Root's later worktree changes are not part of this review.
+
+**Spec verdict: PASS for the assigned API/semantic capture phase.**
+
+**Quality verdict: PASS.** No actionable P0–P3 findings identified; no corrective changes requested.
+
+## Reviewed boundaries and evidence
+
+- Committed initialization resolves the exact scope, activation ID and bundle hash through the existing canonical A5 reader. It independently checks the full baseline event membership, contiguous sequences, hashes, manifest vectors and stream-content preimage. CSV in either the artifact or manifest rejects the entire lane before capture writes. Shared-lane reopening preserves provenance and progress without requiring the second activation ID to equal the first.
+- Initialization acquires the lane lock, complete stream-key group, then complete baseline delivery-key group. Page capture takes its checkpoint row, global stream key and complete delivery-key group in compatible order. Existing shared parent lock helpers provide the delivery identity keys and deterministic ordering. Initialization never takes an existing checkpoint lock after stream/delivery locks. The global stream lock serializes different event IDs competing for one source position across lanes.
+- All touched delivery canonical bytes, digests, content hashes and source positions are checked before a stale return. A changed overlap conflicts; a harmless longer stale page returns refetch without inserting its suffix. Exact page replay returns the current committed checkpoint. Empty pages do not consume an immutable page boundary. Accepted page reads validate canonical content and exact inbox/delivery membership.
+- Nonempty capture inserts delivery facts, positions, page and inbox rows, advances the checkpoint through a cursor CAS, and publishes sanitized activity on the same transaction client. Activity is last. Incidents are recorded only after rollback in a separate transaction, deduplicated without changing their original timestamp, and contain bounded safe IDs and hashes. Incident-write failure returns unavailable. Progress uses one SQL statement snapshot with validated lane bindings, counters and historical incident data.
+- The strict DTOs enforce sorted unique streams/incident IDs, safe counters/cursors, timestamp/count consistency and disposition invariants. Additive runtime003 supplies the specified global and lane keys, foreign keys, canonical projections, immutable triggers and restricted grants; only three checkpoint columns are updatable by the application role. Existing migrations are unchanged in this patch.
+- Production capture code receives only the runtime pool and pages. It adds no model, SDK, key, protected evaluator, source client or control-database dependency. The Clock import is type-only. Capture writes are limited to the six new tables, immutable runtime delivery facts and activity. There are no parent, target, snapshot, activation-import, initial-receipt, economic-outcome or delivery-outcome writes.
+- Test setup uses real proof producers, installed policy, explicit authenticated reviewer approval and actual worker activation; it does not fabricate committed activation history. The additional public synthetic fixture changes both original evidence and independent expected facts before verification. The second manifest has its own semantic baseline while each activation remains an A5 first activation. Tests cover shared-lane reopening, cross-lane identity/position races, stale losers, rollback, restart, raw unknown-account/schema capture, historical incidents, canonical corruption and application-role restrictions.
+- The evaluator edits are limited to build closure membership and mutation coverage for the new contracts leaf. The parent-storage edit is limited to the explicitly reserved disposable TRUNCATE dependency list.
+
+## Verification limits
+
+This reviewer read the exact patch and performed targeted read-only checks of the existing committed reader, canonical helpers, source envelope/hash preimage, shared lock helpers, transaction helper and activity publisher. No test suite or database operation was run, respecting the root's active database lease.
+
+Machine execution is attributed to the supplied builder report: typecheck passed; 25 focused unit tests passed; the initial combined integration run passed 21 capture cases and one V3 activation case but failed 26 parent-storage cases at their obsolete disposable reset. After the reserved reset maintenance, all 48 capture/parent-storage cases passed. Root separately reported 464 passing full unit tests. These are reported machine results, not execution independently reproduced by this reviewer.
+
+This approval applies only to the bounded internal, unmounted API/semantic capture implementation. It does not establish CSV capture, polling, monetary application, current authority/control, UI connection state, V5/V6, both-source AI-off synchronization, live construction, or joint user acceptance.

@@ -9,7 +9,7 @@ export const financialBuildSources = Object.freeze([
   ...[
     'activation-authority', 'activation-authority-hash', 'activation-bundle-v2', 'activity', 'bootstrap-verification',
     'bootstrap-verification-hash', 'canonical', 'common', 'connector', 'discovery-helpers', 'discovery-tools',
-    'discovery', 'evidence', 'index', 'local-demo', 'model', 'review', 'runtime', 'source-coverage', 'source',
+    'discovery', 'evidence', 'index', 'local-demo', 'model', 'review-details', 'review', 'runtime', 'source-coverage', 'source', 'sync-capture',
   ].map(name => 'packages/contracts/src/' + name + '.ts'),
   ...[
     'financial-attestation-protocol', 'financial-attestation-runner', 'financial-attestation-evaluator',

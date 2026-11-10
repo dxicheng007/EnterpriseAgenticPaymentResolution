@@ -1,5 +1,5 @@
 import type { Id, ModelResultV2, ModelTurnV2 } from '../../contracts/src/index.js';
-import { modelLimits, type ModelClient } from './model.js';
+import { exceedsModelCeilings, type ModelClient } from './model.js';
 
 export type OfflineLiveModelOptions = {
   configured: boolean;
@@ -12,17 +12,6 @@ export type OfflineLiveModelOptions = {
   result?: ModelResultV2;
 };
 
-function exceedsCeilings(
-  tokens: { input: number; output: number },
-  limits: ModelTurnV2['limits'],
-): boolean {
-  // Deterministic policy meter only; not claimed provider billing.
-  return tokens.input > limits.maxInputTokens
-    || tokens.output > limits.maxOutputTokens
-    || tokens.input > modelLimits.maxInputTokens
-    || tokens.output > modelLimits.maxOutputTokens;
-}
-
 /** Offline live ModelClient. Options are Discovery stub knobs, not product env secrets. */
 export function offlineLiveModel(options: OfflineLiveModelOptions): ModelClient {
   const { configured, modelId, hangUntilAbort, hangUntil, preflightTokens, result } = options;
@@ -33,7 +22,7 @@ export function offlineLiveModel(options: OfflineLiveModelOptions): ModelClient 
       if (!configured) {
         throw new Error('MODEL_UNCONFIGURED');
       }
-      if (preflightTokens && exceedsCeilings(preflightTokens, turn.limits)) {
+      if (preflightTokens && exceedsModelCeilings(preflightTokens, turn.limits)) {
         throw new Error('MODEL_BUDGET_EXCEEDED');
       }
       if (hangUntilAbort) {
