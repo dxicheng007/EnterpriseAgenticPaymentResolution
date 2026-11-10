@@ -62,6 +62,7 @@ async function reset() {
   const captureDependents = [
     'runtime_capture_lanes', 'runtime_capture_checkpoints', 'runtime_source_positions',
     'runtime_capture_pages', 'runtime_inbox', 'runtime_capture_incidents',
+    'runtime_authority_commands', 'runtime_authority_heads',
   ];
   await admin.query('TRUNCATE ' + [...tables.filter(table => table !== 'activity_counter'), ...captureDependents].join(', '));
   await admin.query('UPDATE activity_counter SET sequence = 0');
