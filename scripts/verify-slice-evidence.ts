@@ -216,18 +216,24 @@ export function v4GateOutcome(
   };
 }
 
-export function v5ExitCode(
-  commands: readonly ReturnType<typeof commandResult>[], diagnostics: readonly string[], chromium?: string,
-) {
-  return commands.length === 5 && commands.every(command => command.result === 'passed') &&
-    diagnostics.length === 0 && chromium ? 0 : 1;
-}
+const syncPrerequisites = {
+  V5: { commandCount: 5, unavailable: 'ai-off-sync-proof-unavailable' },
+  V6: { commandCount: 8, unavailable: 'application-recovery-proof-unavailable' },
+} as const;
 
-export function v6ExitCode(
+export function syncGateOutcome(
+  slice: keyof typeof syncPrerequisites,
   commands: readonly ReturnType<typeof commandResult>[], diagnostics: readonly string[], chromium?: string,
 ) {
-  return commands.length === 8 && commands.every(command => command.result === 'passed') &&
-    diagnostics.length === 0 && chromium ? 0 : 1;
+  const { commandCount, unavailable } = syncPrerequisites[slice];
+  const prerequisitesPassed = commands.length === commandCount && commands.every(command => command.result === 'passed') &&
+    diagnostics.length === 0 && Boolean(chromium);
+  return {
+    prerequisiteResult: prerequisitesPassed ? 'passed' as const : 'failed' as const,
+    diagnostics: [...diagnostics, unavailable],
+    result: 'failed' as const,
+    exitCode: 1,
+  };
 }
 
 export function v7GateOutcome(

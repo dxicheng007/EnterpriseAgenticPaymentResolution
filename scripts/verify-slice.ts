@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { hashBytes, hashCanonical } from '../packages/contracts/src/canonical.js';
 import {
   chromiumVersion, collectScreenshots, commandResult, normalizeReport, v1ExitCode, v3ExitCode,
-  v4GateOutcome, v5ExitCode, v6ExitCode, v7GateOutcome,
+  syncGateOutcome, v4GateOutcome, v7GateOutcome,
 } from './verify-slice-evidence.js';
 
 const registry = {
@@ -849,11 +849,27 @@ const requiredV5Cases = {
   'tests/integration/v5-sync.test.ts': [
     'admits standing authority for the activated customer and denies unknown accounts',
     'captures a fresh post-activation API page without parent writes or model credentials',
+    'applies a fresh invoice once, replays the receipt and fences stale input',
   ],
   'apps/worker/test/sync-dependencies.test.ts': [
     'orders providers before consumers and reports missing prerequisites',
     'cycles are explicit exceptions',
     'selection never splits a group and keeps stable order',
+    'rejects a provider index absent from the materialized dependency graph',
+    'rejects duplicate materialized input indexes',
+    'rejects invalid materialized input index -1',
+    'rejects invalid materialized input index 0.5',
+    'rejects invalid materialized input index NaN',
+    'rejects invalid materialized input index Infinity',
+    'rejects invalid materialized input index 9007199254740992',
+    'orders held provider candidates from the real classifier without releasing the hold',
+    'rejects invalid group selection limit 0',
+    'rejects invalid group selection limit -1',
+    'rejects invalid group selection limit 0.5',
+    'rejects invalid group selection limit NaN',
+    'rejects invalid group selection limit Infinity',
+    'rejects invalid group selection limit 1001',
+    'accepts a whole 1000-event group at the default and explicit limit',
     'third unresolved examination quarantines and transport backoff is bounded',
   ],
   'tests/e2e/v5-ai-off.spec.ts': [
@@ -953,7 +969,7 @@ async function verifyV5() {
         });
         const result = commandResult(command, child, file ? readV5Report(report, browser, file) : undefined);
         commands.push(result);
-        console.log('V5 ' + result.result + ' ' + command +
+        console.log('V5 prerequisite ' + result.result + ' ' + command +
           (result.diagnostics.length ? ' (' + result.diagnostics.join(', ') + ')' : ''));
       }
 
@@ -974,19 +990,18 @@ async function verifyV5() {
     }
   }
 
-  const exitCode = v5ExitCode(commands, diagnostics, chromium);
+  const { exitCode, ...outcome } = syncGateOutcome('V5', commands, diagnostics, chromium);
   const packet = {
-    schemaVersion: 1, runId, slice: 'V5', source, jointAcceptance: 'pending',
-    result: exitCode === 0 ? 'passed' : 'failed',
+    schemaVersion: 1, runId, slice: 'V5', source, independentReview: 'pending', jointAcceptance: 'pending',
+    ...outcome,
     mode: { sourceFixtures: 'development-only', model: 'disabled', database: 'native' },
     runtime: { ...runtime, chromium: chromium ? [chromium] : [] },
     contract, configuration, migrations,
-    requiredTests: registry.V5, requiredCases: requiredV5Cases, commands, screenshots: [], diagnostics,
+    requiredTests: registry.V5, prerequisiteCases: requiredV5Cases, commands, screenshots: [],
     authenticatedTrace: 'disabled',
     limitations: [
       'Development sources only',
-      'Monetary apply / Connections UI and joint G5 acceptance remain pending',
-      'Independent review pending',
+      'End-to-end AI-off synchronization across both source modes remains unverified',
     ],
   };
   const write = (file: string, value: unknown) =>
@@ -995,7 +1010,7 @@ async function verifyV5() {
   write('assertions.json', commands.flatMap(command => command.cases));
   write('manifest.json', packet);
   console.log('V5 verification ' + packet.result + '. Evidence: ' + relative(process.cwd(), evidence));
-  if (diagnostics.length) console.error('V5 diagnostics: ' + diagnostics.join(', '));
+  console.error('V5 diagnostics: ' + packet.diagnostics.join(', '));
   process.exitCode = exitCode;
 }
 
@@ -1108,7 +1123,7 @@ async function verifyV6() {
         });
         const result = commandResult(command, child, file ? readV6Report(report, browser, file) : undefined);
         commands.push(result);
-        console.log('V6 ' + result.result + ' ' + command +
+        console.log('V6 prerequisite ' + result.result + ' ' + command +
           (result.diagnostics.length ? ' (' + result.diagnostics.join(', ') + ')' : ''));
       }
 
@@ -1129,19 +1144,18 @@ async function verifyV6() {
     }
   }
 
-  const exitCode = v6ExitCode(commands, diagnostics, chromium);
+  const { exitCode, ...outcome } = syncGateOutcome('V6', commands, diagnostics, chromium);
   const packet = {
-    schemaVersion: 1, runId, slice: 'V6', source, jointAcceptance: 'pending',
-    result: exitCode === 0 ? 'passed' : 'failed',
+    schemaVersion: 1, runId, slice: 'V6', source, independentReview: 'pending', jointAcceptance: 'pending',
+    ...outcome,
     mode: { sourceFixtures: 'development-only', model: 'disabled', database: 'native' },
     runtime: { ...runtime, chromium: chromium ? [chromium] : [] },
     contract, configuration, migrations,
-    requiredTests: registry.V6, requiredCases: requiredV6Cases, commands, screenshots: [], diagnostics,
+    requiredTests: registry.V6, prerequisiteCases: requiredV6Cases, commands, screenshots: [],
     authenticatedTrace: 'disabled',
     limitations: [
       'Development sources only',
-      'Monetary apply / Connections UI and joint G6 acceptance remain pending',
-      'Independent review pending',
+      'Application crash recovery, concurrent authority fencing, and operating drift containment remain unverified',
     ],
   };
   const write = (file: string, value: unknown) =>
@@ -1150,7 +1164,7 @@ async function verifyV6() {
   write('assertions.json', commands.flatMap(command => command.cases));
   write('manifest.json', packet);
   console.log('V6 verification ' + packet.result + '. Evidence: ' + relative(process.cwd(), evidence));
-  if (diagnostics.length) console.error('V6 diagnostics: ' + diagnostics.join(', '));
+  console.error('V6 diagnostics: ' + packet.diagnostics.join(', '));
   process.exitCode = exitCode;
 }
 

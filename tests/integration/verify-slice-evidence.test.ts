@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import {
-  chromiumVersion, collectScreenshots, commandResult, normalizeReport, v1ExitCode, v4GateOutcome, v7GateOutcome,
+  chromiumVersion, collectScreenshots, commandResult, normalizeReport, syncGateOutcome, v1ExitCode, v4GateOutcome, v7GateOutcome,
 } from '../../scripts/verify-slice-evidence.js';
 
 const root = '/repo';
@@ -275,6 +275,47 @@ test('a V4 run with every prerequisite passing still fails the full gate', () =>
   });
 });
 
+const v5Prerequisites = [
+  'npm run test:integration -- tests/integration/v5-sync.test.ts',
+  'npm run test:unit -- apps/worker/test/sync-dependencies.test.ts',
+  'npm run test:e2e -- tests/e2e/v5-ai-off.spec.ts',
+  'npm run test:integration -- tests/integration/v5-runtime-isolation.test.ts',
+  'npm run typecheck',
+];
+const v6Prerequisites = [
+  'npm run test:integration -- tests/integration/v6-recovery.test.ts',
+  'npm run test:integration -- tests/integration/v6-drift.test.ts',
+  'npm run test:e2e -- tests/e2e/v6-containment.spec.ts',
+  ...v5Prerequisites,
+];
+
+test.each([
+  { slice: 'V5', unavailable: 'ai-off-sync-proof-unavailable', prerequisites: v5Prerequisites },
+  { slice: 'V6', unavailable: 'application-recovery-proof-unavailable', prerequisites: v6Prerequisites },
+] as const)('$slice remains failed with every prerequisite passing', ({ slice, unavailable, prerequisites }) => {
+  const success = { status: 0, signal: null, stdout: secret };
+  const chromium = '123.0.4.5';
+  const commands = prerequisites.map(command => commandResult(command, success));
+  expect(syncGateOutcome(slice, commands, [], chromium)).toEqual({
+    exitCode: 1, result: 'failed', prerequisiteResult: 'passed', diagnostics: [unavailable],
+  });
+
+  const skipped = playwright();
+  skipped.suites[0].suites[0].specs[0].tests[0].results[0].status = 'skipped';
+  const incomplete = commandResult('npm run test:e2e', success, normalizeBrowser(skipped));
+  const failed = commandResult('npm run typecheck', { ...success, status: 1 });
+  for (const invalid of [commands.slice(1), [incomplete, ...commands.slice(1)], [...commands.slice(0, -1), failed]]) {
+    expect(syncGateOutcome(slice, invalid, [], chromium)).toEqual({
+      exitCode: 1, result: 'failed', prerequisiteResult: 'failed', diagnostics: [unavailable],
+    });
+  }
+  expect(JSON.stringify(incomplete)).not.toContain(secret);
+  expect(syncGateOutcome(slice, commands, ['private-output-cleanup-failed'], chromium)).toEqual({
+    exitCode: 1, result: 'failed', prerequisiteResult: 'failed', diagnostics: ['private-output-cleanup-failed', unavailable],
+  });
+  expect(syncGateOutcome(slice, commands, [], undefined)).toMatchObject({ prerequisiteResult: 'failed' });
+});
+
 test('a V7 run with every fixture prerequisite passing still fails the full gate', () => {
   const success = { status: 0, signal: null };
   const commands = [
@@ -335,8 +376,10 @@ test('CLI routes V2 to its fail-closed preflight', () => {
 
 test.each([
   { slice: 'V4', diagnostic: 'live-construction-unavailable' },
+  { slice: 'V5', diagnostic: 'ai-off-sync-proof-unavailable' },
+  { slice: 'V6', diagnostic: 'application-recovery-proof-unavailable' },
   { slice: 'V7', diagnostic: 'live-holdout-rehearsal-unavailable' },
-])('$slice CLI records unavailable live prerequisites on a failed preflight', ({ slice, diagnostic }) => {
+])('$slice CLI records unavailable full-slice proof on a failed preflight', ({ slice, diagnostic }) => {
   expect(spawnSync('git', ['init', '-q'], { cwd: output }).status).toBe(0);
   expect(spawnSync('git', [
     '-c', 'user.name=Verifier Test', '-c', 'user.email=verifier@example.invalid',
