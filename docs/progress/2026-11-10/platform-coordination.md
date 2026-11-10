@@ -458,3 +458,9 @@ Latest PR44/46 comments contain no new owner replies. Latest CI runs `4287300504
 Periodic fetch found externally merged PR56 at `49245de4832d4d41f9cb9d28ac74fda42e92cfb4`, adding authenticated worker-private `/internal/apply` and supervisor mount. Sol Task1 was held immediately; only an empty untracked `apps/worker/src/demo-sync.ts` exists, with no tests/DB/commits or source content changes. Main is integrated before resetting the implementation base; the sole board conflict preserves PR56's partial proof and existing PR54 acceptance. Fresh Astra is reconciling remaining T2 orchestration to reuse PR56. Upstream uses non-T0 activation-policy seed and in-process observe/capture; exact operator chain, durable receipt recovery and full V5/V6 are not implied.
 
 Owner communications: Experience T3/T4/T8 request comment6775785377 and exact read-model agreement6775915071 on PR44; source-wrapper notification6775854070 on PR46.
+
+## T2 fixed orchestration candidate
+
+Candidate `98bcc469d204785e34e2d0c44a3d164c43f5f718` on base `f8605642bb391f2bb5c7ec348a03494f3fc20253` changes exactly six reserved source/test paths. It reuses genuine `local-demo-v1` activation through the existing fixture, accepted capture/P1 and validated receipt/unit recovery; PR56's generic mount remains unchanged. Typecheck, five focused unit cases, full unit suite698, twelve real Company A integration cases and ten default-seed fixture/mount compatibility cases passed. Behavioral RED/setup limitations are retained in the ignored Task1 report.
+
+Fresh Astra `demo_task1_review` owns the serial test lease in a separate exact-candidate checkout. No dependent source writer is released. Runtime compiled artifact binds actual approved specHash; connector display ID/version is asserted in fixture registration rather than adding a runtime metadata port. This candidate remains unmounted T2 service proof, not full V5/V6 or joint acceptance.
