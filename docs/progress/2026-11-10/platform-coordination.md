@@ -42,3 +42,11 @@ Platform owns the protected source-inventory omission from PR44 and has dispatch
 ## Protected-inventory correction checkpoint
 
 Source `cd777756a0154b79cbe7e51bbdd5e1f4057358c3` adds the connection-state leaf to bootstrap subject/evaluator and financial build inventories, with byte-mutation and missing-file coverage. The [implementation report](connection-build-inventory-report.md) and [fresh exact review](connection-build-inventory-review.md) record five focused tests and typecheck passing; review has no findings. Root's integrated unit suite after PR46 and this repair passes all 560 tests / 79 files. Root is checking the affected V3 browser/activation workflow separately. No preserved-demo repinning or protected expected-value change was performed.
+
+## Implementation dispatch checkpoint
+
+The [bounded apply repair plan](../../superpowers/plans/2026-11-10-sync-apply-repair.md), SHA-256 `9b4cdaa4c1f78c0b9d24001c14caa685ef139973b3ff855301bb147b0b921d5f`, passed [fresh independent plan review](sync-apply-repair-plan-review.md). It reserves four sequential tasks: additive storage/history, complete captured coverage, atomic writer, and real PostgreSQL race/rollback proof. The service remains internal and unmounted; planning approval is not a financial acceptance claim.
+
+Root's combined V3 gate passed after the owner merges and inventory repair: activation, corrections, the updated browser suite and typecheck. Packet `.evidence/dirty-d17b8eb40ea06d13b03f14167eaba7772cc96fc6c5d22575be28ed023cccce7a/V3/2026-11-10T08-51-48-754Z-63166` records source-equivalent `d067977` with documentation work in progress. The sixteen Discovery owner-fencing integration cases and one operations browser case also passed. These checks do not close the independent owner findings or missing packet/live/recovery proof. The existing operations test's title does not make its literal runtime model counter measured.
+
+Requests were delivered to the owners in [Discovery PR46](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/46#issuecomment-6763171242) and [Experience PR44](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/44#issuecomment-6763171949). Platform continues fetching during active work and integrates completed changes only at clean checkpoints.
