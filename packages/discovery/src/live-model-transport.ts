@@ -70,11 +70,16 @@ export function createLiveModelTransport(options: LiveModelTransportOptions): Mo
         usage?: { prompt_tokens?: number; completion_tokens?: number };
       };
       const choice = body.choices?.[0];
-      const toolCalls = (choice?.message?.tool_calls ?? []).map(call => ({
-        id: call.id ?? 'tool-1',
-        name: call.function?.name ?? '',
-        arguments: JSON.parse(call.function?.arguments ?? '{}') as Record<string, unknown>,
-      }));
+      let toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
+      try {
+        toolCalls = (choice?.message?.tool_calls ?? []).map(call => ({
+          id: call.id ?? 'tool-1',
+          name: call.function?.name ?? '',
+          arguments: JSON.parse(call.function?.arguments ?? '{}') as Record<string, unknown>,
+        }));
+      } catch {
+        throw new Error('MODEL_PROVIDER_ERROR');
+      }
       const text = typeof choice?.message?.content === 'string' ? choice.message.content.slice(0, 2000) : undefined;
       const stopReason = toolCalls.length > 0 ? 'tool_calls'
         : choice?.finish_reason === 'length' ? 'limit' : 'done';
