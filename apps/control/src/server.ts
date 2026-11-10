@@ -1,4 +1,7 @@
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyPluginAsync, type FastifyReply, type FastifyRequest } from 'fastify';
+import type { AuthorityInvalidRequest } from './authority-composition.js';
+import { sendAuthorityError } from './routes/authority.js';
+import { authorityError } from '../../worker/src/sync/current-authority-errors.js';
 import { reviewDetailsRoute, sendReviewError } from './routes/review.js';
 import { ReviewError } from './review-repository.js';
 import { ParentReadError, sendParentReadError } from '../../worker/src/routes/parent.js';
@@ -38,19 +41,49 @@ export type ControlServices = {
   clock: Clock;
 };
 
-type ControlDependencies = ControlServices & { expectedMigrations: readonly MigrationIdentity[]; featurePlugins?: FastifyPluginAsync<ControlServices>[] };
+type ControlDependencies = ControlServices & {
+  expectedMigrations: readonly MigrationIdentity[];
+  featurePlugins?: FastifyPluginAsync<ControlServices>[];
+  authorityInvalidRequest?: AuthorityInvalidRequest;
+};
 
 export const sourceSemanticsRoute = '/internal/sources/:sourceRef/semantics';
 const sourceSemanticsPath = /^(?:https?:\/\/[^/?#]+)?\/internal\/sources\/[^/?#]+\/semantics(?:\?|$)/;
 const unavailable: ServiceHealth = { status: 'not_ready', database: 'unavailable', migrationVersion: null };
 
-export function buildControl({ db, workerClient, clock, expectedMigrations, featurePlugins = [] }: ControlDependencies): FastifyInstance {
+function authorityFrameworkRoute(request: FastifyRequest) {
+  const path = request.url.replace(/^https?:\/\/[^/?#]+/i, '').split(/[?#]/, 1)[0]!;
+  const [root, api, connections, account, suffix, extra] = path.split('/', 6);
+  if (root !== '' || !api || !connections || !account || !suffix || extra !== undefined) return;
+  try {
+    // The router decodes static segments before matching. The account may contain an invalid escape.
+    if (decodeURI(api) !== 'api' || decodeURI(connections) !== 'connections') return;
+    const action = decodeURI(suffix);
+    if (request.method === 'GET' && action === 'authority') {
+      return { method: 'GET' as const, url: '/api/connections/:accountId/authority' };
+    }
+    if (request.method === 'POST' && (action === 'pause' || action === 'resume' || action === 'revoke')) {
+      return { method: 'POST' as const, url: '/api/connections/:accountId/' + action };
+    }
+  } catch {
+    return;
+  }
+}
+
+export function buildControl({
+  db, workerClient, clock, expectedMigrations, featurePlugins = [], authorityInvalidRequest,
+}: ControlDependencies): FastifyInstance {
   const control: FastifyInstance = Fastify({
     // Keep the router's shared parameter limit aligned with IdSchema.
     routerOptions: { maxParamLength: 160 },
     frameworkErrors(error: FastifyError, request: FastifyRequest, reply: FastifyReply) {
       // The router can reject a malformed URL before route-level hooks can sanitize it.
       if (error.code === 'FST_ERR_BAD_URL' || error.code === 'FST_ERR_MAX_PARAM_LENGTH') {
+        const authorityRoute = authorityFrameworkRoute(request);
+        if (authorityRoute && control.hasRoute(authorityRoute)) {
+          if (authorityInvalidRequest) return authorityInvalidRequest(request, reply);
+          return sendAuthorityError(authorityError('AUTHORITY_UNAVAILABLE'), request, reply);
+        }
         if (request.method === 'GET' && sourceSemanticsPath.test(request.url) &&
             control.hasRoute({ method: 'GET', url: sourceSemanticsRoute })) {
           return reply.code(400).header('Cache-Control', 'no-store').send(ApiErrorSchema.parse({

@@ -54,6 +54,7 @@ test('compiler, finance, contracts, evaluator and lock mutations each change the
       'packages/compiler/src/plan-batch.ts', 'packages/finance/src/validate.ts',
       'packages/contracts/src/sync-capture.ts',
       'packages/contracts/src/current-authority.ts',
+      'packages/contracts/src/authority-ingress.ts',
       'packages/contracts/src/connection-state.ts',
       constructionTools,
       'packages/contracts/src/activation-authority.ts', 'packages/evaluator/src/financial-evaluate.ts',

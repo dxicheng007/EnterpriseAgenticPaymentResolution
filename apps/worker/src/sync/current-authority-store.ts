@@ -194,6 +194,13 @@ async function resolveSnapshot(
   return { stored, state, command };
 }
 
+export async function readAuthoritySnapshotInTransaction(
+  client: PoolClient, input: CommittedAuthorityIdentityV1,
+): Promise<AuthoritySnapshot> {
+  const identity = CommittedAuthorityIdentityV1Schema.parse(input);
+  return resolveSnapshot(client, identity, undefined, false);
+}
+
 export async function readAuthoritySnapshot(
   db: Pool, input: CommittedAuthorityIdentityV1, key?: Id,
 ): Promise<AuthoritySnapshot> {

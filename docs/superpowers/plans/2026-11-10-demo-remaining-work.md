@@ -1,7 +1,7 @@
 # Demo remaining work — pregenerated connector + AI-off sync
 
 **Date:** November 10, 2026  
-**Status:** Shared coordination doc for remaining product work. Not acceptance evidence, not a path reservation, and not an implementation plan for any single task.  
+**Status:** Shared coordination doc for remaining product work. Not acceptance evidence, not a path reservation, and not an implementation plan for any single task.
 **Audience:** Integrator and later delegated agents.
 
 ### How agents should use this file
@@ -36,9 +36,9 @@ This keeps the PRD operating half of the thesis ([`prdv2.md`](../../../prdv2.md)
 | Discovery scaffolding | Partial | Lifecycle/delegation, monitor, findings/proposals, compilation/replay paths; default composition has **no model client** |
 | Activation backend | Partial / not V3-accepted | Review prep, durable intents, worker first import/receipt recovery, package-detail reads |
 | Sync capture | Partial | Internal API/semantic capture accepted in reviews; unmounted for product demo; CSV lanes rejected |
-| Sync classification | Partial | Compiler companion accepted as classification metadata; not authoritative apply |
-| Atomic apply | Design | Bounded ongoing-apply design exists; writer/scheduler not product-mounted |
-| Authority head | Partial | Current-authority storage/commands exist as prerequisites |
+| Sync classification / selection | Partial | Compiler classification and four pure selector tasks are accepted. Catalog `74cd969` passes focused checks and independent spec/quality review; no substantial safe immediate simplification was identified. General capture/history inspection is follow-on, not a prerequisite silently added to the single-customer demo. |
+| Atomic apply | Implemented and independently reviewed; not product-mounted | Bounded P1 writer/storage/coverage/race proof accepted at `7e49e552`; PR48 is on main. The demo mount remains T1; no scheduler or full V5 acceptance is implied. |
+| Authority head / trusted ingress | Implemented and independently reviewed; demo/browser proof separate | P3 source `d8e2833` and its final review pass. PR50 merged into its former stack base; the continuation branch carries it toward main. |
 
 Authoritative status claims also live in root [`AGENTS.md`](../../../AGENTS.md), [`docs/progress/2026-11-08/README.md`](../../progress/2026-11-08/README.md), and the [team expansion handoff](2026-11-08-team-expansion-handoff.md). Prefer those for exact SHAs and review links.
 
@@ -58,7 +58,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T0 — Integrator: freeze the demo contract
 
-**Status:** delivered on branch `docs/t0-demo-contract`; pending review/merge  
+**Status:** delivered and merged into main in PR55 at `fc79e94`; documentation-only T0 freeze. Demo implementation and acceptance remain separate.
 **Lane:** Integrator  
 **Depends on:** none  
 **Outcome:** Written demo script + labeled modes (`fixture` vs `captured-run` vs later `live`) + exact customer/account IDs + expected cents for cutover and post-sync balances.  
@@ -68,7 +68,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T1 — Platform: mount post-activation apply for one authorized customer
 
-**Status:** not started  
+**Status:** partial — atomic writer prerequisites are accepted at `7e49e552` (PR48/main); product/demo mount and isolated end-to-end proof remain. Platform continuation base `2dab8e9`. Do not rebuild P1 or require the general multi-customer selector/journal merely to stage the bounded one-customer demo.
 **Lane:** Platform  
 **Depends on:** accepted activation grant (A5 import), classification pin, current-authority fence, capture inbox facts for the chosen transport  
 **Outcome:** Worker can take already-captured conforming deliveries for one enrolled customer and atomically apply a nonempty financial unit with an authoritative sync receipt, without model calls.  
@@ -78,7 +78,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T2 — Platform: post-activation injection + capture path for the demo event
 
-**Status:** not started  
+**Status:** not started as a mounted demo path; existing internal capture is reusable. Exact Company A event/injection/composition scope follows T0.
 **Lane:** Platform (sources/worker composition as reserved)  
 **Depends on:** T1 or a jointly agreed temporary harness seam owned by Integrator  
 **Outcome:** A controlled way to introduce one new Company A API (and optionally later Company B) event after activation and durably capture it into the inbox the applier consumes.  
@@ -87,7 +87,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T3 — Experience: finish Approve-and-enable browser workflow
 
-**Status:** not started  
+**Status:** partial — backend and existing browser work are available; exact remaining browser scenarios/public packet remain Experience-owned. Existing delivered reviewer/authority follow-ups still apply.
 **Lane:** Experience  
 **Depends on:** activation backend already mounted; Integrator gate/parser fixes if still open  
 **Outcome:** Reviewer can prepare, inspect package details/evidence, approve one customer, and see parent import + receipt without inventing authority in the UI.  
@@ -97,7 +97,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T4 — Experience: Connections / sync observation surface
 
-**Status:** not started  
+**Status:** partial — existing operations surface and reviewed authority API are prerequisites. Shared-lane visibility, honest unmeasured runtime-model metric, explicit authority-action refresh and demo observation proof remain Experience-owned.
 **Lane:** Experience  
 **Depends on:** T1 progress reads / receipts (design freeze with Platform first)  
 **Outcome:** Demo-visible connection state: active customer, pinned artifact, last receipt, applied vs held/gap counts, and clear AI-off posture.  
@@ -106,7 +106,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T5 — Integrator: make V5 machine gate prove ongoing application
 
-**Status:** not started  
+**Status:** not started
 **Lane:** Integrator  
 **Depends on:** T1 + T2 minimum proofs  
 **Outcome:** `verify:slice -- V5` cannot pass on capture/authority/health alone; mandatory observations include fresh conforming apply, updated money, preserved cutover, and receipt.  
@@ -115,7 +115,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T6 — Platform: minimum containment for the demo path
 
-**Status:** not started  
+**Status:** partial — accepted P1 storage/writer/race cases provide backend evidence; the chosen mounted demo still needs its own replay/crash/out-of-scope observations. Broader cross-stream and dependency-release proofs remain follow-on.
 **Lane:** Platform  
 **Depends on:** T1  
 **Outcome:** Enough V6 behavior that the demo (and gate) can show: exact delivery replay is harmless; crash/retry around apply does not double-count; unknown/out-of-scope input does not corrupt enrolled money.  
@@ -124,7 +124,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T7 — Discovery (optional for this track): package a truthful pregenerated artifact
 
-**Status:** not started  
+**Status:** partial — real operator-pinned A/B fixture construction already exists and is qualified. T0 must choose the exact package/labels; reuse it instead of rebuilding live construction. This remains optional Discovery packaging work for this track.
 **Lane:** Discovery  
 **Depends on:** T0 labeling decision — frozen in the [demo contract](../../demo/demo-contract.md): current demo is `fixture` / catalog `development-fixture`; captured-run only if labeled; live is T9.  
 **Outcome:** One clearly labeled artifact/profile package (fixture pin and/or offline generated candidate) mounted for review/activation, with instructions so the demo never implies live construction.  
@@ -133,7 +133,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T8 — Experience + Integrator: two-company or single-company rehearsal packet
 
-**Status:** not started  
+**Status:** not started
 **Lane:** Experience leads; Integrator records  
 **Depends on:** T3 + T1–T5; T6 for replay beat  
 **Outcome:** One rehearsable runbook and evidence packet for the hackathon-style walkthrough in §3. Prefer one Company A happy path first; add Company B only when CSV/file capture apply is actually available.  
@@ -141,7 +141,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T9 — Later track (explicitly deferred): genuine live construction
 
-**Status:** deferred  
+**Status:** deferred
 **Lane:** Discovery + Integrator  
 **Depends on:** user-configured model key; Gate J corrections; live holdouts  
 **Outcome:** G4/V4 acceptance with real provider evidence and independently checked A/B builds.  
@@ -195,3 +195,11 @@ Parallelism that is usually safe after T0:
 - [Team expansion handoff](2026-11-08-team-expansion-handoff.md) — lane ownership and older dependency graph
 - [Progress checkpoint](../../progress/2026-11-08/README.md) — historical integration status
 - Demo setup guides under [`docs/demo/`](../../demo/)
+
+## 8. Current integrator checkpoint and preserved follow-on work
+
+Main `088f719` was integrated into continuation branch `codex/platform-sync-selection-readers` at `2dab8e9`; latest main `fc79e94` is now integrated with the frozen T0 demo contract from PR55. Source is byte-identical to catalog candidate `74cd969` across apps/packages/scripts/tests/db; the merge adds the shared board and documentation links. PR48 is on main; PR50/PR52 were externally merged into their former stack bases, so the continuation carries those reviewed trees without claiming they are already on main.
+
+The user requested behavior-preserving simplification, including fixed choices where useful. New implementation is held while the exact catalog task review assesses correctness and concrete simplifications. Current source/SQL lease is with Integrator; no other task may start from this board. The catalog review is accepted; next feature dispatch still requires its own narrow demo scope. Catalog checks:14/14 complete run,65 selector units, final three affected test cases and typecheck pass; independent source review passes. All six fixture tasks and their combined review pass.
+
+General multi-customer capture/history selection, dependency journal/application scheduling, Discovery Gate J/live construction, and the explicit proposed-scope grant workflow remain preserved follow-on work, with their accepted designs/reviews and unresolved owner contracts. They are not new blocking requirements for this board's one-customer pregenerated AI-off demo. The user's explicit read/verification grant decision remains binding if that workflow is later implemented; no automatic grant is permitted. See [Platform coordination](../../progress/2026-11-10/platform-coordination.md) for exact source ownership, reviews, policy decision and delivered requests.

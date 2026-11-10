@@ -1,5 +1,7 @@
 # P4 discovery prerequisite policy audit — 2026-11-10
 
+Later update: the user selected the [explicit trusted grant approach](generated-scope-grant-user-decision.md). The audit below remains the historical pre-decision analysis; its pending grantor choice is now resolved. Dynamic implementation and other independent policy gaps are not certified by that answer.
+
 Read-only audit of the Platform integration worktree. No source, Git, DDL, repository documentation, database, provider, or tests changed/run. This report is not policy acceptance, a migration reservation, Gate J acceptance, or live readiness. Citations below are repository-relative file:line anchors in `/Users/devincheng/.codex/worktrees/platform-activation-integration/EnterpriseAgenticPaymentResolution`.
 
 ## Conclusion
