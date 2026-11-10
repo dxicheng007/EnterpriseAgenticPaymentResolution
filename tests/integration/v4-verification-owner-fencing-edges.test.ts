@@ -369,8 +369,9 @@ test('policy revoke after producer admit SQL rolls back mapping before COMMIT', 
     await entered.promise;
     release.resolve();
     await pending;
+    // Same-txn claim + mapping both roll back, so the step stays pending.
     expect(await counts(prepared.run.runId)).toEqual(zeroCounts);
-    expect(await storedStep(step!)).toMatchObject({ state: 'interrupted' });
+    expect(await storedStep(step!)).toMatchObject({ state: 'pending' });
     enabled = true;
     expect((await prepared.run.state()).verificationJobs).toEqual([]);
     expect(await runtimeFingerprint()).toBe(beforeRuntime);
@@ -464,6 +465,47 @@ test('wrong profileHash is rejected before verification budget', async () => {
     trustedAccounts = [];
   }
 }, 120_000);
+
+test('verification uncertainty does not block pause/resume', async () => {
+  const entered = barrier<void>();
+  const release = barrier<void>();
+  let owner: Owner | undefined;
+  let pending: Promise<unknown> | undefined;
+  try {
+    const prepared = await preparedVerify('edge-uncertainty-resume', {
+      testHooks: {
+        afterVerificationEnqueue: async () => {
+          entered.resolve();
+          await release.promise;
+        },
+      },
+    });
+    owner = prepared.owner;
+    const [step] = await prepared.run.accept(owner, [verifyCall('verify', prepared.compiled)], 3, prepared.task);
+    pending = owner.executePendingStep(prepared.run.runId, prepared.task, step!);
+    await entered.promise;
+    await owner.close();
+    owner = undefined;
+    release.resolve();
+    try { await pending; } catch { /* owner lost */ }
+
+    const restarted = await acquire(prepared.model.model, instrumentReads().readTools, {
+      withVerification: true,
+    });
+    owner = restarted.owner;
+    const paused = await prepared.run.action('pause', 'uncertainty-pause');
+    expect(paused.status).toBe('paused');
+    const resumed = await prepared.run.action('resume', 'uncertainty-resume');
+    expect(resumed.status).not.toBe('blocked');
+    expect(resumed.diagnostics.every(item => item.code !== 'VERIFICATION_INTERRUPTED' ||
+      item.severity === 'warning')).toBe(true);
+  } finally {
+    release.resolve();
+    try { await pending; } catch { /* owner lost */ }
+    await owner?.close();
+    trustedAccounts = [];
+  }
+}, 180_000);
 
 test('recoverAdmittedVerifications claims queued mapping without current success', async () => {
   const entered = barrier<void>();

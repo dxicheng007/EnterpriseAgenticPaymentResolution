@@ -45,7 +45,7 @@ import { captureFailure, parseReadResult, prepareRead, type DiscoveryReadTools }
 import { unavailableToolCode, toolSchemas } from './roles.js';
 import { delegateTaskInput, executeDelegation, projectedDelegationLimit, validateDelegation, type CaptureAccess, type CaptureFacts } from './tasks.js';
 import {
-  appendRunDiagnostic, coversGrant, discoveryError, insertSpecialist, lockRun, lockTask, markBlocker,
+  coversGrant, discoveryError, insertSpecialist, lockRun, lockTask, markBlocker,
   publishDiscovery, runnable,
   type RepositoryOptions, type RunRow, type TaskRow,
 } from './repository.js';
@@ -288,6 +288,26 @@ export async function acquireDiscoverySupervisor({
     gate: createDiscoveryVerificationOwnerGate({
       runOnOwner, generation: () => generation, permits, admissions,
       beforeAdmitCommit: testHooks?.beforeVerificationAdmitCommit,
+      async claimAdmission(client, { run, task, step, proposalId, proposalRevision }) {
+        // Same owner transaction as reservation/mapping: claim the Discovery step here.
+        const claimed = await client.query(
+          `UPDATE discovery_tool_steps SET state='running',generation=$2
+           WHERE id=$1 AND state IN ('pending','interrupted')`, [step.id, generation]);
+        if (!claimed.rowCount) {
+          const { rows: [latest] } = await client.query<{ state: string; generation: string }>(
+            'SELECT state, generation FROM discovery_tool_steps WHERE id=$1', [step.id]);
+          if (!latest || latest.state !== 'running' || safeCounter(latest.generation) !== generation) {
+            return { kind: 'denied' as const, code: 'DISCOVERY_CONFLICT' as const };
+          }
+          return;
+        }
+        await publishDiscovery(client, clock, run.id, 'tool.called', {
+          dispatchId: step.dispatch_id, toolStepId: step.id, toolName: 'requestVerification',
+          proposalId, proposalRevision,
+        }, task);
+        await client.query('UPDATE discovery_runs SET revision=revision+1 WHERE id=$1', [run.id]);
+        await testHooks?.beforeVerificationClaimCommit?.();
+      },
     }),
     async resolveTaskId({ requestKey, runId }) {
       const { rows: [row] } = await db.query<{ task_id: string; run_id: string }>(
@@ -816,7 +836,11 @@ export async function acquireDiscoverySupervisor({
         ...(result.result.state === 'compiled' && result.result.artifactHash ?
           { artifactHash: result.result.artifactHash } : {}),
       } : {}),
-      ...(result.ok && 'job' in result ? { jobId: result.job.jobId } : {}),
+      ...(result.ok && 'job' in result ? {
+        jobId: result.job.jobId,
+        ...(result.job.diagnostics.length ?
+          { diagnosticCodes: result.job.diagnostics.map(entry => entry.code) } : {}),
+      } : {}),
       dispatchId: step.dispatch_id, toolStepId: step.id, toolStatus: status,
       ...(!result.ok ? { diagnosticCodes: [result.code] } : {}),
     }, task);
@@ -1319,14 +1343,7 @@ export async function acquireDiscoverySupervisor({
         return { replayClaim };
       }
       if (verificationClaim) {
-        await connection.query("UPDATE discovery_tool_steps SET state='running',generation=$2 WHERE id=$1", [step.id, generation]);
-        await publishDiscovery(connection, clock, lockedRun.id, 'tool.called', {
-          dispatchId: step.dispatch_id, toolStepId: step.id, toolName: 'requestVerification',
-          proposalId: verificationClaim.subject.proposalId,
-          proposalRevision: verificationClaim.subject.proposalRevision,
-        }, lockedTask);
-        await connection.query('UPDATE discovery_runs SET revision=revision+1 WHERE id=$1', [lockedRun.id]);
-        await testHooks?.beforeVerificationClaimCommit?.();
+        // Discovery step claim commits inside producer admit with reservation/mapping.
         if (!permits(lockedRun, lockedTask)) throw authorityRevoked;
         return { verificationClaim };
       }
@@ -1528,12 +1545,24 @@ export async function acquireDiscoverySupervisor({
         const context = selected?.context;
         if (!context) return;
         const { run, task, step } = context;
-        if (step.state !== 'running' || safeCounter(step.generation) !== generation ||
-            step.dispatch_id !== claim.step.dispatch_id || task.revision !== claim.revision) return;
+        if (step.dispatch_id !== claim.step.dispatch_id || task.revision !== claim.revision) return;
 
         const stillAuthorized = () => permits(run, task) &&
           hashCanonical(run.grants) === hashCanonical(claim.run.grants) &&
           hashCanonical(task.grants) === hashCanonical(claim.task.grants);
+
+        // Admission denied before same-txn claim: leave sticky forbidden pending, otherwise fail.
+        if (step.state === 'pending' || (step.state === 'interrupted' && safeCounter(step.generation) < generation)) {
+          if (!toolResult.ok && toolResult.code === 'DISCOVERY_FORBIDDEN') return;
+          if (!toolResult.ok) {
+            const blocker = toolResult.code === 'DISCOVERY_CONFLICT' || toolResult.code === 'TOOL_RESULT_LIMIT' ?
+              toolResult.code : undefined;
+            return resolveStep(connection, context, toolResult, blocker);
+          }
+          return;
+        }
+
+        if (step.state !== 'running' || safeCounter(step.generation) !== generation) return;
         if (revoked || !stillAuthorized()) return interruptForbiddenRead(connection, context);
 
         // Pause after admission keeps the mapping but cannot publish current tool success.
@@ -1563,7 +1592,6 @@ export async function acquireDiscoverySupervisor({
         }
 
         if (!stillAuthorized()) throw authorityRevoked;
-        if (interrupted) await appendRunDiagnostic(connection, run.id, verificationInterrupted.code);
         const blocker = !settledResult.ok &&
           (settledResult.code === 'DISCOVERY_CONFLICT' || settledResult.code === 'TOOL_RESULT_LIMIT') ?
           settledResult.code : undefined;
