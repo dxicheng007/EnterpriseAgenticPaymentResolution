@@ -213,4 +213,4 @@ export function partialAllocationEvents(data: SyncApplyFixture) {
     invoiceEvent: originalEvent(invoice), paymentEvent: originalEvent(payment), allocationEvent: originalEvent(allocation),
     p1, a1: allocate(1, '20.00', '2026-10-02'), a2: allocate(2, '10.00', '2026-10-03'),
   };
-        }
+}
