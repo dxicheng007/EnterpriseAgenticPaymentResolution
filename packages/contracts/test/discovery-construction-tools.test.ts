@@ -1,4 +1,6 @@
-import { expect, test } from 'vitest';
+import { expect, expectTypeOf, test } from 'vitest';
+import * as root from '../src/index.js';
+import * as leaf from '../src/discovery-construction-tools.js';
 import { PublishFindingInputSchema as schema } from '../src/discovery-construction-tools.js';
 
 const input = {
@@ -285,4 +287,283 @@ test('requestInvestigation accepts bounded subject requests and stays advertisem
   expect(discoveryInvestigationToolSchemas).toHaveLength(1);
   expect(discoveryInvestigationToolSchemas[0]).toMatchObject({ name: 'requestInvestigation' });
   expect(Buffer.byteLength(JSON.stringify(discoveryInvestigationToolSchemas))).toBeLessThan(8 * 1024);
+});
+
+test.each([
+  'PROPOSAL_REVISION_CONFLICT', 'REPAIR_DIAGNOSTICS_REQUIRED', 'REPAIR_LIMIT', 'INVESTIGATION_REQUEST_LIMIT',
+])('requestInvestigation accepts the additive safe failure %s', async code => {
+  const { RequestInvestigationResultSchema } = await import('../src/discovery-construction-tools.js');
+  const failure = { ok: false, code };
+  expect(RequestInvestigationResultSchema.safeParse(failure)).toMatchObject({ success: true, data: failure });
+});
+
+const repairInput = {
+  investigationId: 'investigation', proposalId: 'proposal', expectedProposalRevision: 7, diagnosticCodes: ['z', 'A'],
+};
+const compileRef = { code: 'z', kind: 'compile', toolStepId: 'step', assessmentRevision: 4 };
+const verificationRef = { code: 'A', kind: 'verification', requestKey: 'request', jobId: 'job', assessmentRevision: 5 };
+const repairResult = {
+  ok: true, investigationId: 'investigation', proposalId: 'proposal', proposalRevision: 7,
+  repairRound: 2, diagnosticRefs: [compileRef, verificationRef],
+};
+
+test('beginRepair normalizes unique diagnostic codes and safe provenance refs', () => {
+  expect(leaf.BeginRepairInputSchema).toBeDefined();
+  expect(leaf.BeginRepairInputSchema.parse(repairInput)).toEqual({ ...repairInput, diagnosticCodes: ['A', 'z'] });
+  expect(repairInput.diagnosticCodes).toEqual(['z', 'A']);
+  expect(leaf.DiscoveryRepairDiagnosticRefSchema.parse(compileRef)).toEqual(compileRef);
+  expect(leaf.DiscoveryRepairDiagnosticRefSchema.parse(verificationRef)).toEqual(verificationRef);
+  expect(leaf.BeginRepairResultSchema.parse(repairResult)).toEqual({
+    ...repairResult, diagnosticRefs: [verificationRef, compileRef],
+  });
+  expect(repairResult.diagnosticRefs).toEqual([compileRef, verificationRef]);
+  expect(leaf.BeginRepairResultSchema.parse({ ...repairResult, repairRound: 1 })).toEqual({
+    ...repairResult, repairRound: 1, diagnosticRefs: [verificationRef, compileRef],
+  });
+});
+
+test('beginRepair rejects authority fields, invalid revisions and ambiguous provenance', () => {
+  for (const fields of [
+    { runId: 'run' }, { grants: {} }, { assessmentRevision: 4 }, { authority: true }, { unexpected: true },
+    { diagnosticCodes: [] }, { diagnosticCodes: ['z', 'z'] }, { diagnosticCodes: ['x'.repeat(161)] },
+    ...[0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1].map(expectedProposalRevision => ({ expectedProposalRevision })),
+  ]) expect(leaf.BeginRepairInputSchema.safeParse({ ...repairInput, ...fields }).success, JSON.stringify(fields)).toBe(false);
+  for (const fields of [
+    { runId: 'run' }, { assessment: {} }, { diagnosticRefs: [] }, { repairRound: 0 }, { repairRound: 3 },
+    { diagnosticRefs: [compileRef, { ...verificationRef, code: compileRef.code }] },
+    { diagnosticRefs: [{ ...compileRef, requestKey: 'request', jobId: 'job' }] },
+    { diagnosticRefs: [{ ...verificationRef, toolStepId: 'step' }] },
+    { diagnosticRefs: [{ ...verificationRef, protectedTruth: {} }] },
+    { diagnosticRefs: [{ ...verificationRef, requestKey: 'x'.repeat(161) }] },
+    { diagnosticRefs: [{ ...compileRef, toolStepId: 'has spaces' }] },
+    { diagnosticRefs: [JSON.parse('{"code":"z","kind":"compile","toolStepId":"step","assessmentRevision":4,"__proto__":{}}')] },
+    ...[0, 1.5, Number.MAX_SAFE_INTEGER + 1].flatMap(revision => [
+      { proposalRevision: revision }, { diagnosticRefs: [{ ...compileRef, assessmentRevision: revision }] },
+    ]),
+  ]) expect(leaf.BeginRepairResultSchema.safeParse({ ...repairResult, ...fields }).success, JSON.stringify(fields)).toBe(false);
+});
+
+const finishSuccess = { ok: true, runId: 'run', status: 'completed', observedRunRevision: 3, revision: 4 };
+const blockers = [
+  'TASK_GRAPH_INCOMPLETE', 'TASK_DEPENDENCIES_UNRESOLVED', 'NO_CURRENT_COMPILED_PROPOSAL',
+  'DISCOVERY_ASSESSMENT_UNRESOLVED', 'DISCOVERY_WORK_IN_FLIGHT',
+];
+const finishIncomplete = { ok: false, code: 'DISCOVERY_INCOMPLETE', blockerCodes: blockers };
+
+test('finishRun requires an empty input and a single checked completion revision increment', () => {
+  expect(leaf.FinishRunInputSchema).toBeDefined();
+  expect(leaf.FinishRunInputSchema.parse({})).toEqual({});
+  for (const invalid of [
+    { runId: 'run' }, { revision: 3 }, { authority: {} }, { grants: [] }, { assessment: {} }, [],
+    JSON.parse('{"__proto__":{}}'),
+  ]) expect(leaf.FinishRunInputSchema.safeParse(invalid).success, JSON.stringify(invalid)).toBe(false);
+  expect(leaf.FinishRunResultSchema.parse(finishSuccess)).toEqual(finishSuccess);
+  for (const fields of [
+    { status: 'running' }, { revision: 3 }, { revision: 5 }, { assessment: {} },
+    ...[0, 1.5, Number.MAX_SAFE_INTEGER + 1].flatMap(revision => [
+      { revision }, { observedRunRevision: revision },
+    ]),
+    { observedRunRevision: Number.MAX_SAFE_INTEGER, revision: Number.MAX_SAFE_INTEGER + 1 },
+  ]) expect(leaf.FinishRunResultSchema.safeParse({ ...finishSuccess, ...fields }).success, JSON.stringify(fields)).toBe(false);
+});
+
+test('finishRun incomplete result reports only unique normalized blocker categories', () => {
+  expect(leaf.FinishRunResultSchema.parse(finishIncomplete)).toEqual({
+    ok: false, code: 'DISCOVERY_INCOMPLETE', blockerCodes: [
+      'DISCOVERY_ASSESSMENT_UNRESOLVED', 'DISCOVERY_WORK_IN_FLIGHT', 'NO_CURRENT_COMPILED_PROPOSAL',
+      'TASK_DEPENDENCIES_UNRESOLVED', 'TASK_GRAPH_INCOMPLETE',
+    ],
+  });
+  for (const fields of [
+    { blockerCodes: [] }, { blockerCodes: ['TASK_GRAPH_INCOMPLETE', 'TASK_GRAPH_INCOMPLETE'] },
+    { blockerCodes: ['UNKNOWN_BLOCKER'] }, { message: 'prose' }, { blockerCodes: undefined },
+  ]) expect(leaf.FinishRunResultSchema.safeParse({ ...finishIncomplete, ...fields }).success, JSON.stringify(fields)).toBe(false);
+  expect(leaf.BeginRepairResultSchema.safeParse(finishIncomplete).success).toBe(false);
+  expect(leaf.RequestInvestigationResultSchema.safeParse(finishIncomplete).success).toBe(false);
+});
+
+test('completion and request accept only the shared redacted failure vocabulary', () => {
+  const failureCodes = [
+    'DISCOVERY_INVALID', 'DISCOVERY_FORBIDDEN', 'DISCOVERY_CONFLICT', 'DISCOVERY_PAUSED',
+    'SOURCE_UNAVAILABLE', 'TOOL_RESULT_LIMIT', 'TOOL_FORBIDDEN', 'TOOL_UNAVAILABLE',
+    'PROPOSAL_REVISION_CONFLICT', 'REPAIR_DIAGNOSTICS_REQUIRED', 'REPAIR_LIMIT', 'INVESTIGATION_REQUEST_LIMIT',
+  ];
+  for (const result of [
+    leaf.DiscoveryCompletionToolFailureSchema, leaf.DiscoveryInvestigationToolFailureSchema,
+    leaf.BeginRepairResultSchema, leaf.FinishRunResultSchema, leaf.RequestInvestigationResultSchema,
+  ]) {
+    for (const code of failureCodes) expect(result.parse({ ok: false, code })).toEqual({ ok: false, code });
+    for (const invalid of [
+      { ok: false, code: 'UNRECOGNIZED' }, { ok: false, code: 'arbitrary prose' },
+      { ok: false, code: 'DISCOVERY_INVALID', message: 'arbitrary prose' },
+      { ok: false, code: 'DISCOVERY_INVALID', assessment: {} },
+    ]) expect(result.safeParse(invalid).success, JSON.stringify(invalid)).toBe(false);
+  }
+  expect(leaf.RequestInvestigationResultSchema.safeParse({ ok: true, requestId: 'request', status: 'pending' }).success).toBe(false);
+});
+
+const delegation = {
+  subject: { kind: 'source' }, role: 'identity', question: 'Check evidence', dependencyIds: ['z', 'A'],
+};
+const investigationRequest = {
+  subject: { kind: 'source' }, question: 'Check evidence', dependencyFindingRefs: [],
+};
+
+test('delegateTask retains the old specialist shape and permits one optional request identity', () => {
+  expect(leaf.DelegateTaskInputSchema).toBeDefined();
+  expect(leaf.DelegateTaskInputSchema.parse(delegation)).toEqual({ ...delegation, dependencyIds: ['A', 'z'] });
+  expect(delegation.dependencyIds).toEqual(['z', 'A']);
+  for (const role of ['identity', 'contract', 'receivables', 'connector']) {
+    const input = { ...delegation, role, dependencyIds: [], requestId: 'request' };
+    expect(leaf.DelegateTaskInputSchema.parse(input)).toEqual(input);
+  }
+  for (const fields of [
+    { role: 'coordinator' }, { requestId: 'has spaces' }, { requesterId: 'task' }, { runId: 'run' }, { grants: {} },
+    { consumed: true }, { dependencyIds: ['z', 'z'] }, { dependencyIds: undefined }, { subject: undefined },
+    { role: undefined }, { question: undefined }, { question: '' },
+    JSON.parse('{"subject":{"kind":"source","constructor":{"prototype":{}}}}'),
+  ]) expect(leaf.DelegateTaskInputSchema.safeParse({ ...delegation, ...fields }).success, JSON.stringify(fields)).toBe(false);
+});
+
+test('requestInvestigation preserves exact finding revision tuples and rejects nested prototype keys', () => {
+  const finding10 = { findingId: 'f', revision: 10 };
+  const finding2 = { findingId: 'f', revision: 2 };
+  expect(leaf.RequestInvestigationInputSchema.parse({
+    ...investigationRequest, dependencyFindingRefs: [finding2, finding10],
+  })).toEqual({ ...investigationRequest, dependencyFindingRefs: [finding10, finding2] });
+  const poisonedRef = JSON.parse('{"findingId":"f","revision":1,"prototype":{}}');
+  expect(leaf.RequestInvestigationInputSchema.safeParse({
+    ...investigationRequest, dependencyFindingRefs: [poisonedRef],
+  }).success).toBe(false);
+});
+
+test('request and delegate questions enforce the exact UTF-8 byte ceiling', () => {
+  for (const question of ['a'.repeat(8192), 'é'.repeat(4096)]) {
+    expect(Buffer.byteLength(question)).toBe(8192);
+    expect(Buffer.byteLength(question + 'a')).toBe(8193);
+    expect(leaf.RequestInvestigationInputSchema.parse({ ...investigationRequest, question }).question).toBe(question);
+    expect(leaf.DelegateTaskInputSchema.parse({ ...delegation, question }).question).toBe(question);
+    expect(leaf.RequestInvestigationInputSchema.safeParse({ ...investigationRequest, question: question + 'a' }).success).toBe(false);
+    expect(leaf.DelegateTaskInputSchema.safeParse({ ...delegation, question: question + 'a' }).success).toBe(false);
+  }
+});
+
+const canonicalBytes = (value: unknown) => Buffer.byteLength(root.canonicalJson(value));
+
+function sizedEnvelope(bytes: number, make: (ids: string[]) => unknown): unknown {
+  const shortIds = Array.from({ length: 420 }, (_, index) => index.toString(36).padStart(3, '0'));
+  let remaining = bytes - canonicalBytes(make(shortIds));
+  const envelope = make(shortIds.map(id => {
+    const padding = Math.min(160 - id.length, remaining);
+    remaining -= padding;
+    return id + 'x'.repeat(padding);
+  }));
+  expect(canonicalBytes(envelope)).toBe(bytes);
+  return envelope;
+}
+
+test('variable inputs and repair results enforce the full canonical UTF-8 envelope', () => {
+  const question = 'é'.repeat(4096);
+  const makeRepair = (diagnosticCodes: string[]) => ({ ...repairInput, diagnosticCodes });
+  const makeDelegate = (dependencyIds: string[]) => ({ ...delegation, question, dependencyIds, requestId: 'request' });
+  const makeRequest = (ids: string[]) => ({
+    ...investigationRequest, question, dependencyFindingRefs: ids.map(findingId => ({ findingId, revision: 1 })),
+  });
+  const makeRepairResult = (ids: string[]) => ({
+    ...repairResult, diagnosticRefs: ids.map(code => ({ ...verificationRef, code })),
+  });
+  for (const [parser, make] of [
+    [leaf.BeginRepairInputSchema, makeRepair], [leaf.DelegateTaskInputSchema, makeDelegate],
+    [leaf.RequestInvestigationInputSchema, makeRequest], [leaf.BeginRepairResultSchema, makeRepairResult],
+  ] as const) {
+    const accepted = parser.safeParse(sizedEnvelope(65_536, make));
+    expect(accepted.success).toBe(true);
+    expect(canonicalBytes(accepted.data)).toBe(65_536);
+    expect(parser.safeParse(sizedEnvelope(65_537, make)).success).toBe(false);
+  }
+});
+
+test('fixed envelopes reach their structural maxima below the byte ceiling', () => {
+  const longestId = 'a'.repeat(160);
+  expect(canonicalBytes(leaf.FinishRunInputSchema.parse({}))).toBe(2);
+  expect(canonicalBytes(leaf.RequestInvestigationResultSchema.parse({ ok: true, requestId: longestId }))).toBe(186);
+  expect(canonicalBytes(leaf.FinishRunResultSchema.parse({
+    ...finishSuccess, runId: longestId, observedRunRevision: Number.MAX_SAFE_INTEGER - 1,
+    revision: Number.MAX_SAFE_INTEGER,
+  }))).toBe(270);
+  expect(canonicalBytes(leaf.FinishRunResultSchema.parse(finishIncomplete))).toBe(206);
+  expect(canonicalBytes(leaf.DiscoveryCompletionToolFailureSchema.parse({
+    ok: false, code: 'INVESTIGATION_REQUEST_LIMIT',
+  }))).toBe(49);
+});
+
+test('producer descriptors declare only their strict wire input fields', () => {
+  expect(leaf.discoveryCompletionToolSchemas.map(tool => tool.name)).toEqual(['beginRepair', 'finishRun']);
+  expect(leaf.discoveryDelegationToolSchemas.map(tool => tool.name)).toEqual(['delegateTask']);
+  expect(leaf.discoveryInvestigationToolSchemas.map(tool => tool.name)).toEqual(['requestInvestigation']);
+  const [begin, finish] = leaf.discoveryCompletionToolSchemas;
+  const [delegate] = leaf.discoveryDelegationToolSchemas;
+  const [request] = leaf.discoveryInvestigationToolSchemas;
+  const id = { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$' };
+  expect(begin!.inputSchema).toMatchObject({
+    type: 'object', additionalProperties: false, required: [
+      'investigationId', 'proposalId', 'expectedProposalRevision', 'diagnosticCodes',
+    ],
+    properties: {
+      investigationId: id, proposalId: id,
+      expectedProposalRevision: { type: 'integer', exclusiveMinimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+      diagnosticCodes: { type: 'array', items: id, minItems: 1, uniqueItems: true },
+    },
+  });
+  expect(finish!.inputSchema).toMatchObject({ type: 'object', additionalProperties: false, properties: {} });
+  expect(Object.keys(finish!.inputSchema.properties ?? {})).toEqual([]);
+  expect(finish!.inputSchema.required ?? []).toEqual([]);
+  expect(delegate!.inputSchema).toMatchObject({
+    type: 'object', additionalProperties: false, required: ['subject', 'role', 'question', 'dependencyIds'],
+    properties: {
+      requestId: id, role: { enum: ['identity', 'contract', 'receivables', 'connector'] },
+      subject: {
+        oneOf: [
+          { additionalProperties: false, required: ['kind'], properties: { kind: { const: 'source' } } },
+          { additionalProperties: false, required: ['kind', 'sellerEntityId', 'sourceAccountId'],
+            properties: { kind: { const: 'source_account' }, sellerEntityId: id, sourceAccountId: id } },
+        ],
+      },
+      question: { type: 'string', minLength: 1, maxLength: 8192 },
+      dependencyIds: { type: 'array', items: id, uniqueItems: true },
+    },
+  });
+  const requestDescriptor = request!.inputSchema;
+  expect(requestDescriptor.$ref).toMatch(/^#\/\$defs\//);
+  const requestShape = requestDescriptor.$defs?.[requestDescriptor.$ref!.split('/').at(-1)!];
+  expect(requestShape).toMatchObject({
+    type: 'object', additionalProperties: false, required: ['subject', 'question', 'dependencyFindingRefs'],
+    properties: {
+      question: { type: 'string', minLength: 1 }, dependencyFindingRefs: { type: 'array' },
+    },
+  });
+});
+
+test('contracts root exposes exactly the named producer schemas, descriptors and types from the leaf', () => {
+  for (const name of [
+    'DiscoveryCompletionToolFailureSchema', 'DiscoveryRepairDiagnosticRefSchema',
+    'BeginRepairInputSchema', 'BeginRepairResultSchema', 'FinishRunInputSchema', 'FinishRunResultSchema',
+    'RequestInvestigationInputSchema', 'RequestInvestigationResultSchema', 'DiscoveryInvestigationToolFailureSchema',
+    'DelegateTaskInputSchema', 'discoveryCompletionToolSchemas', 'discoveryDelegationToolSchemas',
+    'discoveryInvestigationToolSchemas',
+  ] as const) {
+    expect(leaf[name], name).toBeDefined();
+    expect(root[name], name).toBe(leaf[name]);
+  }
+  expect(root).not.toHaveProperty('PublishFindingInputSchema');
+  expectTypeOf<root.DiscoveryCompletionToolFailure>().toEqualTypeOf<leaf.DiscoveryCompletionToolFailure>();
+  expectTypeOf<root.DiscoveryRepairDiagnosticRef>().toEqualTypeOf<leaf.DiscoveryRepairDiagnosticRef>();
+  expectTypeOf<root.BeginRepairInput>().toEqualTypeOf<leaf.BeginRepairInput>();
+  expectTypeOf<root.BeginRepairResult>().toEqualTypeOf<leaf.BeginRepairResult>();
+  expectTypeOf<root.FinishRunInput>().toEqualTypeOf<leaf.FinishRunInput>();
+  expectTypeOf<root.FinishRunResult>().toEqualTypeOf<leaf.FinishRunResult>();
+  expectTypeOf<root.RequestInvestigationInput>().toEqualTypeOf<leaf.RequestInvestigationInput>();
+  expectTypeOf<root.RequestInvestigationResult>().toEqualTypeOf<leaf.RequestInvestigationResult>();
+  expectTypeOf<root.DiscoveryInvestigationToolFailure>().toEqualTypeOf<leaf.DiscoveryInvestigationToolFailure>();
+  expectTypeOf<root.DelegateTaskInput>().toEqualTypeOf<leaf.DelegateTaskInput>();
 });
