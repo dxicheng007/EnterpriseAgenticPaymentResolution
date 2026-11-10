@@ -15,7 +15,7 @@ Remaining work by owner:
 - **Experience:** shared-lane visibility, honest runtime model metric and rehearsal restart wording; consume the authority operations API after mounting; remaining browser/public-packet and rehearsal proof.
 - **User decision pending:** new generated-account read/verification grant authority. Existing trusted allowlists remain in effect; independent work continues without inventing new permission policy.
 
-Main `f409805` is integrated and the latest fetch found no new owner corrections. CI run [42844843857](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/actions/runs/42844843857) at `122b217f` ended `startup_failure` with **zero jobs**. Local checks and independent reviews are recorded at their exact candidates; there is no CI pass or full V4–V7 acceptance. Owner chats are not separately exposed in the available inventory, so dependency requests are delivered through the owners' GitHub PR comments.
+Main `f409805` is integrated and the latest fetch found no new owner corrections. CI run [42862296550](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/actions/runs/42862296550) at `88e5301` ended `startup_failure` with **zero jobs**. Local checks and independent reviews are recorded at their exact candidates; there is no CI pass or full V4–V7 acceptance. Owner chats are not separately exposed in the available inventory, so dependency requests are delivered through the owners' GitHub PR comments.
 
 The sections below preserve the chronological evidence and earlier intermediate states. Newer exact reviews supersede older status statements; merge status, machine checks, independent review and user acceptance remain separate facts.
 
@@ -372,3 +372,9 @@ CSV candidate `15b003b` passes typecheck and all four scoped cases; [report](syn
 ## Genuine CSV fixture task acceptance
 
 Task C2: complete (commits 213d4f8..15b003b, review clean). Fresh Astra selection_catalog_csv_review approves specification and quality with no findings. Independently verified all 59 reported artifacts and 115 source inventory entries. Final typecheck and four genuine cases pass; initial failed candidate source copies retained and exact lineage assertion repair verified. Review SHA-256 934154acd1e2c8cf3da554d66a5ca841f5ed851dbeac2c8de420495d563576fd. All six fixture task gates now pass. Combined two-plan final review remains required before selector Task5. Source and SQL leases remain with root.
+
+## Combined fixture gate and upstream checkpoint
+
+Fresh Astra final review is running over `a5e834f..88e5301`: both fixture plans, all six accepted tasks, twelve test files, 4,878 additions and 253 deletions. It checks shared lifecycle/evidence helpers, independent financial expectations, retained qualification evidence and remaining duplication. Separate plan acceptance dispositions are required before selector Task5 release. The bounded catalog-reader implementer is reading the accepted brief/preflight; no source or SQL lease has been released.
+
+The branch was pulled at this clean checkpoint and was already current. Main remains `f409805`. Discovery/Experience have published no new correction replies. The external resolution branch advanced to `e32c6ed`, but has no published PR and still differs materially from accepted PR48 in writer/storage/completion contracts; copied reports do not constitute acceptance of that source. It was not merged. Latest CI `42862296550` failed at startup with zero jobs.
