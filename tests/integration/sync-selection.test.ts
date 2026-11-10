@@ -14,14 +14,18 @@ import * as controlDb from '@eapr/storage/control-db';
 import * as runtimeDb from '@eapr/storage/runtime-db';
 import { withTransaction } from '@eapr/storage/transaction';
 import type { Pool } from 'pg';
+import type { PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import * as activationComposition from '../../apps/control/src/activation-composition.js';
 import * as workerServer from '../../apps/worker/src/server.js';
 import { createRuntimeCapture } from '../../apps/worker/src/sync/capture.js';
+import { createCurrentAuthority } from '../../apps/worker/src/sync/current-authority.js';
+import { readAuthoritySnapshotInTransaction } from '../../apps/worker/src/sync/current-authority-store.js';
 import { eventA } from '../../packages/sources/src/company-a.js';
 import * as nativeDb from '../../scripts/native-db.js';
 import * as evidenceCapture from '../fixtures/evidence-v2-capture.js';
 import { createSyncSelectionFixture } from '../fixtures/sync-selection.js';
+import { createSyncApplyFixture, syncApplyClock, type SyncApplyFixture } from '../fixtures/sync-apply.js';
 
 type Fixture = Awaited<ReturnType<typeof createSyncSelectionFixture>>;
 type EvidenceInput = Awaited<ReturnType<typeof evidenceCapture.captureEvidenceFixture>>['input'];
@@ -448,3 +452,140 @@ describe('same-feed fixture qualification', () => {
     }
   });
 });
+
+const authorityTables = [
+  'runtime_authority_heads', 'runtime_authority_commands', 'activity_counter', 'activity_events',
+] as const;
+
+async function withAuthorityFixture(run: (data: SyncApplyFixture) => Promise<void>) {
+  const data = await createSyncApplyFixture();
+  try { await run(data); } finally { await data.close(); }
+}
+
+async function authorityCommand(data: SyncApplyFixture, action: 'pause' | 'revoke', expectedEpoch: number) {
+  const api = createCurrentAuthority({
+    db: data.db, clock: syncApplyClock, observe: data.source.readCurrentSemantics,
+    admission: { authorize: async () => ({
+      reviewer: { reviewerId: 'selection-authority-reviewer', sessionId: 'selection-authority-session' },
+      allowedAccountIds: [data.identity.scope.accountId], allowedSourceRefs: [data.stored.bundle.manifest.sourceRef],
+    }) },
+  });
+  const response = await api.command({}, {
+    schemaVersion: '1', identity: data.identity, action, expectedEpoch, idempotencyKey: 'selection-authority-' + action,
+  });
+  expect(response).toMatchObject({ replayed: false, result: { changed: true, state: {
+    status: action === 'pause' ? 'paused' : 'revoked', epoch: expectedEpoch + 1,
+  } } });
+  return response.result.state;
+}
+
+type ReadAuthority = () => ReturnType<typeof readAuthoritySnapshotInTransaction>;
+
+async function inAuthoritySnapshot(data: SyncApplyFixture, run: (read: ReadAuthority) => Promise<void>) {
+  const client = await data.db.connect();
+  let discard = false;
+  const reader = new Proxy(client, {
+    get(target, key, receiver) {
+      if (key === 'query') return (sql: string, values?: unknown[]) => {
+        const statement = sql.trim().replace(/\s+/g, ' ');
+        expect(statement).toMatch(/^SELECT (?:\*|s\.\*|1) FROM (?:runtime_activation_imports|parent_snapshots|runtime_authority_heads|runtime_authority_commands)\b/);
+        expect(statement).not.toMatch(/;|\bFOR (?:UPDATE|NO KEY UPDATE|SHARE|KEY SHARE)\b|\bpg_advisory/i);
+        return target.query(sql, values);
+      };
+      expect(['connect', 'release', 'end']).not.toContain(key);
+      return Reflect.get(target, key, receiver);
+    },
+  }) satisfies PoolClient;
+  try {
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    await run(async () => {
+      const connect = vi.spyOn(data.db, 'connect');
+      try {
+        return await readAuthoritySnapshotInTransaction(reader, data.identity);
+      } finally {
+        try { expect(connect).not.toHaveBeenCalled(); } finally { connect.mockRestore(); }
+      }
+    });
+    expect((await client.query('SHOW transaction_isolation')).rows).toEqual([{ transaction_isolation: 'repeatable read' }]);
+    expect((await client.query('SHOW transaction_read_only')).rows).toEqual([{ transaction_read_only: 'on' }]);
+    await client.query('COMMIT');
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch { discard = true; }
+    throw error;
+  } finally {
+    client.release(discard);
+  }
+}
+
+test('authority_same_client retains the initial A5 snapshot across a committed pause', () => withAuthorityFixture(async data => {
+  const before = await snapshotRows(data.db, authorityTables);
+  expect(before.runtime_authority_heads).toEqual([]);
+  expect(before.runtime_authority_commands).toEqual([]);
+  let paused!: Awaited<ReturnType<typeof authorityCommand>>;
+  await inAuthoritySnapshot(data, async read => {
+    const initial = await read();
+    const { activation, bundle } = data.stored;
+    expect(initial).toEqual({ stored: data.stored, command: null, state: {
+      schemaVersion: '1', identity: data.identity, sourceRef: bundle.manifest.sourceRef,
+      artifactHash: activation.artifactHash, profileHash: activation.profileHash, manifestHash: activation.manifestHash,
+      status: 'active', epoch: 1, changedAt: activation.approvedAt,
+    } });
+    expect(await snapshotRows(data.db, authorityTables)).toEqual(before);
+
+    // The first read pins the snapshot. The service resolves only after its separate writer commits.
+    paused = await authorityCommand(data, 'pause', 1);
+    const afterPause = await snapshotRows(data.db, authorityTables);
+    expect(await read()).toEqual(initial);
+    expect(await snapshotRows(data.db, authorityTables)).toEqual(afterPause);
+  });
+
+  const beforeFresh = await snapshotRows(data.db, authorityTables);
+  await inAuthoritySnapshot(data, async read => {
+    expect((await read()).state).toEqual(paused);
+  });
+  expect(await snapshotRows(data.db, authorityTables)).toEqual(beforeFresh);
+}), 90_000);
+
+test('authority_inactive_recognition retains paused authority and sees a revoke on a fresh snapshot', () => withAuthorityFixture(async data => {
+  const paused = await authorityCommand(data, 'pause', 1);
+  let revoked!: Awaited<ReturnType<typeof authorityCommand>>;
+  await inAuthoritySnapshot(data, async read => {
+    const initial = await read();
+    expect(initial.state).toEqual(paused);
+    expect(initial.command).toBeNull();
+    revoked = await authorityCommand(data, 'revoke', 2);
+    expect(await read()).toEqual(initial);
+  });
+  await inAuthoritySnapshot(data, async read => {
+    const current = await read();
+    expect(current.state).toEqual(revoked);
+    expect(current.command).toBeNull();
+  });
+}), 90_000);
+
+test('authority_missing_head_with_history fails closed after a genuine pause', () => withAuthorityFixture(async data => {
+  await authorityCommand(data, 'pause', 1);
+  await withTransaction(data.owner, async client => {
+    // Simulate head loss only in this disposable test database, while retaining the real command.
+    const { rows } = await client.query<{ name: string }>(`
+      SELECT quote_ident(conname) AS name FROM pg_constraint
+      WHERE contype = 'f' AND conrelid = 'runtime_authority_commands'::regclass
+        AND confrelid = 'runtime_authority_heads'::regclass
+    `);
+    expect(rows).toHaveLength(1);
+    await client.query('ALTER TABLE runtime_authority_commands DROP CONSTRAINT ' + rows[0]!.name);
+    await client.query('ALTER TABLE runtime_authority_heads DISABLE TRIGGER USER');
+    const removed = await client.query('DELETE FROM runtime_authority_heads WHERE account_id = $1', [data.identity.scope.accountId]);
+    expect(removed.rowCount).toBe(1);
+    await client.query('ALTER TABLE runtime_authority_heads ENABLE TRIGGER USER');
+  });
+  const before = await snapshotRows(data.db, authorityTables);
+  expect(before.runtime_authority_heads).toEqual([]);
+  expect(before.runtime_authority_commands).toEqual([expect.objectContaining({ idempotency_key: 'selection-authority-pause' })]);
+  await inAuthoritySnapshot(data, async read => {
+    await expect(read().then(({ state }) => state.status)).rejects.toMatchObject({
+      code: 'AUTHORITY_STORAGE_INVALID', statusCode: 503,
+    });
+  });
+  expect(await snapshotRows(data.db, authorityTables)).toEqual(before);
+}), 90_000);
