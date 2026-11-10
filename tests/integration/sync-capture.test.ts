@@ -231,7 +231,8 @@ test('applies the additive runtime catalog and reapplies it without changing ori
   expect(before).toEqual([
     { version: 1, sha256: 'c09e49970e4fc3394294f643035acba224b9f19bdc4f6e46b66c6679fd82c2f3' },
     { version: 2, sha256: 'a06874e335f6acfd6f62d89760c00c76059c95b9ab05782707999ff70f8ddc56' },
-    { version: 3, sha256: expect.stringMatching(/^[0-9a-f]{64}$/) },
+    { version: 3, sha256: 'aedc4cdec78c5d4cecf02a41f5f68e0e706bb195cf36182890e3af0f5e039b8c' },
+    { version: 4, sha256: hashBytes(await readFile(new URL('../../db/runtime/004_current_authority.sql', import.meta.url))) },
   ]);
   await migrate(pair, ['runtime'], readMigrationCatalog());
   expect(await read()).toEqual(before);
