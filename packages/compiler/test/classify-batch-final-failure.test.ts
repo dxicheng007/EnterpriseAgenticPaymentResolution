@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from 'vitest';
-import { planBatch } from '@eapr/compiler/plan-batch';
+import { classifyBatch, planBatch } from '@eapr/compiler/plan-batch';
 import type { SourceEvent } from '@eapr/contracts';
 import { computeBalance } from '@eapr/finance/balance';
 import { FinanceError } from '@eapr/finance/validate';
@@ -36,4 +36,20 @@ const expectedLegacyFailure = {
 test('keeps earlier holds and appends the final finance failure for accepted deliveries', () => {
   vi.mocked(computeBalance).mockImplementationOnce(() => { throw new FinanceError('MONEY_RANGE', message); });
   expect(planBatch(artifactA, profileA, inputs as SourceEvent[], targetAtLatePayment)).toEqual(expectedLegacyFailure);
+});
+
+test('discards provisional classifications when plan finalization fails', () => {
+  vi.mocked(computeBalance).mockImplementationOnce(() => { throw new FinanceError('MONEY_RANGE', message); });
+  expect(classifyBatch(artifactA, profileA, inputs as SourceEvent[], targetAtLatePayment)).toEqual({
+    schemaVersion: '1', outcome: expectedLegacyFailure,
+    details: { kind: 'not_classified', reason: 'plan_invalid', holdIndexes: [1], sourceBlockers: [] },
+  });
+});
+
+test('propagates ordinary exceptions from finalization through both public functions', () => {
+  const failure = new Error('Unexpected finalization failure');
+  for (const run of [planBatch, classifyBatch]) {
+    vi.mocked(computeBalance).mockImplementationOnce(() => { throw failure; });
+    expect(() => run(artifactA, profileA, inputs as SourceEvent[], targetAtLatePayment)).toThrow(failure);
+  }
 });
