@@ -6,6 +6,7 @@ import {
   hashBytes, hashCanonical, hashFinancialAttestation, hashFinancialReport, hashFinancialReservation, hashProfile,
   targetRecordId, type CaptureProgressV1, type TargetState,
 } from '@eapr/contracts';
+import { planBatch } from '@eapr/compiler/plan-batch';
 import { computeBalance } from '@eapr/finance/balance';
 import { readStoredActivation } from '@eapr/parent/activation-store';
 import { readStoredTarget } from '@eapr/parent/snapshots';
@@ -18,14 +19,20 @@ import type { PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import * as activationComposition from '../../apps/control/src/activation-composition.js';
 import * as workerServer from '../../apps/worker/src/server.js';
+import { createSyncApplier } from '../../apps/worker/src/sync/apply.js';
 import { createRuntimeCapture } from '../../apps/worker/src/sync/capture.js';
 import { createCurrentAuthority } from '../../apps/worker/src/sync/current-authority.js';
 import { readAuthoritySnapshotInTransaction } from '../../apps/worker/src/sync/current-authority-store.js';
+import { createSelectionReadAdmission, readSelectionCatalog } from '../../apps/worker/src/sync/selection-read.js';
 import { eventA } from '../../packages/sources/src/company-a.js';
 import * as nativeDb from '../../scripts/native-db.js';
 import * as evidenceCapture from '../fixtures/evidence-v2-capture.js';
 import { createSyncSelectionFixture } from '../fixtures/sync-selection.js';
 import { createSyncApplyFixture, syncApplyClock, type SyncApplyFixture } from '../fixtures/sync-apply.js';
+import { createSyncSelectionBaselinesFixture } from '../fixtures/sync-selection-baselines.js';
+import { createSyncSelectionBundledFixture } from '../fixtures/sync-selection-bundled.js';
+import { createSyncSelectionCatalogCsvFixture } from '../fixtures/sync-selection-catalog-csv.js';
+import { createSyncSelectionCatalogNineFixture } from '../fixtures/sync-selection-catalog-nine.js';
 
 type Fixture = Awaited<ReturnType<typeof createSyncSelectionFixture>>;
 type EvidenceInput = Awaited<ReturnType<typeof evidenceCapture.captureEvidenceFixture>>['input'];
@@ -589,3 +596,378 @@ test('authority_missing_head_with_history fails closed after a genuine pause', (
   });
   expect(await snapshotRows(data.db, authorityTables)).toEqual(before);
 }), 90_000);
+
+const catalogTables = [
+  ...authorityTables, 'runtime_activation_imports', 'parent_targets', 'parent_snapshots',
+  'parent_metadata', 'parent_financial_records',
+] as const;
+const catalogInput = { sourceRef: 'legacy-a', asOf: '2026-11-09T08:00:00.000Z' };
+const bodyFields = new Set([
+  'canonical', 'request', 'reviewer', 'bundle', 'plan', 'activation', 'receipt', 'recorded_target', 'planner_target',
+  'grant_canonical', 'command_canonical', 'reviewer_canonical', 'result_canonical', 'resume_canonical',
+]);
+type CatalogQuery = { sql: string; returned: number; fields: string[]; values: unknown[] | undefined };
+
+async function inCatalogSnapshot(db: Pool, run: (read: (sourceRef?: string) => ReturnType<typeof readSelectionCatalog>,
+  queries: CatalogQuery[]) => Promise<void>) {
+  const client = await db.connect();
+  const queries: CatalogQuery[] = [];
+  let discard = false;
+  const reader = new Proxy(client, {
+    get(target, key, receiver) {
+      if (key === 'query') return async (sql: string, values?: unknown[]) => {
+        const statement = sql.trim().replace(/\s+/g, ' ');
+        expect(statement).toMatch(/^SELECT\b/i);
+        expect(statement).not.toMatch(/;|\bFOR (?:UPDATE|NO KEY UPDATE|SHARE|KEY SHARE)\b|\bpg_advisory/i);
+        const result = values === undefined ? await target.query(sql) : await target.query(sql, values);
+        queries.push({ sql: statement, returned: result.rows.length, fields: result.fields.map(({ name }) => name), values });
+        return result;
+      };
+      expect(['connect', 'release', 'end']).not.toContain(key);
+      return Reflect.get(target, key, receiver);
+    },
+  }) satisfies PoolClient;
+  try {
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    const connect = vi.spyOn(db, 'connect');
+    try {
+      await run((sourceRef = catalogInput.sourceRef) => readSelectionCatalog(reader, { ...catalogInput, sourceRef }, {
+        admission: createSelectionReadAdmission(), assertActive() {},
+      }), queries);
+    } finally {
+      try { expect(connect).not.toHaveBeenCalled(); } finally { connect.mockRestore(); }
+    }
+  } finally {
+    try {
+      await client.query('ROLLBACK');
+    } catch (error) {
+      discard = true;
+      throw error;
+    } finally {
+      client.release(discard);
+    }
+  }
+}
+
+function expectNoCatalogBodies(queries: CatalogQuery[]) {
+  expect(queries.length).toBeGreaterThan(0);
+  expect(queries.flatMap(query => query.fields.filter(field => bodyFields.has(field)))).toEqual([]);
+}
+
+async function catalogByteInventory(db: Pool) {
+  const { rows: [row] } = await db.query<{ imports: number; authority: number; snapshots: number; metadata: number; financial: number }>(`
+    SELECT
+      (SELECT COALESCE(sum(octet_length(request) + octet_length(reviewer) + octet_length(bundle) + octet_length(plan) +
+        octet_length(activation) + octet_length(receipt) + octet_length(recorded_target) + octet_length(planner_target)), 0)::int
+        FROM runtime_activation_imports) AS imports,
+      (SELECT COALESCE(sum(octet_length(grant_canonical)), 0)::int FROM runtime_authority_heads) AS authority,
+      (SELECT COALESCE(sum(octet_length(canonical)), 0)::int FROM parent_snapshots s
+        WHERE EXISTS (SELECT 1 FROM runtime_activation_imports i
+          WHERE i.account_id = s.account_id AND i.approved_snapshot_hash = s.snapshot_hash)
+        OR EXISTS (SELECT 1 FROM parent_targets t
+          WHERE t.account_id = s.account_id AND t.snapshot_hash = s.snapshot_hash)) AS snapshots,
+      (SELECT COALESCE(sum(octet_length(canonical)), 0)::int FROM parent_metadata) AS metadata,
+      (SELECT COALESCE(sum(octet_length(canonical)), 0)::int FROM parent_financial_records) AS financial
+  `);
+  return row!;
+}
+
+test('catalog_empty and exact enrollment account for only observed physical storage', () => withAuthorityFixture(async data => {
+  const before = await snapshotRows(data.db, catalogTables);
+  const bytes = await catalogByteInventory(data.db);
+  expect((await data.db.query('SELECT recorded_target = planner_target AS same_bytes FROM runtime_activation_imports')).rows)
+    .toEqual([{ same_bytes: true }]);
+  await inCatalogSnapshot(data.db, async (read, queries) => {
+    expect(await read('absent-source')).toEqual({
+      kind: 'incomplete', reason: 'no_committed_subjects', boundedFacts: {
+        counts: {}, canonicalBytes: 0, sourceContractChecksComplete: false, sourceContractObservations: [],
+        causes: [{ reason: 'no_committed_subjects', identity: null, lane: null, streamId: null, event: null, family: null }],
+      },
+    });
+    expect(queries).toHaveLength(1);
+    expectNoCatalogBodies(queries);
+    queries.length = 0;
+    const catalog = await read();
+    expect(catalog).toMatchObject({
+      subjects: [{ identity: data.identity, stored: data.stored, target: data.stored.approvedTarget,
+        authority: { status: 'active', epoch: 1 } }],
+      boundedFacts: { counts: { import: 1, target: 2, metadata: before.parent_metadata!.length,
+        financial: before.parent_financial_records!.length },
+        canonicalBytes: Object.values(bytes).reduce((sum, size) => sum + size, 0), causes: [] },
+    });
+    if ('kind' in catalog) throw new Error('Expected admitted catalog');
+    expect(catalog.boundedFacts.counts.receipt).toBeUndefined();
+    expect(catalog.evidence.filter(ref => ref.family === 'target')).toHaveLength(2);
+    expect(queries.filter(query => query.sql.includes('FROM parent_snapshots s WHERE')
+      && query.fields.includes('canonical'))).toHaveLength(1);
+    const firstBody = queries.findIndex(query => query.fields.some(field => bodyFields.has(field)));
+    expect(firstBody).toBeGreaterThan(0);
+    expect(queries.slice(0, firstBody).some(query => query.fields.includes('invoices'))).toBe(true);
+    expect(queries.slice(firstBody).some(query => query.fields.includes('invoices'))).toBe(false);
+  });
+  expect(await snapshotRows(data.db, catalogTables)).toEqual(before);
+
+  // Advance only the current pointer through the existing capture/apply path.
+  const { db, identity, source, stored } = data;
+  const { artifact, manifest, profiles } = stored.bundle;
+  const profile = profiles.find(candidate => candidate.hash === stored.request.expectedProfileHash)!;
+  const baseline = manifest.streams.find(stream => stream.streamId === 'a-finance')!.resumeAfter;
+  const capture = await createRuntimeCapture({ db, clock: syncApplyClock }).openCommitted(identity);
+  await data.addInvoice('selection-catalog-new-invoice', profile.sourceAccountIds[0]!);
+  const page = await source.fetchChanges(manifest.sourceRef, 'a-finance', baseline);
+  expect(await capture.capturePage(page)).toMatchObject({ captured: 1 });
+  const plan = planBatch(artifact, profile, page.events, { ...stored.approvedTarget.records, asOf: catalogInput.asOf }).plans[0]!;
+  const applier = createSyncApplier({ db, clock: syncApplyClock, identity, observe: source.readCurrentSemantics });
+  await applier.applyBatch(plan, 1);
+  const current = await withTransaction(db, client => readStoredTarget(client, identity.scope));
+  expect(current?.records.version).toBe(stored.approvedTarget.records.version + 1);
+  const advancedBytes = await catalogByteInventory(db);
+  const beforeAdvanced = await snapshotRows(db, catalogTables);
+  await inCatalogSnapshot(db, async (read, queries) => {
+    const catalog = await read();
+    expect(catalog).toMatchObject({
+      subjects: [{ identity, stored, target: current }],
+      boundedFacts: { counts: { import: 1, target: 3 },
+        canonicalBytes: Object.values(advancedBytes).reduce((sum, size) => sum + size, 0) },
+    });
+    if ('kind' in catalog) throw new Error('Expected both admitted snapshot roles');
+    expect(catalog.evidence.filter(ref => ref.family === 'target')).toHaveLength(3);
+    expect(queries.filter(query => query.sql.includes('FROM parent_snapshots s WHERE')
+      && query.fields.includes('canonical')).map(query => query.values?.[3]))
+      .toEqual([stored.approvedTarget.snapshotHash, current!.snapshotHash]);
+  });
+  expect(await snapshotRows(db, catalogTables)).toEqual(beforeAdvanced);
+}), 120_000);
+
+test('catalog_inactive preserves paused and revoked subjects and counts their grant bytes', () => withAuthorityFixture(async data => {
+  for (const [action, epoch] of [['pause', 1], ['revoke', 2]] as const) {
+    const state = await authorityCommand(data, action, epoch);
+    const bytes = await catalogByteInventory(data.db);
+    const before = await snapshotRows(data.db, catalogTables);
+    await inCatalogSnapshot(data.db, async read => {
+      expect(await read()).toMatchObject({
+        subjects: [{ identity: data.identity, authority: state }],
+        boundedFacts: { counts: { import: 1, authority: 1, target: 2 },
+          canonicalBytes: Object.values(bytes).reduce((sum, size) => sum + size, 0) },
+      });
+    });
+    expect(await snapshotRows(data.db, catalogTables)).toEqual(before);
+  }
+}), 90_000);
+
+test('catalog_ninth enrolled subject rejects on the indexed source sentinel', async () => {
+  const fixture = await createSyncSelectionCatalogNineFixture();
+  try {
+    expect(fixture.subjects).toHaveLength(9);
+    await inCatalogSnapshot(fixture.db, async (read, queries) => {
+      expect(await read()).toMatchObject({ kind: 'incomplete', reason: 'limit', boundedFacts: {
+        counts: { import: 9 }, canonicalBytes: 0, causes: [{ family: 'import', identity: null }],
+      } });
+      expect(queries).toHaveLength(1);
+      expect(queries[0]).toMatchObject({ returned: 9, values: ['legacy-a'] });
+      expect(queries[0]!.sql).toMatch(/capture_source_ref = \$1 ORDER BY account_id LIMIT 9$/i);
+      expectNoCatalogBodies(queries);
+    });
+  } finally { await fixture.close(); }
+}, 180_000);
+
+test('catalog_csv rejects the genuine B enrollment as a whole cut', async () => {
+  const fixture = await createSyncSelectionCatalogCsvFixture();
+  try {
+    await inCatalogSnapshot(fixture.db, async read => {
+      expect(await read('legacy-b')).toMatchObject({ kind: 'incomplete', reason: 'unsupported_transport', boundedFacts: {
+        counts: { import: 1 }, causes: [{ identity: fixture.subject.identity, family: 'import' }],
+      } });
+    });
+  } finally { await fixture.close(); }
+}, 120_000);
+
+test('catalog_baselines retain both approved vectors when the older capture is approved later', async () => {
+  const fixture = await createSyncSelectionBaselinesFixture();
+  try {
+    await inCatalogSnapshot(fixture.db, async (read, queries) => {
+      const result = await read();
+      expect(result).not.toHaveProperty('kind');
+      if ('kind' in result) throw new Error('Expected both admitted baselines');
+      const observed = result.subjects.map(({ identity, stored, target }) => ({
+        identity, manifest: stored.bundle.manifest.id, vector: stored.activation.baselineCursors, target,
+      }));
+      expect(observed).toHaveLength(2);
+      for (const { identity, stored } of fixture.subjects) {
+        expect(observed).toContainEqual({ identity, manifest: stored.bundle.manifest.id,
+          vector: stored.activation.baselineCursors, target: stored.approvedTarget });
+      }
+      expect(observed[0]!.manifest).not.toBe(observed[1]!.manifest);
+      expect(observed[0]!.vector).not.toEqual(observed[1]!.vector);
+      const firstBody = queries.findIndex(query => query.fields.some(field => bodyFields.has(field)));
+      expect(firstBody).toBeGreaterThan(0);
+      expect(queries.slice(0, firstBody).filter(query => query.fields.includes('invoices'))
+        .map(query => query.returned)).toEqual([2, 1, 2, 1]);
+      expect(queries.slice(firstBody).some(query => query.fields.includes('invoices'))).toBe(false);
+    });
+  } finally { await fixture.close(); }
+}, 120_000);
+
+test('catalog_bundled profile enrollment follows the exact committed request', async () => {
+  const fixture = await createSyncSelectionBundledFixture();
+  try {
+    await inCatalogSnapshot(fixture.db, async read => {
+      const result = await read();
+      expect(result).not.toHaveProperty('kind');
+      if ('kind' in result) throw new Error('Expected admitted selecting import');
+      expect(result.subjects).toHaveLength(1);
+      expect(result.subjects[0]).toMatchObject({
+        identity: fixture.selected.identity,
+        stored: { request: { expectedProfileHash: fixture.selected.stored.activation.profileHash } },
+      });
+      expect(result.subjects[0]!.stored.bundle.profiles).toContainEqual(fixture.unselected);
+      expect(result.subjects[0]!.identity.scope).not.toEqual(fixture.unselected.scope);
+    });
+  } finally { await fixture.close(); }
+}, 120_000);
+
+test.each([
+  ['recorded_snapshot_hash', "UPDATE runtime_activation_imports SET recorded_snapshot_hash = repeat('a', 64)"],
+  ['request_digest', "UPDATE runtime_activation_imports SET request_digest = repeat('b', 64)"],
+] as const)('catalog_forged %s fails safely after scalar admission', (_label, update) => withAuthorityFixture(async data => {
+  // Owner-only corruption of one scalar in a disposable, genuinely activated database.
+  await withTransaction(data.owner, async client => {
+    await client.query('ALTER TABLE runtime_activation_imports DISABLE TRIGGER USER');
+    expect((await client.query(update)).rowCount).toBe(1);
+    await client.query('ALTER TABLE runtime_activation_imports ENABLE TRIGGER USER');
+  });
+  await inCatalogSnapshot(data.db, async read => {
+    await expect(read()).rejects.toMatchObject({ code: 'SELECTION_STORAGE_INVALID' });
+  });
+}), 90_000);
+
+async function seedCatalogMetadata(data: SyncApplyFixture, count: number, displayBytes = 0, first = 1) {
+  const { accountId, companyId, sellerEntityId } = data.identity.scope;
+  // Disposable corruption only. These rows deliberately have no snapshot membership.
+  await data.owner.query(`
+    INSERT INTO parent_metadata (account_id, company_id, seller_entity_id, family, record_id, canonical, digest)
+    SELECT $1, $2, $3, 'customer', body.id, body.canonical, encode(sha256(convert_to(body.canonical, 'UTF8')), 'hex')
+    FROM (
+      SELECT id, jsonb_build_object('id', id, 'displayName', repeat('x', $5), 'evidenceRefs', '[]'::jsonb)::text AS canonical
+      FROM (SELECT 'catalog-sentinel-' || n::text AS id FROM generate_series($6::int, $6::int + $4::int - 1) n) ids
+    ) body
+  `, [accountId, companyId, sellerEntityId, count, displayBytes, first]);
+}
+
+test('catalog_extra metadata rejects admitted relational rows missing from the snapshot', () => withAuthorityFixture(async data => {
+  await seedCatalogMetadata(data, 1);
+  await inCatalogSnapshot(data.db, async read => {
+    await expect(read()).rejects.toMatchObject({ code: 'SELECTION_STORAGE_INVALID' });
+  });
+}), 90_000);
+
+test('catalog_target record cap counts the combined 10,001st observed row', () => withAuthorityFixture(async data => {
+  const countRows = () => data.db.query<{ metadata: number; financial: number }>(`
+    SELECT (SELECT count(*) FROM parent_metadata)::int AS metadata,
+      (SELECT count(*) FROM parent_financial_records)::int AS financial
+  `);
+  const { rows: [initial] } = await countRows();
+  expect(initial!.financial).toBeGreaterThan(1);
+  const exactMetadata = 10_001 - initial!.financial;
+  const exactAdded = exactMetadata - initial!.metadata;
+
+  async function expectSentinel(metadata: number, financial: number) {
+    await inCatalogSnapshot(data.db, async (read, queries) => {
+      expect(await read()).toMatchObject({ kind: 'incomplete', reason: 'limit', boundedFacts: {
+        counts: { metadata, financial }, causes: [{ identity: data.identity, family: 'financial' }],
+      } });
+      expect(queries.filter(query => /FROM parent_financial_records/i.test(query.sql))).toEqual([
+        expect.objectContaining({ returned: financial,
+          values: [data.identity.scope.accountId, data.identity.scope.companyId, data.identity.scope.sellerEntityId, financial] }),
+      ]);
+      expectNoCatalogBodies(queries);
+    });
+  }
+
+  await seedCatalogMetadata(data, exactAdded);
+  const { rows: [exact] } = await countRows();
+  expect(exact!.metadata + exact!.financial).toBe(10_001);
+  await expectSentinel(exactMetadata, initial!.financial);
+
+  // At zero remaining capacity the SQL must still look for one financial row.
+  await seedCatalogMetadata(data, 10_000 - exactMetadata, 0, exactAdded + 1);
+  const { rows: [more] } = await countRows();
+  expect(more).toEqual({ metadata: 10_000, financial: initial!.financial });
+  await expectSentinel(10_000, 1);
+}), 120_000);
+
+test('catalog_per-value byte overflow rejects an actual 1,048,577-byte import column before canonical reads',
+  () => withAuthorityFixture(async data => {
+    await withTransaction(data.owner, async client => {
+      await client.query('ALTER TABLE runtime_activation_imports DISABLE TRIGGER USER');
+      const { rows } = await client.query(`
+        UPDATE runtime_activation_imports SET activation = activation || repeat(' ', 1048577 - octet_length(activation))
+        RETURNING octet_length(activation) AS bytes
+      `);
+      expect(rows).toEqual([{ bytes: 1_048_577 }]);
+      await client.query('ALTER TABLE runtime_activation_imports ENABLE TRIGGER USER');
+    });
+    await inCatalogSnapshot(data.db, async (read, queries) => {
+      expect(await read()).toMatchObject({ kind: 'incomplete', reason: 'limit', boundedFacts: {
+        counts: { import: 1 }, canonicalBytes: 0, causes: [{ identity: data.identity, family: 'import' }],
+      } });
+      expectNoCatalogBodies(queries);
+    });
+  }), 90_000);
+
+test('catalog_aggregate byte overflow stops at the first value that would cross 16 MiB', () => withAuthorityFixture(async data => {
+  const before = await catalogByteInventory(data.db);
+  await seedCatalogMetadata(data, 18, 999_000);
+  const { rows } = await data.db.query<{ bytes: number }>('SELECT octet_length(canonical) AS bytes FROM parent_metadata ORDER BY family, record_id');
+  expect(rows.every(row => row.bytes <= 1_048_576)).toBe(true);
+  let admitted = before.imports + before.snapshots;
+  const excess = rows.find(({ bytes }) => {
+    if (admitted + bytes > 16_777_216) return true;
+    admitted += bytes;
+    return false;
+  });
+  expect(excess).toBeDefined();
+  await inCatalogSnapshot(data.db, async (read, queries) => {
+    expect(await read()).toMatchObject({ kind: 'incomplete', reason: 'limit', boundedFacts: {
+      counts: { import: 1, target: 2, metadata: rows.length }, canonicalBytes: admitted,
+      causes: [{ identity: data.identity, family: 'metadata' }],
+    } });
+    expect(queries.some(query => /FROM parent_financial_records/i.test(query.sql))).toBe(false);
+    expectNoCatalogBodies(queries);
+  });
+}), 120_000);
+
+test.each([10_000, 10_001])('catalog_embedded %i records are structurally checked before any body fetch', count =>
+  withAuthorityFixture(async data => {
+    await withTransaction(data.owner, async client => {
+      await client.query('ALTER TABLE runtime_activation_imports DISABLE TRIGGER USER');
+      // Only the embedded target changes. Its original hash stays pinned.
+      const { rows } = await client.query(`
+        UPDATE runtime_activation_imports SET recorded_target = jsonb_set(
+          jsonb_set(recorded_target::jsonb, '{customers}',
+            (SELECT jsonb_agg(jsonb_build_object('id', 'c' || n, 'displayName', '', 'evidenceRefs', '[]'::jsonb))
+              FROM generate_series(1, $1::int - 1) n)), '{accounts}',
+          jsonb_build_array(jsonb_build_object('id', account_id, 'scope', recorded_target::jsonb->'scope',
+            'parentCustomerId', 'c1', 'sourceRef', 'legacy-a', 'sourceAccountIds', '[]'::jsonb)))::text
+        RETURNING octet_length(recorded_target) AS bytes,
+          jsonb_array_length(recorded_target::jsonb->'customers') + jsonb_array_length(recorded_target::jsonb->'accounts') AS count
+      `, [count]);
+      expect(rows).toEqual([{ bytes: expect.any(Number), count }]);
+      expect(rows[0]!.bytes).toBeLessThan(1_048_576);
+      await client.query('ALTER TABLE runtime_activation_imports ENABLE TRIGGER USER');
+    });
+    const before = await catalogByteInventory(data.db);
+    await inCatalogSnapshot(data.db, async (read, queries) => {
+      if (count === 10_000) {
+        await expect(read()).rejects.toMatchObject({ code: 'SELECTION_STORAGE_INVALID' });
+        expect(queries.some(query => query.fields.includes('recorded_target'))).toBe(true);
+      } else {
+        expect(await read()).toMatchObject({ kind: 'incomplete', reason: 'limit', boundedFacts: {
+          counts: { import: 1, target: 2 }, canonicalBytes: Object.values(before).reduce((sum, size) => sum + size, 0),
+          causes: [{ identity: data.identity, family: 'import' }],
+        } });
+        expectNoCatalogBodies(queries);
+      }
+      expect(queries.some(query => query.fields.includes('invoices'))).toBe(true);
+    });
+  }), 120_000);

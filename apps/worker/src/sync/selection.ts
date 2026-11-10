@@ -151,7 +151,20 @@ export type EvidenceFamily = 'import' | 'authority' | 'target' | 'lane' | 'check
   'page' | 'inbox' | 'incident' | 'unit' | 'outcome' | 'origin' | 'receipt' | 'financial' | 'metadata' |
   'application_head';
 export type SelectionEvidence = { family: EvidenceFamily; key: string[]; digest: Hash; bytes: number };
+export type SelectionReadSummary = {
+  counts: Partial<Record<EvidenceFamily, number>>;
+  canonicalBytes: number;
+};
+export type CutSummary = SelectionReadSummary & {
+  sourceContractChecksComplete: boolean;
+  sourceContractObservations: ContractObservation[];
+  causes: { reason: IncompleteReason; identity: CommittedAuthorityIdentityV1 | null;
+    lane: CaptureLaneV1 | null; streamId: Id | null; event: EventRef | null; family: EvidenceFamily | null }[];
+};
+export type SelectionReadResult = { kind: 'ready'; cut: SelectionCut } |
+  { kind: 'incomplete'; reason: IncompleteReason; boundedFacts: CutSummary };
 export type SelectionCut = {
+  admission: SelectionReadSummary;
   input: SelectionInput; subjects: SelectionSubject[]; lanes: SelectionLane[];
   deliveries: { event: RawSourceEvent; digest: Hash }[]; globalClaims: GlobalClaim[]; evidence: SelectionEvidence[];
 };

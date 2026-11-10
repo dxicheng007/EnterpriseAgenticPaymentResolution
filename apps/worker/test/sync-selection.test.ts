@@ -438,6 +438,8 @@ function routingCut(subjects: SelectionSubject[], events: RawSourceEvent[]): Sel
     lanes.set(lane.lane.manifestHash, lane);
   }
   return {
+    // This synthetic cut has no persisted physical reads.
+    admission: { counts: {}, canonicalBytes: 0 },
     input: { sourceRef: profileA.sourceRef, asOf: inspectionAsOf }, subjects, lanes: [...lanes.values()],
     deliveries: events.map(value => ({ event: value, digest: hashCanonical(value) })), globalClaims: [], evidence: [],
   };
