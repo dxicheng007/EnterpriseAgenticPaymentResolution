@@ -7,7 +7,9 @@ export const TRANSPORT_BACKOFF_MS = [1000, 2000, 4000] as const;
 export type DependencyOutcome = 'pending_dependency' | 'quarantined';
 
 export class DependencyError extends Error {
-  constructor(readonly code: 'DEPENDENCY_CYCLE' | 'DEPENDENCY_CLOSURE_TOO_LARGE', message: string) {
+  constructor(
+    readonly code: 'DEPENDENCY_CYCLE' | 'DEPENDENCY_CLOSURE_TOO_LARGE' | 'DEPENDENCY_INPUT_INVALID', message: string,
+  ) {
     super(message);
     this.name = 'DependencyError';
   }
@@ -24,6 +26,9 @@ export function compareInbox(left: Ordered, right: Ordered): number {
 
 /** Takes whole groups in order until the next would exceed the limit; never splits a group. */
 export function selectGroups<T extends Ordered>(groups: T[][], limit = MAX_INBOX_EVENTS): T[][] {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_INBOX_EVENTS) {
+    throw new DependencyError('DEPENDENCY_INPUT_INVALID', 'Dependency selection limit is outside the supported range');
+  }
   const selected: T[][] = [];
   let used = 0;
   for (const group of groups) {
@@ -46,11 +51,14 @@ export function missingPrerequisites(items: InputClassification[]): Map<number, 
   return missing;
 }
 
-/** Providers before consumers, ties by input index; cycles are explicit exceptions. */
+/** Orders trusted classifier output with every referenced mapped provider supplied, including held candidates. */
 export function dependencyOrder(items: InputClassification[]): number[] {
   const edges = new Map<number, Set<number>>();
   for (const item of items) {
     if (!('mapped' in item) || !item.mapped) continue;
+    if (!Number.isSafeInteger(item.inputIndex) || item.inputIndex < 0 || edges.has(item.inputIndex)) {
+      throw new DependencyError('DEPENDENCY_INPUT_INVALID', 'Dependency input index is invalid or duplicated');
+    }
     const providers = new Set<number>();
     for (const value of item.mapped.prerequisites) {
       if (value.presence.kind === 'candidate') {
@@ -59,6 +67,13 @@ export function dependencyOrder(items: InputClassification[]): number[] {
     }
     edges.set(item.inputIndex, providers);
   }
+  for (const providers of edges.values()) {
+    for (const provider of providers) {
+      if (!edges.has(provider)) {
+        throw new DependencyError('DEPENDENCY_INPUT_INVALID', 'Dependency provider is absent from the mapped inputs');
+      }
+    }
+  }
   const order: number[] = [];
   const state = new Map<number, 'visiting' | 'done'>();
   const visit = (index: number) => {
@@ -66,10 +81,7 @@ export function dependencyOrder(items: InputClassification[]): number[] {
     if (current === 'done') return;
     if (current === 'visiting') throw new DependencyError('DEPENDENCY_CYCLE', 'Dependency identities form a cycle');
     state.set(index, 'visiting');
-    for (const provider of [...(edges.get(index) ?? [])].sort((a, b) => a - b)) {
-      if (provider !== index) visit(provider);
-      else throw new DependencyError('DEPENDENCY_CYCLE', 'Dependency identities form a cycle');
-    }
+    for (const provider of [...edges.get(index)!].sort((a, b) => a - b)) visit(provider);
     state.set(index, 'done');
     order.push(index);
   };

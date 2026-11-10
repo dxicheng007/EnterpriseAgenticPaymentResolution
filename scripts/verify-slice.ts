@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { hashBytes, hashCanonical } from '../packages/contracts/src/canonical.js';
 import {
   chromiumVersion, collectScreenshots, commandResult, normalizeReport, v1ExitCode, v3ExitCode, v4GateOutcome,
-  v7ExitCode,
+  v7GateOutcome,
 } from './verify-slice-evidence.js';
 
 const registry = {
@@ -710,28 +710,24 @@ async function verifyV4() {
   process.exitCode = exitCode;
 }
 
-const requiredV7Cases = {
+const v7PrerequisiteCases = {
   'tests/e2e/v7-demo.spec.ts': [
     'deterministic fixture wires both demo companies on sources and preview',
   ],
-  'tests/live/v7-holdout.test.ts': [
-    'fails closed when live provider configuration is missing',
-  ],
-} satisfies Record<typeof registry.V7[number], string[]>;
+} satisfies Partial<Record<typeof registry.V7[number], string[]>>;
 
-const v7Commands = [
+const v7PrerequisiteCommands = [
   { script: 'test:e2e', file: 'tests/e2e/v7-demo.spec.ts' as const },
-  { script: 'test:live', file: 'tests/live/v7-holdout.test.ts' as const },
   { script: 'typecheck', file: undefined },
 ] as const;
 
-function readV7Report(report: string, kind: 'playwright' | 'live', file: typeof registry.V7[number]) {
+function readV7Report(report: string, file: keyof typeof v7PrerequisiteCases) {
   try {
     const stat = lstatSync(report);
     if (!stat.isFile() || stat.size > 8 * 1024 * 1024) throw new Error();
     return normalizeReport(
-      kind === 'playwright' ? 'playwright' : 'vitest', JSON.parse(readFileSync(report, 'utf8')),
-      process.cwd(), file, requiredV7Cases[file],
+      'playwright', JSON.parse(readFileSync(report, 'utf8')),
+      process.cwd(), file, v7PrerequisiteCases[file],
     );
   } catch {
     return { cases: [], diagnostics: ['report-unavailable-or-invalid'] };
@@ -760,7 +756,7 @@ async function verifyV7() {
   let temp: string | undefined;
 
   try {
-    const missing = registry.V7.filter(file => !existsSync(file) || !lstatSync(file).isFile());
+    const missing = Object.keys(v7PrerequisiteCases).filter(file => !existsSync(file) || !lstatSync(file).isFile());
     if (missing.length) diagnostics.push('required-test-files-missing');
     for (const file of missing) console.error('V7 required test file unavailable: ' + file);
 
@@ -789,20 +785,11 @@ async function verifyV7() {
       mkdirSync('.local', { recursive: true, mode: 0o700 });
       temp = mkdtempSync(resolve('.local', 'verify-v7-'));
       const browserOutput = join(temp, 'browser');
-      for (const [index, { script, file }] of v7Commands.entries()) {
+      for (const [index, { script, file }] of v7PrerequisiteCommands.entries()) {
         const report = join(temp, 'report-' + index + '.json');
         const args = ['run', script];
-        const browser = script === 'test:e2e';
-        const live = script === 'test:live';
-        if (file) {
-          if (live) args.push('--', '--evidence', file, '--reporter=json', '--outputFile=' + report);
-          else {
-            args.push('--', file, '--reporter=json');
-            args.push(browser ? '--trace=off' : '--outputFile=' + report);
-          }
-        }
-        const command = ['npm', ...args.map(arg => arg === '--outputFile=' + report
-          ? '--outputFile=<private-report>' : arg)].join(' ');
+        if (file) args.push('--', file, '--reporter=json', '--trace=off');
+        const command = ['npm', ...args].join(' ');
         const child = spawnSync('npm', args, {
           env: {
             ...env,
@@ -811,12 +798,9 @@ async function verifyV7() {
           },
           encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 8 * 1024 * 1024, timeout: 600_000,
         });
-        const reportKind = browser ? 'playwright' as const : live ? 'live' as const : undefined;
-        const result = commandResult(
-          command, child, file && reportKind ? readV7Report(report, reportKind, file) : undefined,
-        );
+        const result = commandResult(command, child, file ? readV7Report(report, file) : undefined);
         commands.push(result);
-        console.log('V7 ' + result.result + ' ' + command +
+        console.log('V7 prerequisite ' + result.result + ' ' + command +
           (result.diagnostics.length ? ' (' + result.diagnostics.join(', ') + ')' : ''));
       }
 
@@ -837,20 +821,18 @@ async function verifyV7() {
     }
   }
 
-  const exitCode = v7ExitCode(commands, diagnostics, chromium);
+  const { exitCode, ...outcome } = v7GateOutcome(commands, diagnostics, chromium);
   const packet = {
-    schemaVersion: 1, runId, slice: 'V7', source, jointAcceptance: 'pending',
-    result: exitCode === 0 ? 'passed' : 'failed',
-    mode: { sourceFixtures: 'development-only', model: 'live-fail-closed-proof', database: 'native' },
+    schemaVersion: 1, runId, slice: 'V7', source, independentReview: 'pending', jointAcceptance: 'pending',
+    ...outcome,
+    mode: { sourceFixtures: 'development-only', model: 'disabled', database: 'native' },
     runtime: { ...runtime, chromium: chromium ? [chromium] : [] },
     contract, configuration, migrations,
-    requiredTests: registry.V7, requiredCases: requiredV7Cases, commands, screenshots: [], diagnostics,
+    requiredTests: registry.V7, prerequisiteCases: v7PrerequisiteCases, commands, screenshots: [],
     authenticatedTrace: 'disabled',
     limitations: [
       'Development sources only',
-      'Successful live holdouts and joint G7 acceptance remain pending',
-      'Blocker D product live composition mount remains unmounted',
-      'Independent review pending',
+      'Full V7 requires G0–G6 machine evidence, genuine live construction, an unseen holdout, and three live rehearsals',
     ],
   };
   const write = (file: string, value: unknown) =>
@@ -859,7 +841,7 @@ async function verifyV7() {
   write('assertions.json', commands.flatMap(command => command.cases));
   write('manifest.json', packet);
   console.log('V7 verification ' + packet.result + '. Evidence: ' + relative(process.cwd(), evidence));
-  if (diagnostics.length) console.error('V7 diagnostics: ' + diagnostics.join(', '));
+  console.error('V7 diagnostics: ' + packet.diagnostics.join(', '));
   process.exitCode = exitCode;
 }
 

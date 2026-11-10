@@ -216,9 +216,15 @@ export function v4GateOutcome(
   };
 }
 
-export function v7ExitCode(
+export function v7GateOutcome(
   commands: readonly ReturnType<typeof commandResult>[], diagnostics: readonly string[], chromium?: string,
 ) {
-  return commands.length === 3 && commands.every(command => command.result === 'passed') &&
-    diagnostics.length === 0 && chromium ? 0 : 1;
+  const prerequisitesPassed = commands.length === 2 && commands.every(command => command.result === 'passed') &&
+    diagnostics.length === 0 && Boolean(chromium);
+  return {
+    prerequisiteResult: prerequisitesPassed ? 'passed' as const : 'failed' as const,
+    diagnostics: [...diagnostics, 'live-holdout-rehearsal-unavailable'],
+    result: 'failed' as const,
+    exitCode: 1,
+  };
 }

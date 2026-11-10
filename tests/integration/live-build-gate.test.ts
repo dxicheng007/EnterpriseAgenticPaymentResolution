@@ -1,15 +1,16 @@
 import { spawnSync } from 'node:child_process';
 import { expect, test } from 'vitest';
 
-const liveFile = 'tests/live/v4-build-connectors.test.ts';
 const invalidFile = 'tests/integration/live-build-gate.test.ts';
 const dummyKey = 'offline-dummy-not-a-credential';
 
 test.each([
-  { name: 'missing key', args: [liveFile], configured: false, diagnostic: 'LIVE_CONFIGURATION_UNAVAILABLE' },
-  { name: 'dummy key', args: [liveFile], configured: true, diagnostic: 'LIVE_CONSTRUCTION_UNAVAILABLE' },
-  { name: 'evidence and missing key', args: ['--evidence', liveFile], configured: false, diagnostic: 'LIVE_CONFIGURATION_UNAVAILABLE' },
-  { name: 'evidence and dummy key', args: ['--evidence', liveFile], configured: true, diagnostic: 'LIVE_CONSTRUCTION_UNAVAILABLE' },
+  ...['tests/live/v4-build-connectors.test.ts', 'tests/live/v7-holdout.test.ts'].flatMap(file => [
+    { name: file + ' with missing key', args: [file], configured: false, diagnostic: 'LIVE_CONFIGURATION_UNAVAILABLE' },
+    { name: file + ' with dummy key', args: [file], configured: true, diagnostic: 'LIVE_CONSTRUCTION_UNAVAILABLE' },
+    { name: file + ' with evidence and missing key', args: ['--evidence', file], configured: false, diagnostic: 'LIVE_CONFIGURATION_UNAVAILABLE' },
+    { name: file + ' with evidence and dummy key', args: ['--evidence', file], configured: true, diagnostic: 'LIVE_CONSTRUCTION_UNAVAILABLE' },
+  ]),
   { name: 'invalid file', args: [invalidFile], configured: true, diagnostic: 'Live tests must be files under tests/live/' },
   { name: 'evidence and invalid file', args: ['--evidence', invalidFile], configured: true, diagnostic: 'Live tests must be files under tests/live/' },
   { name: 'missing file', args: [], configured: false, diagnostic: 'Usage: npm run test:live' },

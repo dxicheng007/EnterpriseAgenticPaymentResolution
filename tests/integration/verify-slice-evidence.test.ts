@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import {
-  chromiumVersion, collectScreenshots, commandResult, normalizeReport, v1ExitCode, v4GateOutcome,
+  chromiumVersion, collectScreenshots, commandResult, normalizeReport, v1ExitCode, v4GateOutcome, v7GateOutcome,
 } from '../../scripts/verify-slice-evidence.js';
 
 const root = '/repo';
@@ -275,6 +275,22 @@ test('a V4 run with every prerequisite passing still fails the full gate', () =>
   });
 });
 
+test('a V7 run with every fixture prerequisite passing still fails the full gate', () => {
+  const success = { status: 0, signal: null };
+  const commands = [
+    commandResult('npm run test:e2e -- tests/e2e/v7-demo.spec.ts', success),
+    commandResult('npm run typecheck', success),
+  ];
+  const chromium = '123.0.4.5';
+  expect(v7GateOutcome(commands, [], chromium)).toEqual({
+    exitCode: 1, result: 'failed', prerequisiteResult: 'passed', diagnostics: ['live-holdout-rehearsal-unavailable'],
+  });
+  const negativeProof = commandResult('npm run test:live -- --evidence tests/live/v7-holdout.test.ts', success);
+  expect(v7GateOutcome([...commands, negativeProof], [], chromium)).toMatchObject({ exitCode: 1, result: 'failed' });
+  const failed = commandResult('npm run typecheck', { ...success, status: 1 });
+  expect(v7GateOutcome([commands[0], failed], [], chromium)).toMatchObject({ prerequisiteResult: 'failed' });
+});
+
 function runVerifier(slice: string, cwd: string) {
   const env = { ...process.env };
   delete env.OPENAI_API_KEY;
@@ -317,24 +333,27 @@ test('CLI routes V2 to its fail-closed preflight', () => {
 });
 
 
-test('V4 CLI retains the missing live construction diagnostic on a failed preflight', () => {
+test.each([
+  { slice: 'V4', diagnostic: 'live-construction-unavailable' },
+  { slice: 'V7', diagnostic: 'live-holdout-rehearsal-unavailable' },
+])('$slice CLI records unavailable live prerequisites on a failed preflight', ({ slice, diagnostic }) => {
   expect(spawnSync('git', ['init', '-q'], { cwd: output }).status).toBe(0);
   expect(spawnSync('git', [
     '-c', 'user.name=Verifier Test', '-c', 'user.email=verifier@example.invalid',
     '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', 'Initialize verifier fixture',
   ], { cwd: output }).status).toBe(0);
-  const result = runVerifier('V4', output);
+  const result = runVerifier(slice, output);
   expect(result.status).toBe(1);
-  expect(result.stdout).toContain('V4 verification failed');
-  expect(result.stderr).toContain('live-construction-unavailable');
+  expect(result.stdout).toContain(slice + ' verification failed');
+  expect(result.stderr).toContain(diagnostic);
   const evidence = join(output, '.evidence');
   const [sourceKey] = readdirSync(evidence);
-  const runs = join(evidence, sourceKey, 'V4');
+  const runs = join(evidence, sourceKey, slice);
   const [run] = readdirSync(runs);
   const manifest = JSON.parse(readFileSync(join(runs, run, 'manifest.json'), 'utf8'));
   expect(manifest).toMatchObject({
-    slice: 'V4', result: 'failed', prerequisiteResult: 'failed',
+    slice, result: 'failed', prerequisiteResult: 'failed',
     independentReview: 'pending', jointAcceptance: 'pending', commands: [],
-    diagnostics: expect.arrayContaining(['required-test-files-missing', 'live-construction-unavailable']),
+    diagnostics: expect.arrayContaining(['required-test-files-missing', diagnostic]),
   });
 });
