@@ -135,7 +135,10 @@ export async function createSyncApplyFixture(runtimeThrough?: number) {
     const addPayment = (id: string, sourceAccountId: string, invoiceId: string) => operator.freshPaymentA(operatorToken, {
       id, accountId: sourceAccountId, invoiceId, amount: '12.00', effectiveDate: '2026-10-02', observedAt: syncApplyInstant,
     });
-    return { db, owner, pair, close, source, addInvoice, addPayment, ...activation };
+    const addSemantic = (id: string, sourceAccountId: string, revision: string) => operator.semanticChangeA(operatorToken, {
+      id, accountId: sourceAccountId, revision, effectiveDate: '2026-10-02', observedAt: syncApplyInstant,
+    });
+    return { db, owner, pair, close, source, addInvoice, addPayment, addSemantic, ...activation };
   } catch (error) {
     await close();
     throw error;
