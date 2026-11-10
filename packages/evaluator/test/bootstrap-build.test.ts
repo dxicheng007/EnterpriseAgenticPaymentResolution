@@ -46,6 +46,7 @@ const families = [
   ['packages/contracts/src/canonical.ts', true],
   ['packages/contracts/src/sync-capture.ts', true],
   ['packages/contracts/src/current-authority.ts', true],
+  ['packages/contracts/src/authority-ingress.ts', true],
   ['packages/contracts/src/connection-state.ts', true],
   ['packages/contracts/src/discovery-tools.ts', true],
   [constructionTools, true],

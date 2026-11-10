@@ -1,0 +1,11 @@
+**Duplicated response error validation and bounded fatal-UTF8 reader — ADDRESSED.** `apps/worker/src/authority-transport.ts:4` now owns the single response bound and typed code allowlist; `:21` and `:30` export the two extracted functions. `apps/control/src/authority-worker-client.ts:7` and `apps/worker/src/authority-admission-client.ts:4` import those functions, and both original copies are deleted. This matches the root's explicit three-path correction release.
+
+**New breakage in the fix diff:** None. The extracted constants and function bodies match the removed implementations, apart from export markers; the helper retains the same contracts schema and authority-error factory imports. The new import paths resolve relative to each client. The exact diff leaves both exported client implementations, request construction, deadlines, result binding and error handling unchanged. The helper exports only the two required functions and introduces no request wrapper, dependency, service/database/model/control import, unrelated-client retrofit, schema change or protected-inventory change.
+
+**Out-of-scope observations:** None.
+
+**Checks:** Read the previous review, task brief including the explicit correction release, appended fix report, applicable root/apps instructions and scoped re-review prompt. Reviewed the supplied `review-8eba700..c6220a0.diff` once, covering `8eba70028d7b9c47ccc54cc6fe1bd8cf9b2e2544` through `c6220a03e0505c1a29eac14f4d972c3b3f67b1fe`. Its complete three-path delta supports the behavior-preserving extraction claim.
+
+**Verification evidence:** The appended report names both covering client suites and reports 15 tests passing across two files, plus typecheck and staged/committed diff checks exiting 0. It provides result summaries rather than raw execution logs; these remain implementer-reported, not independently reproduced machine results. The unchanged client behavior and exact extraction raise no specific doubt requiring another test run. No tests or Git commands were run; no checkout, DB or provider state was mutated and no agents were dispatched. Only this report was written.
+
+**Fix round:** All findings addressed, no new Critical/Important breakage. This closes the scoped Task 1 correction review; final branch review and later mounted-ingress acceptance remain separate.

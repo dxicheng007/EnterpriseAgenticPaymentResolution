@@ -20,6 +20,7 @@ export * from './activation-bundle-v2.js';
 export * from './discovery-tools.js';
 export * from './sync-capture.js';
 export * from './current-authority.js';
+export * from './authority-ingress.js';
 export * from './connection-state.js';
 export {
   DiscoveryCompletionToolFailureSchema, DiscoveryRepairDiagnosticRefSchema,
