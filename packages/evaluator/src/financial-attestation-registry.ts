@@ -1,9 +1,9 @@
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { ZodError } from 'zod';
 import type { CandidateRegistration } from '@eapr/compiler/preview-adapters';
 import {
   ActivationTrustPolicyV1Schema, CaptureAttestationV1Schema, HashSchema, HashSetSchema,
-  canonicalJson, hashActivationTrustPolicy, hashBytes, hashCanonical,
+  VerificationJobSchema, canonicalJson, hashActivationTrustPolicy, hashBytes, hashCanonical,
   type ActivationTrustPolicyV1, type CaptureAttestationV1, type VerificationJob,
 } from '@eapr/contracts';
 import { sqlState, withTransaction } from '@eapr/storage/transaction';
@@ -31,6 +31,7 @@ type JobRow = {
   source_refs: string[];
   account_ids: string[];
   summary: unknown;
+  task_run_id: string | null;
 };
 type ReservationRow = {
   job_id: string;
@@ -94,7 +95,7 @@ export async function requireFinancialCandidate(candidates: FinancialCandidateRe
   return registered;
 }
 
-function reservationRecord(input: FinancialEvaluatorInputV1) {
+export function reservationRecord(input: FinancialEvaluatorInputV1) {
   try {
     const request = FinancialEvaluatorInputV1Schema.parse(input);
     const capture = bindFinancialRequest(request);
@@ -120,6 +121,54 @@ function savedRequest(job: JobRow, row: ReservationRow) {
   } catch {
     throw mismatch();
   }
+}
+
+export type PreparedFinancialReservation = ReturnType<typeof reservationRecord>;
+
+export async function reservePreparedOn(client: PoolClient, prepared: PreparedFinancialReservation, task?: FinancialTaskReservation) {
+  const { request, capture, requestBytes, requestHash } = prepared;
+  const accountIds = accounts(request.capture);
+  if (task && (accountIds.length !== 1 || accountIds[0] !== task.accountId)) throw mismatch();
+  if (task) {
+    const reserved = await client.query(
+      `INSERT INTO verification_attempt_budgets VALUES ($1, $2, 1)
+       ON CONFLICT (run_id, account_id) DO UPDATE SET attempts = verification_attempt_budgets.attempts + 1
+       WHERE verification_attempt_budgets.attempts < 3 RETURNING attempts`, [task.runId, task.accountId],
+    );
+    if (reserved.rowCount !== 1) throw mismatch();
+  }
+  await client.query(
+    `INSERT INTO verification_jobs (id, state, source_refs, account_ids, task_run_id, artifact_hash, manifest_id)
+     VALUES ($1, 'queued', $2, $3, $4, $5, $6)`,
+    [request.jobId, [capture.sourceRef], accountIds, task?.runId ?? null, request.reservation.artifactHash, capture.manifestId],
+  );
+  await client.query(
+    `INSERT INTO financial_verification_reservations
+       (job_id, artifact_hash, manifest_id, snapshot_id, capture_hash, reservation_bytes, reservation_hash, request_bytes, request_hash)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [request.jobId, request.reservation.artifactHash, capture.manifestId, capture.snapshotId, hashCanonical(capture),
+      bytes(request.reservation), request.reservation.hash, requestBytes, requestHash],
+  );
+}
+
+export function financialJob(row: Pick<JobRow, 'id' | 'state' | 'summary'>) {
+  return VerificationJobSchema.parse({
+    jobId: row.id, state: row.state, summary: row.summary ?? undefined,
+    diagnostics: row.state === 'failed' ? [{
+      code: 'VERIFICATION_FAILED', severity: 'blocker', message: 'Protected verification could not finish',
+      sourceIds: [], fieldPaths: [],
+    }] : [],
+  });
+}
+
+export async function readSavedFinancialRequestOn(client: PoolClient, jobId: string, requestHash: string, task: FinancialTaskReservation) {
+  const { rows: [job] } = await client.query<JobRow>('SELECT * FROM verification_jobs WHERE id = $1', [jobId]);
+  const { rows: [row] } = await client.query<ReservationRow>(
+    'SELECT * FROM financial_verification_reservations WHERE job_id = $1', [jobId],
+  );
+  if (!job || !row || row.request_hash !== requestHash || job.task_run_id !== task.runId ||
+      !financialEqual(job.account_ids, [task.accountId])) throw mismatch();
+  return { job: financialJob(job), request: savedRequest(job, row), requestBytes: row.request_bytes };
 }
 
 function completionRecord(request: FinancialEvaluatorInputV1, raw: unknown) {
@@ -163,32 +212,11 @@ const proofQuery = `SELECT a.*, r.report FROM financial_verification_attestation
 export function createFinancialAttestationRegistry(db: Pool, candidates: FinancialCandidateReader) {
   return {
     async reserve(input: FinancialEvaluatorInputV1, task?: FinancialTaskReservation) {
-      const { request, capture, requestBytes, requestHash } = reservationRecord(input);
-      await requireFinancialCandidate(candidates, request.capture);
-      const accountIds = accounts(request.capture);
-      if (task && (accountIds.length !== 1 || accountIds[0] !== task.accountId)) throw mismatch();
+      const prepared = reservationRecord(input);
+      await requireFinancialCandidate(candidates, prepared.request.capture);
       try {
         await withTransaction(db, async client => {
-          if (task) {
-            const reserved = await client.query(
-              `INSERT INTO verification_attempt_budgets VALUES ($1, $2, 1)
-               ON CONFLICT (run_id, account_id) DO UPDATE SET attempts = verification_attempt_budgets.attempts + 1
-               WHERE verification_attempt_budgets.attempts < 3 RETURNING attempts`, [task.runId, task.accountId],
-            );
-            if (reserved.rowCount !== 1) throw mismatch();
-          }
-          await client.query(
-            `INSERT INTO verification_jobs (id, state, source_refs, account_ids, task_run_id, artifact_hash, manifest_id)
-             VALUES ($1, 'queued', $2, $3, $4, $5, $6)`,
-            [request.jobId, [capture.sourceRef], accountIds, task?.runId ?? null, request.reservation.artifactHash, capture.manifestId],
-          );
-          await client.query(
-            `INSERT INTO financial_verification_reservations
-               (job_id, artifact_hash, manifest_id, snapshot_id, capture_hash, reservation_bytes, reservation_hash, request_bytes, request_hash)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-            [request.jobId, request.reservation.artifactHash, capture.manifestId, capture.snapshotId, hashCanonical(capture),
-              bytes(request.reservation), request.reservation.hash, requestBytes, requestHash],
-          );
+          await reservePreparedOn(client, prepared, task);
         });
       } catch (error) {
         if (error instanceof FinancialAttestationFailure) throw error;
