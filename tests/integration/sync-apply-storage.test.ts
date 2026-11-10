@@ -2,7 +2,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import type { PoolClient } from 'pg';
 import { afterAll, beforeAll, expect, test } from 'vitest';
 import {
-  ChangePageSchema, canonicalJson, hashCanonical, hashEvent, hashTargetSnapshot, type ChangePage, type MutationPlan, type SyncReceipt,
+  ChangePageSchema, canonicalJson, hashCanonical, hashEvent, hashTargetSnapshot, type ChangePage, type MutationPlan, type SyncReceipt, type TargetState,
 } from '@eapr/contracts';
 import { classifyBatch, planBatch } from '@eapr/compiler/plan-batch';
 import { computeBalance } from '@eapr/finance/balance';
@@ -60,9 +60,11 @@ async function insertRuntime005Commit() {
   });
 }
 
-async function insertMonetaryFixture(client: PoolClient, fixture: Fixture, plan: MutationPlan, receiptId: string) {
-  const { identity, stored } = fixture;
-  const before = stored.approvedTarget.records;
+async function insertMonetaryFixture(
+  client: PoolClient, fixture: Fixture, plan: MutationPlan, receiptId: string,
+  before: TargetState = fixture.stored.approvedTarget.records,
+) {
+  const { identity } = fixture;
   const operations = plan.operations as FinancialMutation[];
   const records = operations.map(operation => operation.record);
   const after = { ...projectTarget({ ...before, asOf: plan.asOf }, operations), version: before.version + 1 };
@@ -98,11 +100,11 @@ async function insertMonetaryFixture(client: PoolClient, fixture: Fixture, plan:
     await client.query('INSERT INTO runtime_sync_economic_outcomes VALUES ($1, $2, $3, $4, $5)',
       [...scope, record.id, receipt.id]);
   }
-  return { receipt, snapshotHash };
+  return { receipt, snapshotHash, after };
 }
 
 async function makeAudit(client: PoolClient, fixture: Fixture, page: ChangePage, plan: MutationPlan, receipt: SyncReceipt,
-  afterSnapshotHash: string, members: store.UnitMember[],
+  afterSnapshotHash: string, members: store.UnitMember[], prior?: store.SyncUnitAudit,
 ): Promise<store.SyncUnitAudit> {
   const { identity, stored } = fixture;
   const { manifest, artifact, semanticPreflight } = stored.bundle;
@@ -129,18 +131,39 @@ async function makeAudit(client: PoolClient, fixture: Fixture, page: ChangePage,
       const financial = stream.streamId === streamId;
       return {
         streamId: stream.streamId, transport: stream.transport, baselineCursor: baseline,
-        captureCursor: financial ? page.next : baseline, capturedPages: financial ? '1' : '0',
+        captureCursor: financial ? page.next : baseline,
+        capturedPages: financial ? String((prior?.coverage.pages.length ?? 0) + 1) : '0',
         lastCapturedAt: financial ? syncApplyInstant : null,
       };
     }),
-    applicationHeads: [], positions, inbox: positions.map(position => ({
+    applicationHeads: prior ? [{
+      streamId, baselineCursor: prior.fromCursor, appliedThrough: prior.throughCursor, lastUnitHash: prior.unitHash,
+    }] : [],
+    positions: [...(prior?.coverage.positions ?? []), ...positions],
+    inbox: [...(prior?.coverage.inbox ?? []), ...positions.map(position => ({
       ...position, manifestHash: lane.manifestHash, afterCursor: page.after,
-    })),
-    deliveries: page.events.map(event => ({ event, digest: hashCanonical(event) })), pages: [{
+    }))],
+    deliveries: [...(prior?.coverage.deliveries ?? []), ...page.events.map(event => ({ event, digest: hashCanonical(event) }))],
+    pages: [...(prior?.coverage.pages ?? []), {
       sourceRef: lane.sourceRef, manifestHash: lane.manifestHash, streamId, afterCursor: page.after,
       nextCursor: page.next, eventCount: page.events.length, digest: hashCanonical(page), capturedAt: syncApplyInstant,
     }],
-    historyUnits: [], historyOutcomes: [], historyOrigins: [],
+    historyUnits: prior ? [{
+      unitHash: prior.unitHash, auditDigest: hashCanonical(prior), streamId,
+      fromCursor: prior.fromCursor, throughCursor: prior.throughCursor,
+      beforeTargetVersion: prior.expectedTargetVersion, beforeSnapshotHash: prior.beforeSnapshotHash,
+      afterTargetVersion: prior.afterTargetVersion, afterSnapshotHash: prior.afterSnapshotHash, receiptId: prior.receiptId,
+    }] : [],
+    historyOutcomes: prior?.members.map(({ event, recordId, disposition, origin }) => ({
+      event, recordId, disposition, unitHash: prior.unitHash,
+      digest: hashCanonical({ identity, lane, unitHash: prior.unitHash, event, recordId, disposition, origin }),
+    })) ?? [],
+    historyOrigins: (prior?.members ?? []).map(({ recordId, origin }) => ({
+      recordId, receiptDigest: hashCanonical(origin.receipt),
+      initialImportKey: origin.kind === 'initial' ? origin.importKey : null,
+      initialReceiptId: origin.kind === 'initial' ? origin.receipt.id : null,
+      syncReceiptId: origin.kind === 'sync' ? origin.receipt.id : null,
+    })).sort((a, b) => a.recordId < b.recordId ? -1 : a.recordId > b.recordId ? 1 : 0),
     guards: {
       overflow: false, extraLane: false, undeclaredStream: false, nonselectedPostBaseline: false,
       outOfCut: false, incident: false, unmatchedLegacyHistory: false,
@@ -148,7 +171,7 @@ async function makeAudit(client: PoolClient, fixture: Fixture, page: ChangePage,
   };
   const keys = {
     identity, lane, streamId, expectedEpoch: receipt.epoch, expectedTargetVersion: plan.expectedTargetVersion,
-    beforeSnapshotHash: stored.approvedTarget.snapshotHash, asOf: plan.asOf,
+    beforeSnapshotHash: prior?.afterSnapshotHash ?? stored.approvedTarget.snapshotHash, asOf: plan.asOf,
     coverageHash: hashCanonical(coverage), planHash: plan.hash,
   };
   return {
@@ -424,11 +447,11 @@ test('mixed_original_receipts', async () => {
     const plan = classification.outcome.plans[0]!;
     expect(plan.eventIds).toEqual(events.map(event => event.id));
 
-    await withTransaction(db, async client => {
+    const first = await withTransaction(db, async client => {
       const initial: store.ReceiptOrigin = {
         kind: 'initial', recordId: originalInvoice.id, importKey: stored.request.idempotencyKey, receipt: stored.receipt,
       };
-      const { receipt, snapshotHash } = await insertMonetaryFixture(client, subject, plan, 'receipt:storage-mixed');
+      const { receipt, snapshotHash, after } = await insertMonetaryFixture(client, subject, plan, 'receipt:storage-mixed');
       const members: store.UnitMember[] = [{
         event: store.syncEventRef(events[0]!), recordId: originalInvoice.id, disposition: 'replay', origin: initial,
       }];
@@ -452,11 +475,123 @@ test('mixed_original_receipts', async () => {
       expect(await store.readSyncCommit(client, identity, plan)).toEqual({ receipt, replayed: true });
       expect(receipt.targetRecordIds).not.toContain(originalInvoice.id);
       expect(await store.readFinancialOrigins(client, identity.scope, [originalInvoice])).toEqual([initial]);
+      await client.query(`
+        INSERT INTO runtime_sync_application_heads
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, NULL)
+      `, [...unitScope(audit), audit.fromCursor]);
+      await advanceFixtureHead(client, audit);
+      return { audit, after, receipt };
+    });
+
+    async function captureFixtureInvoice(id: string, after: string) {
+      await subject.addInvoice(id, profile.sourceAccountIds[0]!);
+      // The replay above was captured without writing it to the synthetic source ledger.
+      const sourcePage = await subject.source.fetchChanges(bundle.manifest.sourceRef, streamId, String(Number(after) - 1));
+      expect(sourcePage.events).toHaveLength(1);
+      const positioned = { ...sourcePage.events[0]!, sequence: Number(after) + 1 };
+      const next = ChangePageSchema.parse({
+        ...sourcePage, after, next: String(positioned.sequence),
+        events: [{ ...positioned, contentHash: hashEvent(positioned) }],
+      });
+      await capture.capturePage(next);
+      return next;
+    }
+
+    const next = await captureFixtureInvoice('storage-successor', page.next);
+    const successorPlan = planBatch(bundle.artifact, profile, next.events, first.after).plans[0]!;
+    const second = await withTransaction(db, async client => {
+      const { receipt, snapshotHash } = await insertMonetaryFixture(client, subject, successorPlan, 'receipt:storage-next', first.after);
+      const recordId = receipt.targetRecordIds[0]!;
+      const audit = await makeAudit(client, subject, next, successorPlan, receipt, snapshotHash, [{
+        event: store.syncEventRef(next.events[0]!), recordId, disposition: 'new', origin: { kind: 'sync', recordId, receipt },
+      }], first.audit);
+      await client.query(unitInsert, unitValues(audit));
+      await insertOutcome(client, audit, audit.members[0]!);
+      await advanceFixtureHead(client, audit);
+      return { audit, receipt };
+    });
+    await captureFixtureInvoice('storage-later-capture', next.next);
+    await withTransaction(db, async client => {
+      await client.query('SET TRANSACTION READ ONLY');
+      expect(await store.readSyncCommit(client, identity, plan)).toEqual({ receipt: first.receipt, replayed: true });
+      expect(await store.readSyncUnit(client, identity, first.audit.unitHash)).toEqual(first.audit);
+      expect(await store.readSyncCommit(client, identity, successorPlan)).toEqual({ receipt: second.receipt, replayed: true });
+      expect(await store.readSyncUnit(client, identity, second.audit.unitHash)).toEqual(second.audit);
+    });
+
+    await withTransaction(subject.owner, async client => {
+      const { coverage } = second.audit;
+      const alternateHash = hashCanonical('wrong-history-binding');
+      const badOrigin = coverage.historyOrigins.find(origin => origin.syncReceiptId !== null)!;
+      const corruptFirst = {
+        ...first.audit,
+        members: first.audit.members.with(0, {
+          ...first.audit.members[0]!, event: { ...first.audit.members[0]!.event, contentHash: alternateHash },
+        }),
+      };
+      const cases: { name: string; coverage: store.CoverageCut; corruptPrior?: boolean }[] = [
+        { name: 'unit digest', coverage: {
+          ...coverage, historyUnits: [{ ...coverage.historyUnits[0]!, auditDigest: alternateHash }],
+        } },
+        { name: 'outcome digest', coverage: {
+          ...coverage, historyOutcomes: coverage.historyOutcomes.with(0, { ...coverage.historyOutcomes[0]!, digest: alternateHash }),
+        } },
+        { name: 'origin receipt ID', coverage: {
+          ...coverage, historyOrigins: coverage.historyOrigins.map(origin =>
+            origin === badOrigin ? { ...origin, syncReceiptId: 'receipt:wrong-origin' } : origin),
+        } },
+        { name: 'origin receipt digest', coverage: {
+          ...coverage, historyOrigins: coverage.historyOrigins.map(origin =>
+            origin === badOrigin ? { ...origin, receiptDigest: alternateHash } : origin),
+        } },
+        { name: 'actual referenced audit corruption with matching digest', coverage: {
+          ...coverage, historyUnits: [{ ...coverage.historyUnits[0]!, auditDigest: hashCanonical(corruptFirst) }],
+        }, corruptPrior: true },
+      ];
+      for (const testCase of cases) {
+        await client.query('SAVEPOINT corrupt_history');
+        if (testCase.corruptPrior) {
+          await client.query('ALTER TABLE runtime_sync_units DISABLE TRIGGER runtime_sync_units_immutable');
+          await client.query('UPDATE runtime_sync_units SET audit = $2, audit_digest = $3 WHERE unit_hash = $1',
+            [first.audit.unitHash, ...encodeCanonical(corruptFirst)]);
+        }
+        const forged = rehashAudit(second.audit, testCase.coverage);
+        await replaceFixtureUnit(client, second.audit, forged);
+        await expect.soft(store.readSyncUnit(client, identity, forged.unitHash), testCase.name).rejects.toMatchObject(invalid);
+        await expect.soft(store.readSyncCommit(client, identity, successorPlan), testCase.name).rejects.toMatchObject(invalid);
+        await client.query('ROLLBACK TO corrupt_history');
+      }
     });
   } finally {
     await subject.close();
   }
 }, 120_000);
+
+async function advanceFixtureHead(client: PoolClient, audit: store.SyncUnitAudit) {
+  await client.query(`
+    UPDATE runtime_sync_application_heads SET applied_through = $2, last_unit_hash = $3 WHERE stream_id = $1
+  `, [audit.streamId, audit.throughCursor, audit.unitHash]);
+}
+
+function rehashAudit(audit: store.SyncUnitAudit, coverage: store.CoverageCut): store.SyncUnitAudit {
+  const { identity, lane, streamId, expectedEpoch, expectedTargetVersion, beforeSnapshotHash, asOf, planHash } = audit;
+  const coverageHash = hashCanonical(coverage);
+  const unitHash = store.hashSyncUnit({
+    identity, lane, streamId, expectedEpoch, expectedTargetVersion, beforeSnapshotHash, asOf, coverageHash, planHash,
+  });
+  return { ...audit, coverage, coverageHash, unitHash };
+}
+
+async function replaceFixtureUnit(client: PoolClient, old: store.SyncUnitAudit, replacement: store.SyncUnitAudit) {
+  await client.query('ALTER TABLE runtime_sync_application_heads DISABLE TRIGGER runtime_sync_application_heads_guard');
+  await client.query('ALTER TABLE runtime_sync_event_outcomes DISABLE TRIGGER runtime_sync_event_outcomes_immutable');
+  await client.query('ALTER TABLE runtime_sync_units DISABLE TRIGGER runtime_sync_units_immutable');
+  await client.query('DELETE FROM runtime_sync_application_heads WHERE last_unit_hash = $1', [old.unitHash]);
+  await client.query('DELETE FROM runtime_sync_event_outcomes WHERE unit_hash = $1', [old.unitHash]);
+  await client.query('DELETE FROM runtime_sync_units WHERE unit_hash = $1', [old.unitHash]);
+  await client.query(unitInsert, unitValues(replacement));
+  for (const member of replacement.members) await insertOutcome(client, replacement, member);
+}
 
 test('exact receipt recovery preserves the committed epoch after authority advances', async () => {
   const { db, identity, source, stored } = fixture;

@@ -13,11 +13,11 @@ import { sqlState } from '@eapr/storage/transaction';
 import { readStoredActivation, type StoredActivation } from './activation-store.js';
 import { requireImportIdentityLocks, type ImportIdentityLocks } from './persistence.js';
 import {
-  decodeCanonical, decodeSnapshot, encodeCanonical, readStoredTarget, readVersion, scopeOf, scopeValues, validateSnapshot,
+  decodeCanonical, decodeSnapshot, encodeCanonical, readVersion, scopeOf, scopeValues, validateSnapshot,
   type ScopeRow, type SnapshotRow, type StoredTarget,
 } from './snapshots.js';
 import { projectTarget, type FinancialMutation } from './state.js';
-import { ReceiptOriginSchema, SyncEventOutcomeSchema, SyncUnitAuditSchema, syncEventRef, type ReceiptOrigin, type SyncUnitAudit } from './sync-types.js';
+import { ReceiptOriginSchema, SyncEventOutcomeSchema, SyncUnitAuditSchema, syncEventRef, type ReceiptOrigin, type SyncUnitAudit, type UnitMember } from './sync-types.js';
 
 export * from './sync-types.js';
 
@@ -91,7 +91,38 @@ function lineageBindsOperation(plan: MutationPlan) {
   });
 }
 
-async function readReceiptCore(client: PoolClient, row: ReceiptRow, stored: StoredActivation) {
+type VerifiedReceipt = Awaited<ReturnType<typeof readReceiptCore>>;
+type HistoryRead = {
+  receipts: Map<string, VerifiedReceipt>;
+  snapshots: Map<number, StoredTarget>;
+};
+
+function historyRead(stored: StoredActivation): HistoryRead {
+  return {
+    receipts: new Map(),
+    snapshots: new Map([[stored.approvedTarget.records.version, stored.approvedTarget]]),
+  };
+}
+
+async function readHistoricalSnapshot(
+  client: PoolClient, scope: Scope, version: number, history: HistoryRead, expectedHash?: string,
+) {
+  let snapshot = history.snapshots.get(version);
+  if (!snapshot) {
+    const { rows: [row] } = await client.query<SnapshotRow>(
+      `SELECT * FROM parent_snapshots WHERE account_id = $1 AND company_id = $2 AND seller_entity_id = $3
+        AND target_version = $4`, [...scopeValues(scope), version],
+    );
+    valid(row);
+    snapshot = decodeSnapshot(row);
+    valid(sameScope(snapshot.records.scope, scope) && snapshot.records.version === version);
+    history.snapshots.set(version, snapshot);
+  }
+  valid(expectedHash === undefined || snapshot.snapshotHash === expectedHash);
+  return snapshot;
+}
+
+async function readReceiptCore(client: PoolClient, row: ReceiptRow, stored: StoredActivation, history: HistoryRead) {
   const { activation, bundle } = stored;
   const { scope } = activation;
   const plan = decodeCanonical(MutationPlanSchema, row.plan, row.plan_digest);
@@ -116,13 +147,8 @@ async function readReceiptCore(client: PoolClient, row: ReceiptRow, stored: Stor
     equal(plan.eventIds, receipt.eventIds) && equal(records.map(record => record.id), receipt.targetRecordIds) &&
     lineageBindsOperation(plan));
 
-  const { rows: [beforeRow] } = await client.query<SnapshotRow>(
-    `SELECT * FROM parent_snapshots WHERE account_id = $1 AND company_id = $2 AND seller_entity_id = $3
-      AND target_version = $4`, [...scopeValues(scope), beforeVersion],
-  );
-  const after = await readStoredTarget(client, scope, row.after_snapshot_hash);
-  valid(beforeRow && after?.records.version === afterVersion);
-  const before = decodeSnapshot(beforeRow);
+  const before = await readHistoricalSnapshot(client, scope, beforeVersion, history);
+  const after = await readHistoricalSnapshot(client, scope, afterVersion, history, row.after_snapshot_hash);
   const projected = { ...projectTarget({ ...before.records, asOf: plan.asOf }, operations), version: afterVersion };
   valid(equal(projected, after.records) && receipt.beforeBalanceCents === computeBalance(before.records, plan.asOf) &&
     receipt.afterBalanceCents === computeBalance(after.records, plan.asOf) &&
@@ -136,10 +162,17 @@ function receiptByPlan(client: PoolClient, scope: Scope, hash: string) {
   ).then(result => result.rows[0]);
 }
 
-function receiptById(client: PoolClient, receiptId: string) {
-  return client.query<ReceiptRow>(
-    'SELECT * FROM runtime_sync_receipts WHERE receipt_id = $1', [receiptId],
-  ).then(result => result.rows[0]);
+async function readHistoricalReceipt(client: PoolClient, receiptId: string, stored: StoredActivation, history: HistoryRead) {
+  let saved = history.receipts.get(receiptId);
+  if (!saved) {
+    const { rows: [row] } = await client.query<ReceiptRow>(
+      'SELECT * FROM runtime_sync_receipts WHERE receipt_id = $1', [receiptId],
+    );
+    valid(row && row.receipt_id === receiptId);
+    saved = await readReceiptCore(client, row, stored, history);
+    history.receipts.set(receiptId, saved);
+  }
+  return saved;
 }
 
 function recordForEvent(scope: Scope, event: RawSourceEvent) {
@@ -182,7 +215,9 @@ async function verifyLegacyReceiptDeliveries(client: PoolClient, stored: StoredA
   }));
 }
 
-async function readOrigins(client: PoolClient, scope: Scope, records: readonly FinancialRecord[], stored: StoredActivation) {
+async function readOrigins(
+  client: PoolClient, scope: Scope, records: readonly FinancialRecord[], stored: StoredActivation, history = historyRead(stored),
+) {
   if (records.length === 0) return [];
   const { rows } = await client.query<FinancialOriginRow>(`
     SELECT r.*, o.initial_import_key, o.initial_receipt_id, o.sync_receipt_id,
@@ -200,7 +235,6 @@ async function readOrigins(client: PoolClient, scope: Scope, records: readonly F
     WHERE r.record_id = ANY($1)
   `, [records.map(record => record.id)]);
   const byId = new Map(rows.map(row => [row.record_id, row]));
-  const receipts = new Map<string, Awaited<ReturnType<typeof readReceiptCore>>>();
   const initialRecords = new Map(financialRecords(stored.approvedTarget.records).map(record => [record.id, record]));
   const origins: ReceiptOrigin[] = [];
   for (const record of records) {
@@ -221,13 +255,7 @@ async function readOrigins(client: PoolClient, scope: Scope, records: readonly F
     } else {
       valid(row.sync_count === 1 && row.initial_count === 0 && row.sync_receipt_id === row.sync_id &&
         row.initial_import_key === null && row.initial_receipt_id === null);
-      let committed = receipts.get(row.sync_receipt_id);
-      if (!committed) {
-        const receiptRow = await receiptById(client, row.sync_receipt_id);
-        valid(receiptRow);
-        committed = await readReceiptCore(client, receiptRow, stored);
-        receipts.set(row.sync_receipt_id, committed);
-      }
+      const committed = await readHistoricalReceipt(client, row.sync_receipt_id, stored, history);
       valid(committed.records.some(candidate => candidate.id === record.id && equal(candidate, record)));
       origins.push(ReceiptOriginSchema.parse({ kind: 'sync', recordId: record.id, receipt: committed.receipt }));
     }
@@ -282,11 +310,11 @@ function decodeUnit(row: UnitRow) {
   return audit;
 }
 
-async function verifyUnitCoverageBindings(client: PoolClient, audit: SyncUnitAudit, stored: StoredActivation) {
-  const { lane, coverage, semanticObservation } = audit;
+function verifyUnitGrant(audit: SyncUnitAudit, stored: StoredActivation) {
+  const { coverage, semanticObservation } = audit;
   const { bundle, activation } = stored;
   const profile = bundle.profiles.find(profile => profile.hash === activation.profileHash);
-  valid(profile && equal(coverage.manifest, bundle.manifest) && equal(coverage.capture, bundle.artifact.normalizedPlan.capture) &&
+  valid(profile && equal(audit.identity, activationIdentity(stored)) && equal(coverage.manifest, bundle.manifest) && equal(coverage.capture, bundle.artifact.normalizedPlan.capture) &&
     coverage.baseline.importKey === stored.request.idempotencyKey && coverage.baseline.receiptId === stored.receipt.id &&
     coverage.baseline.activationDigest === hashCanonical(activation) && coverage.baseline.bundleDigest === hashCanonical(bundle) &&
     coverage.baseline.approvedSnapshotHash === stored.approvedTarget.snapshotHash &&
@@ -296,6 +324,9 @@ async function verifyUnitCoverageBindings(client: PoolClient, audit: SyncUnitAud
       const key = profile.scope.sellerEntityId + '/' + id;
       return semanticObservation.versions[key] === profile.semanticVersion && bundle.manifest.semanticVersions[key] === profile.semanticVersion;
     }) && coverage.deliveries.every(({ event }) => profile.sourceAccountIds.includes(event.rawIdentity.sourceAccountId ?? '')));
+}
+
+async function verifyUnitLane(client: PoolClient, { lane, coverage }: SyncUnitAudit) {
   const { rows: [laneRow] } = await client.query<{
     manifest_canonical: string; manifest_digest: string; capture_canonical: string; capture_digest: string;
     initial_activation_id: string; initialized_at: string;
@@ -307,23 +338,108 @@ async function verifyUnitCoverageBindings(client: PoolClient, audit: SyncUnitAud
     laneRow.manifest_canonical === canonicalJson(coverage.manifest) && laneRow.capture_canonical === canonicalJson(coverage.capture));
 }
 
-async function verifyUnitMembers(client: PoolClient, audit: SyncUnitAudit, records: readonly FinancialRecord[], stored: StoredActivation) {
-  const scope = audit.identity.scope;
-  const byId = new Map(records.map(record => [record.id, record]));
-  const memberRecords = audit.members.map(member => {
-    const record = byId.get(member.recordId);
-    valid(record);
-    return record;
-  });
-  const origins = await readOrigins(client, scope, memberRecords, stored);
-  await verifyOldAssociations(client, scope, audit.members.map(member => ({ ...member.event, origin: member.origin })));
-  const { rows } = await client.query<DeliveryRow & {
+type UnitBindings = Omit<SyncUnitAudit, 'coverage'>;
+
+async function readPriorUnits(client: PoolClient, audit: SyncUnitAudit, stored: StoredActivation) {
+  const { coverage: cut } = audit;
+  const origins = new Map(cut.historyOrigins.map(origin => [origin.recordId, origin]));
+  const verified: UnitBindings[] = [];
+  // Each stored audit contains a growing witness. Retain only its validated
+  // bindings and members, and limit how many full audit rows are loaded at once.
+  const batchSize = 16;
+  for (let start = 0; start < cut.historyUnits.length; start += batchSize) {
+    const refs = cut.historyUnits.slice(start, start + batchSize);
+    const { rows } = await client.query<UnitRow>(
+      'SELECT * FROM runtime_sync_units WHERE unit_hash = ANY($1::text[])', [refs.map(unit => unit.unitHash)],
+    );
+    const byHash = new Map(rows.map(row => [row.unit_hash, row]));
+    for (const ref of refs) {
+      const row = byHash.get(ref.unitHash);
+      valid(row && row.audit_digest === ref.auditDigest);
+      const prior = decodeUnit(row);
+      verifyUnitGrant(prior, stored);
+      const { coverage: priorCut, ...bindings } = prior;
+      valid(equal(prior.lane, audit.lane) && prior.streamId === ref.streamId &&
+        prior.fromCursor === ref.fromCursor && prior.throughCursor === ref.throughCursor &&
+        prior.expectedTargetVersion === ref.beforeTargetVersion && prior.beforeSnapshotHash === ref.beforeSnapshotHash &&
+        prior.afterTargetVersion === ref.afterTargetVersion && prior.afterSnapshotHash === ref.afterSnapshotHash &&
+        prior.receiptId === ref.receiptId &&
+        priorCut.initialActivationId === cut.initialActivationId && priorCut.initializedAt === cut.initializedAt);
+      // Every predecessor already occurs in this flat, bounded cut. Resolve a
+      // prior audit's references through that same list instead of recursing.
+      valid(equal(priorCut.historyUnits, cut.historyUnits.slice(0, verified.length)) &&
+        priorCut.historyOutcomes.every((outcome, position) =>
+          cut.historyOutcomes[position] && equal(outcome, cut.historyOutcomes[position])) &&
+        priorCut.historyOrigins.every(origin => {
+          const binding = origins.get(origin.recordId);
+          return binding && equal(origin, binding);
+        }));
+      verified.push(bindings);
+    }
+  }
+  return verified;
+}
+
+async function verifyUnitTarget(client: PoolClient, audit: UnitBindings, stored: StoredActivation, history: HistoryRead) {
+  if (audit.receiptId === null) {
+    return readHistoricalSnapshot(client, audit.identity.scope, audit.afterTargetVersion, history, audit.afterSnapshotHash);
+  }
+  const { receipt, plan, before, after } = await readHistoricalReceipt(client, audit.receiptId, stored, history);
+  valid(receipt.id === audit.receiptId && receipt.epoch === audit.expectedEpoch && receipt.committedAt === audit.committedAt &&
+    plan.hash === audit.planHash && plan.expectedTargetVersion === audit.expectedTargetVersion && plan.asOf === audit.asOf &&
+    before.snapshotHash === audit.beforeSnapshotHash && after.snapshotHash === audit.afterSnapshotHash &&
+    after.records.version === audit.afterTargetVersion &&
+    equal(plan.eventIds, audit.members.map(member => member.event.eventId)) &&
+    equal([...receipt.targetRecordIds].sort(), audit.members.filter(member => member.disposition === 'new').map(member => member.recordId).sort()));
+  return after;
+}
+
+function originBinding(origin: ReceiptOrigin) {
+  return {
+    recordId: origin.recordId, receiptDigest: hashCanonical(origin.receipt),
+    initialImportKey: origin.kind === 'initial' ? origin.importKey : null,
+    initialReceiptId: origin.kind === 'initial' ? origin.receipt.id : null,
+    syncReceiptId: origin.kind === 'sync' ? origin.receipt.id : null,
+  };
+}
+
+async function verifyUnitMembers(
+  client: PoolClient, audit: SyncUnitAudit, prior: readonly UnitBindings[], stored: StoredActivation, history: HistoryRead,
+) {
+  const { identity, lane, coverage: cut } = audit;
+  const { scope } = identity;
+  const members: { member: UnitMember; unitHash: string }[] = [];
+  const records = new Map<string, FinancialRecord>();
+  for (const unit of [...prior, audit]) {
+    const after = await verifyUnitTarget(client, unit, stored, history);
+    const byId = new Map(financialRecords(after.records).map(record => [record.id, record]));
+    for (const member of unit.members) {
+      const record = byId.get(member.recordId);
+      const previous = records.get(member.recordId);
+      valid(record && (!previous || equal(previous, record)));
+      records.set(member.recordId, record);
+      members.push({ member, unitHash: unit.unitHash });
+    }
+  }
+  const origins = await readOrigins(client, scope, [...records.values()], stored, history);
+  const byRecord = new Map(origins.map(origin => [origin.recordId, origin]));
+  for (const ref of cut.historyOrigins) {
+    const origin = byRecord.get(ref.recordId);
+    valid(origin && equal(ref, originBinding(origin)));
+  }
+
+  const replayedDeliveries = members.flatMap(({ member }) => member.event.eventId === records.get(member.recordId)?.sourceEventId
+    ? []
+    : [{ ...member.event, origin: member.origin }]);
+  if (replayedDeliveries.length > 0) await verifyOldAssociations(client, scope, replayedDeliveries);
+  const { rows } = await client.query<DeliveryRow & ScopeRow & {
     sequence: string; stream_id: string; after_cursor: string; outcome: string; outcome_digest: string; unit_hash: string;
-    record_id: string; disposition: string; account_id: string; company_id: string; seller_entity_id: string;
+    record_id: string; disposition: string; outcome_sequence: string; outcome_stream_id: string;
     activation_id: string; bundle_hash: string; manifest_hash: string;
   }>(`
     SELECT d.*, i.sequence, i.stream_id, i.after_cursor,
       o.canonical AS outcome, o.digest AS outcome_digest, o.unit_hash, o.record_id, o.disposition,
+      o.sequence AS outcome_sequence, o.stream_id AS outcome_stream_id,
       o.account_id, o.company_id, o.seller_entity_id, o.activation_id, o.bundle_hash, o.manifest_hash
     FROM runtime_inbox i
     JOIN runtime_deliveries d USING (source_ref, event_id)
@@ -332,60 +448,39 @@ async function verifyUnitMembers(client: PoolClient, audit: SyncUnitAudit, recor
     WHERE i.source_ref = $1 AND i.manifest_hash = $2 AND i.stream_id = $3
       AND i.sequence > $4 AND i.sequence <= $5
     ORDER BY i.sequence
-  `, [audit.lane.sourceRef, audit.lane.manifestHash, audit.streamId, audit.fromCursor, audit.throughCursor]);
-  valid(rows.length === audit.members.length);
-  const previous = new Map(audit.coverage.historyOutcomes.map(row => [row.event.eventId, row]));
-  const inbox = new Map(audit.coverage.inbox.map(row => [row.eventId, row]));
-  for (const [index, member] of audit.members.entries()) {
+  `, [lane.sourceRef, lane.manifestHash, audit.streamId, prior[0]?.fromCursor ?? audit.fromCursor, audit.throughCursor]);
+  valid(rows.length === members.length && rows.length === cut.deliveries.length);
+  for (const [index, { member, unitHash }] of members.entries()) {
     const row = rows[index]!;
     const event = readDelivery(row);
     const outcome = decodeCanonical(SyncEventOutcomeSchema, row.outcome, row.outcome_digest);
-    const prior = previous.get(event.id);
-    valid(equal(syncEventRef(event), member.event) && equal(outcome.event, member.event) &&
-      readVersion(row.sequence) === event.sequence && row.stream_id === event.streamId &&
-      row.after_cursor === inbox.get(event.id)?.afterCursor &&
-      equal(member.origin, origins[index]) && equal(outcome.origin, member.origin) &&
-      equal(outcome.identity, audit.identity) && sameScope(scopeOf(row), scope) && equal(outcome.lane, audit.lane) &&
-      row.activation_id === audit.identity.activationId && row.bundle_hash === audit.identity.bundleHash &&
-      row.manifest_hash === audit.lane.manifestHash && row.unit_hash === outcome.unitHash &&
-      row.record_id === member.recordId && outcome.recordId === member.recordId &&
-      row.disposition === outcome.disposition && recordForEvent(scope, event) === member.recordId);
-    valid(outcome.unitHash === audit.unitHash
-      ? outcome.disposition === member.disposition
-      : prior?.unitHash === outcome.unitHash && prior.digest === row.outcome_digest);
+    // A bounded prefix assigns each distinct position to exactly one unit.
+    const expectedOutcome = { identity, lane, unitHash, ...member };
+    valid(equal(outcome, expectedOutcome) && equal(syncEventRef(event), member.event) &&
+      row.digest === cut.deliveries[index]!.digest && row.sequence === row.outcome_sequence &&
+      readVersion(row.sequence) === event.sequence && row.stream_id === event.streamId && row.outcome_stream_id === event.streamId &&
+      row.after_cursor === cut.inbox[index]!.afterCursor &&
+      byRecord.has(member.recordId) && equal(member.origin, byRecord.get(member.recordId)) && sameScope(scopeOf(row), scope) &&
+      row.activation_id === identity.activationId && row.bundle_hash === identity.bundleHash &&
+      row.manifest_hash === lane.manifestHash && row.unit_hash === unitHash &&
+      row.record_id === member.recordId && row.disposition === member.disposition && recordForEvent(scope, event) === member.recordId);
+    if (index < cut.historyOutcomes.length) {
+      const { event, recordId, disposition } = member;
+      valid(equal(cut.historyOutcomes[index], { event, recordId, disposition, unitHash, digest: row.outcome_digest }));
+    }
     if (member.disposition === 'new') {
-      const record = memberRecords[index]!;
+      const record = records.get(member.recordId)!;
       valid(record.sourceEventId === event.id && record.sourceRecordVersion === event.recordVersion);
     }
   }
 }
 
-async function readValidatedUnit(client: PoolClient, row: UnitRow, stored: StoredActivation,
-  saved?: Awaited<ReturnType<typeof readReceiptCore>>,
-) {
+async function readValidatedUnit(client: PoolClient, row: UnitRow, stored: StoredActivation, history = historyRead(stored)) {
   const audit = decodeUnit(row);
-  valid(equal(audit.identity, activationIdentity(stored)));
-  await verifyUnitCoverageBindings(client, audit, stored);
-  let after: StoredTarget | null;
-  if (audit.receiptId === null) {
-    after = await readStoredTarget(client, audit.identity.scope, audit.afterSnapshotHash);
-    valid(after?.records.version === audit.afterTargetVersion);
-  } else {
-    if (!saved) {
-      const receiptRow = await receiptById(client, audit.receiptId);
-      valid(receiptRow);
-      saved = await readReceiptCore(client, receiptRow, stored);
-    }
-    const { receipt, plan, before } = saved;
-    after = saved.after;
-    valid(receipt.id === audit.receiptId && receipt.epoch === audit.expectedEpoch && receipt.committedAt === audit.committedAt &&
-      plan.hash === audit.planHash && plan.expectedTargetVersion === audit.expectedTargetVersion && plan.asOf === audit.asOf &&
-      before.snapshotHash === audit.beforeSnapshotHash && after.snapshotHash === audit.afterSnapshotHash &&
-      after.records.version === audit.afterTargetVersion &&
-      equal(plan.eventIds, audit.members.map(member => member.event.eventId)) &&
-      equal([...receipt.targetRecordIds].sort(), audit.members.filter(member => member.disposition === 'new').map(member => member.recordId).sort()));
-  }
-  await verifyUnitMembers(client, audit, financialRecords(after.records), stored);
+  verifyUnitGrant(audit, stored);
+  await verifyUnitLane(client, audit);
+  const prior = await readPriorUnits(client, audit, stored);
+  await verifyUnitMembers(client, audit, prior, stored, history);
   return audit;
 }
 
@@ -405,14 +500,16 @@ export async function readSyncUnit(
 }
 
 async function verifyReceiptHistory(client: PoolClient, row: ReceiptRow, stored: StoredActivation, inputPlan?: MutationPlan) {
-  const saved = await readReceiptCore(client, row, stored);
+  const history = historyRead(stored);
+  const saved = await readReceiptCore(client, row, stored, history);
+  history.receipts.set(saved.receipt.id, saved);
   const { receipt, plan, records } = saved;
   valid(!inputPlan || equal(plan, inputPlan));
   const { rows: [unit] } = await client.query<UnitRow>('SELECT * FROM runtime_sync_units WHERE receipt_id = $1', [receipt.id]);
   if (unit) {
-    await readValidatedUnit(client, unit, stored, saved);
+    await readValidatedUnit(client, unit, stored, history);
   } else {
-    const origins = await readOrigins(client, receipt.scope, records, stored);
+    const origins = await readOrigins(client, receipt.scope, records, stored, history);
     valid(origins.every(origin => origin.kind === 'sync' && equal(origin.receipt, receipt)));
     await verifyLegacyReceiptDeliveries(client, stored, receipt, records);
   }
