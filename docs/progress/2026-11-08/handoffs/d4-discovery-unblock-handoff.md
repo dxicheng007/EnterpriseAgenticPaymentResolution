@@ -1,8 +1,8 @@
 # D4 Discovery unblock handoff
 
 **Date:** 2026-11-09  
-**Discovery tip context:** D4a sandbox replay/compare merged; D4d offline live ModelClient stub lands on `team-discovery-d4b`; Gate J verification consumers merged via [PR15](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/15).  
-**Status:** Discovery-owned offline provider boundary and Gate J `requestVerification` / `readVerification` consumers are on main against the Platform producer. **D4c repair/finish remain blocked on Platform Blocker C.** Live holdouts remain blocked on Blocker D. This document is the unblock checklist — not authorization to invent repair/finish policies or DDL in Discovery, and **not** a claim of joint V4 acceptance.
+**Discovery tip context:** D4a sandbox replay/compare merged; D4d offline live ModelClient stub lands on `team-discovery-d4b`; Gate J verification consumers are **wired** on main via [PR15](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/15) but **not accepted** — see [Gate J 7012a4d review](../reviews/platform-discovery-gate-j-7012a4d-review.md).  
+**Status:** Offline provider boundary is on main. Gate J consumers are merged as conditional wiring only — outstanding P1 authorization/recovery/settlement findings block Gate J acceptance. **D4c repair/finish remain blocked on Platform Blocker C.** Live holdouts remain blocked on Blocker D. This document is the unblock checklist — not authorization to invent repair/finish policies or DDL in Discovery, and **not** a claim of joint V4 or Gate J acceptance.
 
 Authority: team-expansion §D4; `v4-orchestration-contract-proposal.md` §4 tools + §7 V4d + §8.1 capability gap; `b-discovery-construction-handoff.md` gaps #4–#6.
 
@@ -16,7 +16,7 @@ Authority: team-expansion §D4; `v4-orchestration-contract-proposal.md` §4 tool
 | D3 / C3 `compileConnector` | Reserve → external compile/register → settle; orphans ≠ current compiled |
 | D4a `runSandboxReplay` / `compareArtifacts` | Empty-sandbox `parentWrites:0`; same-run deterministic diffs; no parent capability grants |
 | D4d offline live stub | `packages/discovery/src/live-model-stub.ts`: `mode:'live'`, constructor options only (no product env secrets), budget preflight, hang-for-timeout proofs; default composition stays unconfigured → `MODEL_UNAVAILABLE` |
-| D4b Gate J verification consumers | `requestVerification` / `readVerification` mounted on the real supervisor against the Platform producer ([PR15](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/15)); interim trusted-scope freeze only — not full Blocker B, not V4 acceptance |
+| D4b Gate J verification consumers | `requestVerification` / `readVerification` **wired** on the real supervisor against the Platform producer ([PR15](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/15)); interim trusted-scope freeze only. **Not Gate J–accepted** — correction matrix in [7012a4d review](../reviews/platform-discovery-gate-j-7012a4d-review.md) remains open; not full Blocker B; not V4 acceptance |
 
 Still **recognized / unavailable** (do not advertise until unblock items land): `beginRepair`, `finishRun`, `requestInvestigation`.  
 `requestInvestigation` has contracts Zod I/O on main; it stays `TOOL_UNAVAILABLE` / unadvertised until storage and semantics land after Blocker C — Discovery must not invent those semantics.
@@ -29,7 +29,7 @@ Live transport (`packages/discovery/src/live-model-transport.ts`) exists as an i
 
 The original blocker inventory below is retained as history. Blocker A now has an implemented, independently accepted **Gate P** producer at `4af12bd79e315a0701d896666cb119095dcfec9c`, published in [PR12](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/12). See the [actual export/SQL/evidence handoff](platform-discovery-verification-producer-report.md), [independent review](../reviews/platform-discovery-verification-producer-review.md) and [current integration status](platform-continuation-dispatch.md). Control009 is assigned to the immutable verification-request mapping; do not reuse or edit it. Reviewer verification uses the current attested producer, not the legacy jobs.ts API described below.
 
-Gate J consumer mounting against the actual supervisor is **merged** ([PR15](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/15)). Trusted-scope verify follows the [interim discovery verification capability freeze](../../../superpowers/plans/2026-11-09-contract-freeze-discovery-verification-capability-interim.md); do not broaden activation. No repair/finish grant or live-provider product configuration was added. Full generated-account Blocker B, Blocker C, Blocker D, live holdouts, and joint V4 acceptance remain separate.
+Gate J consumer wiring against the actual supervisor is **merged** ([PR15](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/15)) under the [interim discovery verification capability freeze](../../../superpowers/plans/2026-11-09-contract-freeze-discovery-verification-capability-interim.md). Merged wiring ≠ Gate J acceptance: independent review still rejects the candidate on transactional authorization, scoped reads/replays, whole-batch validation, historical recovery, ambiguous COMMIT, settlement, uncertainty projection, and premature production injection. Do not broaden activation. No repair/finish grant or live-provider product configuration was added. Full generated-account Blocker B, Blocker C, Blocker D, live holdouts, joint V4, and Gate J acceptance remain separate.
 
 ## Original blocker inventory — superseded for Blocker A producer status and Gate J consumer mount
 
@@ -44,7 +44,7 @@ Gate J consumer mounting against the actual supervisor is **merged** ([PR15](htt
 | **Required DDL** | New **Platform-reserved** control migration (after applied catalog; **do not** steal A4’s reserved `008` for review/activation intents). Add durable unique request-key ↔ subject/job binding. Do **not** edit applied `003`/`007`. |
 | **Acceptance for Discovery** | Documented export/signature + migration applied in accepted environment + green idempotency suite. Then Discovery may implement `requestVerification` / `readVerification` consumers only. |
 
-**Current status:** Gate P producer accepted (PR12). Gate J consumers mounted (PR15). Historical “code reality” rows below describe the pre-producer inventory and are retained for audit only.
+**Current status:** Gate P producer accepted (PR12). Gate J consumers wired (PR15) but **not accepted** pending the 7012a4d correction matrix. Historical “code reality” rows below describe the pre-producer inventory and are retained for audit only.
 
 **Historical code reality (pre-Gate P):** `packages/evaluator/src/jobs.ts` exposed only `enqueue` / `get` / `drain`. `verification_jobs` had no `request_key` column. Control catalog ended at `007_discovery_construction.sql`.
 
@@ -80,7 +80,7 @@ Gate J consumer mounting against the actual supervisor is **merged** ([PR15](htt
 
 ## What Discovery can do after each unblock (ordered)
 
-1. **After A only (trusted scopes):** ~~implement `requestVerification` / `readVerification`~~ **done (Gate J / PR15)** under interim trusted-scope freeze; keep `verificationJobs` honest; do not broaden activation.
+1. **After A only (trusted scopes):** ~~initial `requestVerification` / `readVerification` wiring~~ **merged (PR15)** under interim trusted-scope freeze — **Gate J acceptance still open** until 7012a4d findings close; keep `verificationJobs` honest; do not broaden activation.
 2. **After A + B:** genuine multi-account verify for source-bound proposed IDs under the accepted full capability rule (interim freeze ≠ full Blocker B).
 3. **After C:** `beginRepair` / `finishRun` (+ `requestInvestigation` storage/semantics; contracts Zod may already exist — stay unadvertised until then).
 4. **After D:** composition mounts live transport; live holdouts; then `verify:slice -- V4` with deterministic + live evidence.
@@ -97,6 +97,6 @@ Do **not** start speculative repair schemas, call `jobs.enqueue`, edit applied m
 
 ---
 
-## Discovery stop line (post–Gate J)
+## Discovery stop line (post–Gate J wiring)
 
-Gate J consumers are merged. Do not invent Blocker C repair/finish DDL or semantics in Discovery. Do not mount live product env or claim live holdouts. Record machine results as **partial** — **not** V4 acceptance.
+Gate J consumers are wired on main but **not accepted**. Close the [7012a4d](../reviews/platform-discovery-gate-j-7012a4d-review.md) / later correction findings before claiming Gate J. Do not invent Blocker C repair/finish DDL or semantics in Discovery. Do not mount live product env or claim live holdouts. Live transport still has open [8f14539](../reviews/platform-live-transport-8f14539-review.md) P1s before mount. Record machine results as **partial** — **not** Gate J, V4, or joint acceptance.
