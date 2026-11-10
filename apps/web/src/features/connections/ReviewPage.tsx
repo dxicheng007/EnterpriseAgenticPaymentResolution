@@ -3,8 +3,8 @@ import { LocalApiError } from '../../../../../packages/client/src/http.js';
 import {
   activateReview, activationRequestFor, prepareReview, readReview, type ActivationOutcome,
 } from '../../../../../packages/client/src/review.js';
-import { getLocalSession, type LocalSession } from '../../../../../packages/client/src/session.js';
-import type { ReviewPackage } from '../../../../../packages/contracts/src/review.js';
+import type { LocalSession } from '../../../../../packages/client/src/session.js';
+import { ActivationRequestSchema, type ActivationRequest, type ReviewPackage } from '../../../../../packages/contracts/src/review.js';
 import { formatUsdCents } from '../preview/preview-values.js';
 import { Diagnostics, RequestFailure } from '../sources/review-details.js';
 
@@ -52,30 +52,55 @@ export function ActivationOutcomeView({ outcome }: { outcome: ActivationOutcome 
   </section>;
 }
 
+const staleCodes = ['REVIEW_STALE', 'STALE_REVIEW', 'ACTIVATION_POLICY_MISMATCH', 'FINANCIAL_ATTESTATION_MISMATCH'];
 function staleError(error: unknown) {
-  return error instanceof LocalApiError && error.status === 409 &&
-    ['REVIEW_STALE', 'ACTIVATION_POLICY_MISMATCH', 'FINANCIAL_ATTESTATION_MISMATCH'].includes(error.code);
+  return error instanceof LocalApiError && error.status === 409 && staleCodes.includes(error.code);
 }
 
-function AccountReview({ accountId }: { accountId: string }) {
+const approvalStorageKey = (accountId: string) => 'eapr-review-approval:' + accountId;
+function loadSavedApproval(accountId: string, reviewPackage: ReviewPackage): ActivationRequest | undefined {
+  try {
+    const raw = window.sessionStorage.getItem(approvalStorageKey(accountId));
+    const parsed = raw ? ActivationRequestSchema.safeParse(JSON.parse(raw)) : undefined;
+    return parsed?.success && parsed.data.reviewPackageId === reviewPackage.id &&
+      parsed.data.expectedPackageHash === reviewPackage.hash ? parsed.data : undefined;
+  } catch { return undefined; }
+}
+function saveApproval(accountId: string, request: ActivationRequest) {
+  try { window.sessionStorage.setItem(approvalStorageKey(accountId), JSON.stringify(request)); } catch { /* storage only aids recovery */ }
+}
+function clearApproval(accountId: string) {
+  try { window.sessionStorage.removeItem(approvalStorageKey(accountId)); } catch { /* nothing to clear */ }
+}
+
+function AccountReview({ accountId, session }: { accountId: string; session: LocalSession }) {
   const [reviewPackage, setReviewPackage] = useState<ReviewPackage>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>();
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<ActivationOutcome>();
   const [stale, setStale] = useState(false);
-  const approval = useRef<{ hash: string; key: string } | undefined>(undefined);
+  const [savedApproval, setSavedApproval] = useState<ActivationRequest>();
   const inFlight = useRef(false);
+
+  function accept(value: ReviewPackage) {
+    setReviewPackage(value);
+    setSavedApproval(loadSavedApproval(accountId, value));
+    setStale(false);
+  }
 
   function load(signal?: AbortSignal) {
     setLoading(true);
     setError(undefined);
     void readReview(accountId, signal).then(value => {
-      if (!signal?.aborted) { setReviewPackage(value); setLoading(false); }
+      if (signal?.aborted) return;
+      accept(value);
+      setLoading(false);
     }, failure => {
       if (signal?.aborted) return;
       setLoading(false);
       if (!(failure instanceof LocalApiError && failure.status === 404)) setError(failure);
+      else { setReviewPackage(undefined); setSavedApproval(undefined); }
     });
   }
 
@@ -83,7 +108,7 @@ function AccountReview({ accountId }: { accountId: string }) {
     const controller = new AbortController();
     load(controller.signal);
     return () => controller.abort();
-  }, [accountId]);
+  }, [accountId, session]);
 
   async function run(action: () => Promise<void>) {
     if (inFlight.current) return;
@@ -98,20 +123,22 @@ function AccountReview({ accountId }: { accountId: string }) {
 
   const prepare = () => run(async () => {
     setOutcome(undefined);
-    setStale(false);
-    setReviewPackage(await prepareReview(accountId));
+    accept(await prepareReview(accountId));
   });
 
   const approve = () => run(async () => {
     if (!reviewPackage) return;
-    if (approval.current?.hash !== reviewPackage.hash) {
-      approval.current = { hash: reviewPackage.hash, key: 'approval-' + crypto.randomUUID() };
-    }
-    setOutcome(await activateReview(accountId, activationRequestFor(reviewPackage, approval.current.key)));
+    const request = savedApproval ?? activationRequestFor(reviewPackage, 'approval-' + crypto.randomUUID());
+    saveApproval(accountId, request);
+    setSavedApproval(request);
+    const result = await activateReview(accountId, request);
+    setOutcome(result);
+    if (result.state === 'applied') clearApproval(accountId);
   });
 
-  const canApprove = reviewPackage !== undefined && reviewPackage.ready &&
-    !reviewPackage.diagnostics.some(item => item.severity === 'blocker') && !stale && outcome?.state !== 'applied';
+  const pendingApproval = outcome?.state === 'pending' || (savedApproval !== undefined && outcome === undefined);
+  const canApprove = reviewPackage !== undefined && reviewPackage.ready && !loading && !busy && !stale &&
+    !reviewPackage.diagnostics.some(item => item.severity === 'blocker') && outcome?.state !== 'applied';
   return <>
     {loading && <p role="status">Loading saved review package…</p>}
     {!loading && !reviewPackage && error == null && <p>No review package is prepared for this account.</p>}
@@ -119,12 +146,13 @@ function AccountReview({ accountId }: { accountId: string }) {
       ? 'The package changed. Reload the saved package or prepare again, then review it before approving.'
       : 'Nothing was assumed. Check the saved state before retrying.'} />}
     {reviewPackage && <ReviewPackageView reviewPackage={reviewPackage} />}
+    {pendingApproval && !stale && <p role="status">An approval for this exact package was already submitted from this
+      browser session and may not have completed. Retrying sends the same approval; it is never sent automatically.</p>}
     <div className="review-actions">
-      <button type="button" disabled={busy} onClick={() => void prepare()}>Prepare review package</button>
-      {stale && <button type="button" disabled={busy} onClick={() => { setStale(false); setError(undefined); load(); }}>
-        Reload saved package</button>}
-      {reviewPackage && <button type="button" disabled={busy || !canApprove} onClick={() => void approve()}>
-        {outcome?.state === 'pending' ? 'Retry same approval' : 'Approve this customer only'}</button>}
+      <button type="button" disabled={busy || loading} onClick={() => void prepare()}>Prepare review package</button>
+      {stale && <button type="button" disabled={busy || loading} onClick={() => load()}>Reload saved package</button>}
+      {reviewPackage && <button type="button" disabled={!canApprove} onClick={() => void approve()}>
+        {pendingApproval ? 'Retry same approval' : 'Approve this customer only'}</button>}
     </div>
     <p>Approval applies to this one customer and the exact hashes shown. It does not approve any other customer.</p>
     {busy && <p role="status">Waiting for the server…</p>}
@@ -132,32 +160,24 @@ function AccountReview({ accountId }: { accountId: string }) {
   </>;
 }
 
-export function ReviewPage() {
-  const [session, setSession] = useState<LocalSession>();
-  const [failed, setFailed] = useState(false);
-  const [accountId, setAccountId] = useState('');
-  useEffect(() => {
-    let active = true;
-    void getLocalSession().then(value => { if (active) setSession(value); }, () => { if (active) setFailed(true); });
-    return () => { active = false; };
-  }, []);
+export function ReviewPage({ session }: { session: LocalSession }) {
+  const [chosen, setAccountId] = useState('');
+  const accountId = session.allowedAccountIds.includes(chosen) ? chosen : '';
   return <main className="review-main">
     <header>
       <p className="review-eyebrow">Per-customer review</p>
       <h1>Customer review</h1>
       <p>Review one customer's prepared package. Approval grants bounded standing authority for that customer only.</p>
     </header>
-    {failed && <p role="alert">The demo reviewer session is unavailable.</p>}
-    {!failed && !session && <p role="status">Loading registered accounts…</p>}
-    {session && session.allowedAccountIds.length === 0 && <p>No accounts are authorized for this reviewer session.</p>}
-    {session && session.allowedAccountIds.length > 0 && <>
+    {session.allowedAccountIds.length === 0 && <p>No accounts are authorized for this reviewer session.</p>}
+    {session.allowedAccountIds.length > 0 && <>
       <label className="review-selection">Registered account
         <select value={accountId} onChange={event => setAccountId(event.target.value)}>
           <option value="">Select an account</option>
           {session.allowedAccountIds.map(id => <option key={id} value={id}>{id}</option>)}
         </select>
       </label>
-      {accountId && <AccountReview key={accountId} accountId={accountId} />}
+      {accountId && <AccountReview key={accountId} accountId={accountId} session={session} />}
     </>}
   </main>;
 }

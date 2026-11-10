@@ -65,6 +65,6 @@ export function App() {
       </main>
       : page === 'sources' ? <SourcesPage allowedSourceRefs={session.allowedSourceRefs} />
         : page === 'discovery' ? <DiscoveryPage /> : page === 'parent' ? <ParentView />
-          : page === 'review' ? <ReviewPage /> : <PreviewPage />}
+          : page === 'review' ? <ReviewPage session={session} /> : <PreviewPage />}
   </>;
 }
