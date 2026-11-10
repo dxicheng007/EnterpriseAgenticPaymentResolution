@@ -44,17 +44,11 @@ Authoritative status claims also live in root [`AGENTS.md`](../../../AGENTS.md),
 
 ## 3. End-state demo walkthrough (acceptance target for this track)
 
-A successful demo rehearsal for this track proves:
+The frozen script, Company A identities, integer-cent expectations, construction-mode labels, injection params, and per-step pass/fail observations live in the [demo contract](../../demo/demo-contract.md). Do not restage from this section alone.
 
-1. Sources and parent schema are inspectable (existing V1).
-2. A **pregenerated** connector/profile is reviewable with independent verification results (existing V2 path; labeled).
-3. Reviewer explicitly **Approve and enable** one customer; parent shows the initial reconstruction and a durable receipt (V3).
-4. Model client remains disabled / worker has no model key.
-5. Operator injects a **new** post-activation conforming record (illustrative Company A payment or invoice; Company B CSV only if CSV capture is in scope for that rehearsal).
-6. Worker captures/classifies/applies through the pinned artifact; parent balance updates; cutover/opening balance is preserved; a sync receipt exists (V5).
-7. Replaying the same source identity does not create a second economic effect (minimum V6 for the demo path).
+A successful demo rehearsal for this track proves that contract: inspect sources; review a **pregenerated** `fixture` / `development-fixture` connector (never unlabeled live); **Approve this customer only** for Company A; keep the model client off; inject the specified post-cutover $300 payment; apply once (80000 → 50000 current, cutover asOf still 80000); replay with one economic effect. Company B and an extra invoice beat are optional stretch, not the primary script.
 
-Optional stretch (not required to call the track demo-ready): schema-drift pause with peer continuity; second company enrollment; labeled captured construction replay in the Discovery UI.
+Optional stretch (not required to call the track demo-ready): schema-drift pause with peer continuity; second company enrollment; labeled captured-run replay in the Discovery UI.
 
 ## 4. High-level tasks for later delegation
 
@@ -64,11 +58,12 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T0 — Integrator: freeze the demo contract
 
-**Status:** not started; next demo-planning priority after the current candidate review/simplification. Preserve one Company A fixture/pregenerated path; exact rehearsal IDs, cents and injection must still be frozen.
+**Status:** delivered and merged into main in PR55 at `fc79e94`; documentation-only T0 freeze. Demo implementation and acceptance remain separate.
 **Lane:** Integrator  
 **Depends on:** none  
 **Outcome:** Written demo script + labeled modes (`fixture` vs `captured-run` vs later `live`) + exact customer/account IDs + expected cents for cutover and post-sync balances.  
 **Done when:** One page lists the staged clicks, injection method, and pass/fail observations; no ambiguity about claiming live construction.  
+**Delivered:** [demo contract](../../demo/demo-contract.md). Open decisions recorded there (optional invoice beat, Company B stretch, injection transport mounting) do not unfreeze identities, cents, or construction labels. T7 labeling is frozen there: current demo is `fixture` / catalog `development-fixture`.  
 **Not in scope:** Implementing sync or UI.
 
 ### T1 — Platform: mount post-activation apply for one authorized customer
@@ -131,7 +126,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 **Status:** partial — real operator-pinned A/B fixture construction already exists and is qualified. T0 must choose the exact package/labels; reuse it instead of rebuilding live construction. This remains optional Discovery packaging work for this track.
 **Lane:** Discovery  
-**Depends on:** T0 labeling decision  
+**Depends on:** T0 labeling decision — frozen in the [demo contract](../../demo/demo-contract.md): current demo is `fixture` / catalog `development-fixture`; captured-run only if labeled; live is T9.  
 **Outcome:** One clearly labeled artifact/profile package (fixture pin and/or offline generated candidate) mounted for review/activation, with instructions so the demo never implies live construction.  
 **Done when:** Operator setup doc + hashes; Discovery UI can show a captured-run replay **only if labeled**.  
 **Not in scope:** Default live model client, Gate J acceptance, holdout live builds (separate later track).
@@ -193,6 +188,7 @@ Parallelism that is usually safe after T0:
 
 ## 7. Related documents
 
+- [Demo contract](../../demo/demo-contract.md) — frozen T0 identities, modes, cents, injection, and pass/fail
 - [PRD v2](../../../prdv2.md) — thesis, demo walkthrough, acceptance criteria
 - [Implementation plan](2026-11-08-implementation-plan.md) — original V0–V8 slices
 - [Verification playbook](2026-11-08-verification-playbook.md) — G0–G7 gates
@@ -202,7 +198,7 @@ Parallelism that is usually safe after T0:
 
 ## 8. Current integrator checkpoint and preserved follow-on work
 
-Latest main `088f719` was integrated into continuation branch `codex/platform-sync-selection-readers` at `2dab8e9`. Source is byte-identical to catalog candidate `74cd969` across apps/packages/scripts/tests/db; the merge adds the shared board and documentation links. PR48 is on main; PR50/PR52 were externally merged into their former stack bases, so the continuation carries those reviewed trees without claiming they are already on main.
+Main `088f719` was integrated into continuation branch `codex/platform-sync-selection-readers` at `2dab8e9`; latest main `fc79e94` is now integrated with the frozen T0 demo contract from PR55. Source is byte-identical to catalog candidate `74cd969` across apps/packages/scripts/tests/db; the merge adds the shared board and documentation links. PR48 is on main; PR50/PR52 were externally merged into their former stack bases, so the continuation carries those reviewed trees without claiming they are already on main.
 
 The user requested behavior-preserving simplification, including fixed choices where useful. New implementation is held while the exact catalog task review assesses correctness and concrete simplifications. Current source/SQL lease is with Integrator; no other task may start from this board. The catalog review is accepted; next feature dispatch still requires its own narrow demo scope. Catalog checks:14/14 complete run,65 selector units, final three affected test cases and typecheck pass; independent source review passes. All six fixture tasks and their combined review pass.
 

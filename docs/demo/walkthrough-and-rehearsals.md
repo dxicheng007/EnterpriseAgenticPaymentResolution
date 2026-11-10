@@ -1,6 +1,8 @@
 # Final walkthrough and rehearsal checklist
 
-Status: script and checklist only. No rehearsal has been run. Record each run's real outcome in the table below; do not pre-fill it.
+This rehearsal checklist is subordinate to the [demo contract](demo-contract.md), which freezes identities, construction modes, expected cents, injection, and pass/fail observations.
+
+Status: script and checklist only. No rehearsal has been run. Record each run's real outcome in the table below; do not pre-fill it. Steps 1–8 below are the pre-T1 subset; a full track rehearsal must complete [demo-contract](demo-contract.md) steps 1–10.
 
 ## Preconditions
 
@@ -29,7 +31,7 @@ Status: script and checklist only. No rehearsal has been run. Record each run's 
 
 ## Rehearsal log (fill in from real runs)
 
-| Run | Date/time | Operator | Candidate commit | Completed steps 1-8 | Deviations / failures |
+| Run | Date/time | Operator | Candidate commit | Completed demo-contract steps 1–10 | Deviations / failures |
 | --- | --- | --- | --- | --- | --- |
 | 1 | | | | | |
 | 2 | | | | | |
