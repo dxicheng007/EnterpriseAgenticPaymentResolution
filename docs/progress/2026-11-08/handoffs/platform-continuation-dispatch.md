@@ -1,0 +1,35 @@
+# Platform continuation dispatch — 2026-11-09
+
+Reviewed A4/A5 checkpoint `7a90f1617b70171495dc90adc206cbe873fe09ee` is published on `origin/codex/platform-activation-integration` in [draft PR9](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/9). This publishes reviewable progress; it is not a merge or full V3 acceptance. Main and fetched Discovery/Experience branches were refreshed before dispatch; main remains `c8ed64265755963ec94164b5ddd1440e9245c0c7`. The [checkpoint handoff](platform-resumption-status.md) and exact-candidate reviews retain their evidence and limitations.
+
+## D4b producer ownership
+
+GPT-6.1 Sol implements only Gate P of the [accepted verification adapter design](platform-discovery-verification-adapter-design.md). Its final code and additive SQL require fresh independent Astra review before downstream consumption. No requestVerification/readVerification advertisement or composition is enabled by producer tests alone. Actual supervisor ownership, authorization and recovery require the separate mandatory Gate J.
+
+Reserved producer paths: `packages/evaluator/src/discovery-verification.ts`, focused `financial-attestation-jobs.ts`, `financial-attestation-registry.ts`, `financial-attestation-build.ts`, evaluator package export, new evaluator discovery-verification unit tests, build-closure tests, `tests/integration/v4-verification-idempotency.test.ts`, and **new control009 `009_discovery_verification_requests.sql`**. Evaluator/db guides and the producer report may be updated. Existing migrations remain immutable. Current main and both active developer lane catalogs end at control007; this branch contains accepted control008. No other fetched reservation occupies009. The existing control007 `(run_id,task_id,id)` unique tool-step constraint can serve the new mapping FK without another equivalent constraint.
+
+The producer receives a required trusted task-ID resolver for its server tool-step association. It is not authorization: each owner gate must authenticate original association and current authority on its actual transaction client. Root retains composition, shared fixtures and catalog scripts; the generic migration loader already discovers sequential009. Extra helper paths require explicit reservation.
+
+Exclusive local implementation database: PostgreSQL55441, `eapr_test_review_t2`, `eapr_review_t2`; control3241/worker3242/web5182 belong to this isolated worktree. Other lane clusters and preserved demo are untouched. Evaluator source changes invalidate prior build matches; producer evidence must issue fresh test proofs without repinning or installing policy in the preserved demo.
+
+## Parallel design and downstream owners
+
+An independent design-only task drafts the P3 ongoing-sync engineering handoff from the PRD, frozen contracts and actual A5/source/parent code. Its only reserved output is `platform-sync-design.md`; proposed runtime migration numbers and implementation paths remain unreserved until review. No new financial rules are delegated to the design author.
+
+Experience may consume the published accepted A4/A5 API/report checkpoint for E1; its parent session-renewal correction remains in [the review](../reviews/platform-experience-parent-review.md). UI paths remain Experience-owned. Discovery owns the later consumer/supervisor work after Gate P acceptance; producer implementation does not take those paths. Repair/finish, generated-account capability expansion and live provider configuration remain separate decisions/assignments.
+
+## Upstream refresh during continuation
+
+A later successful fetch observed main advancing to `d772e9f` through [PR10](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/10), Experience's `602136219d0b539ed8e4ff99135423e838967a5e` Discovery construction-detail display. Its author records typecheck, 62 client units and real detail/monitor/V2 browser checks; root has inspected the diff but has not repeated those tests or claimed independent acceptance. This is read-only UI work and does not overlap producer files. Root defers the merge until the producer's next coherent clean checkpoint.
+
+Experience also pushed `814584ec3ad77199afae9da4a56dd3bd8a990070` on `team-experience-review`: typed review client, per-customer review page and App mount. Fresh Astra integration review is in progress against actual A4/A5 contracts. Neither this pushed branch nor passing client tests alone proves the required real approval browser workflow. No UI ownership was transferred to the Platform implementer.
+
+The [E1 exact-candidate review](../reviews/platform-experience-e1-review.md) requests changes: missing approval decision context (P1), volatile retry identity, stale refresh handling, actual stale error-code mismatch and renewed-session grants (P2). The earlier ParentView renewal defect remains unchanged. Root inspected the backend and confirms ReviewPackage deliberately exposes no financial/future-scope summary; the saved preparation companion contains the exact inputs but also protected proof material. A separately reviewed, additive safe read is therefore a Platform prerequisite for E1's approval context. A design-only task now owns `platform-review-details-design.md`; no raw companion exposure, contract change or UI correction is authorized by that draft. The E1 branch is not accepted or merged by this session.
+
+## Accepted design checkpoints
+
+The [safe review-details design](platform-review-details-design.md), SHA256 `d1cac98bf0c29b17fda3d66d9d916c94cbf130bf8baa39bc06d3047fa4ce8a7f`, passed [fresh design review](../reviews/platform-review-details-design-review.md). Its exact immutable account/package-hash GET preserves current authorization, saved financial/evidence binding and strict protected-data exclusion. The [implementation plan](../../../superpowers/plans/2026-11-09-review-details.md) reserves the next serialized backend task; no endpoint is implemented merely by this acceptance.
+
+The [P3 sync design](platform-sync-design.md), corrected SHA256 `66bb5f10bbc8521ce62f0536dc2558dda8baf450d41cafcbdc97377dc6add9d2`, passed [fresh scoped correction review](../reviews/platform-sync-design-fix-review.md) after two [initial findings](../reviews/platform-sync-design-review.md). First-phase API/semantic capture now checks accepted overlapping delivery/position identity before discarding benign stale pages. Empty CSV batches remain unsupported. This accepts bounded design corrections, not runtime implementation or full P3. CSV batch-gap producer, application/replay classification and mutable authority/read contracts retain their explicit gates.
+
+Follow-on work moved locally to `codex/platform-discovery-verification` at the same `7a90f16` base to keep PR9's completed A4/A5 scope stable. PR9's published head remains `7a90f16`, OPEN draft, with no GitHub CI/reviews reported; its independent review and machine evidence are tracked in the repository. Experience's E1 work is now [draft PR11](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/11), still awaiting the documented corrections and actual approval browser proof.
