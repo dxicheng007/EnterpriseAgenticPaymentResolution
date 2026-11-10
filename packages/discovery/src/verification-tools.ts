@@ -149,6 +149,8 @@ export type DiscoveryVerificationGateOptions = {
   generation: () => number;
   permits: (run: RunRow, task: TaskRow) => boolean;
   admissions: VerificationAdmissionStore;
+  /** Test-only: after producer SQL, before final authority recheck + COMMIT. */
+  beforeAdmitCommit?: () => Promise<void>;
 };
 
 /**
@@ -158,7 +160,7 @@ export type DiscoveryVerificationGateOptions = {
 export function createDiscoveryVerificationOwnerGate(
   options: DiscoveryVerificationGateOptions,
 ): DiscoveryVerificationOwnerGate {
-  const { runOnOwner, generation, permits, admissions } = options;
+  const { runOnOwner, generation, permits, admissions, beforeAdmitCommit } = options;
 
   async function authorizeStep(
     client: PoolClient,
@@ -189,12 +191,30 @@ export function createDiscoveryVerificationOwnerGate(
     return { run, task, step };
   }
 
+  /** Final authority recheck after producer SQL and before owner COMMIT. */
+  async function reauthorizeAfterSql(
+    client: PoolClient,
+    identity: RequestIdentity,
+    mode: 'lookup' | 'admit' | 'recover',
+    accountId: string,
+  ) {
+    await beforeAdmitCommit?.();
+    const authorized = await authorizeStep(client, identity, mode);
+    if ('kind' in authorized) return authorized;
+    const scope = requireTrustedScope(authorized.run, authorized.task, accountId);
+    if (scope) return { kind: 'denied' as const, code: scope };
+    return authorized;
+  }
+
   return {
     async lookup(input, sql) {
       return runOnOwner(async client => {
         const authorized = await authorizeStep(client, input, 'lookup');
         if ('kind' in authorized) return authorized;
-        return sql(client, input);
+        const value = await sql(client, input);
+        const again = await reauthorizeAfterSql(client, input, 'lookup', input.accountId);
+        if ('kind' in again) return again;
+        return value;
       });
     },
 
@@ -244,7 +264,10 @@ export function createDiscoveryVerificationOwnerGate(
           subjectHash: prepared.subjectHash,
           subjectBytes: prepared.subjectBytes,
         };
-        return sql(client, original);
+        const value = await sql(client, original);
+        const again = await reauthorizeAfterSql(client, input, 'admit', prepared.accountId);
+        if ('kind' in again) return again;
+        return value;
       });
     },
 
@@ -272,7 +295,10 @@ export function createDiscoveryVerificationOwnerGate(
           subjectHash: row.subject_hash, subjectBytes: row.subject_bytes, jobId: row.job_id,
           requestHash: row.request_hash,
         };
-        return sql(client, binding);
+        const value = await sql(client, binding);
+        const again = await reauthorizeAfterSql(client, input, 'recover', row.account_id);
+        if ('kind' in again) return again;
+        return value;
       });
     },
   };
@@ -289,10 +315,17 @@ export async function bindReadVerificationJob(
     dispatch_id: string; admitted_generation: string; admitted_task_revision: string;
     proposal_id: string; proposal_revision: string; assessment_revision: string;
     subject_hash: string; subject_bytes: Buffer; job_id: string; request_hash: string;
-  }>('SELECT * FROM discovery_verification_requests WHERE job_id=$1 AND run_id=$2', [input.jobId, run.id]);
+  }>(`SELECT v.* FROM discovery_verification_requests v
+      JOIN discovery_tool_steps s
+        ON s.run_id = v.run_id AND s.task_id = v.task_id AND s.id = v.request_key
+       AND s.dispatch_id = v.dispatch_id AND s.name = 'requestVerification'
+      WHERE v.job_id = $1 AND v.run_id = $2
+        AND v.proposal_id = $3 AND v.proposal_revision = $4`,
+  [input.jobId, run.id, input.proposalId, input.revision]);
   if (!row || row.task_id !== task.id) return { code: 'DISCOVERY_FORBIDDEN' };
   const scope = requireTrustedScope(run, task, row.account_id);
   if (scope) return { code: scope };
+  if (row.subject_hash.length !== 64 || !row.subject_bytes.length) return { code: 'DISCOVERY_CONFLICT' };
   const { rows: [jobRow] } = await client.query<{
     id: string; state: VerificationJob['state']; summary: unknown;
   }>('SELECT id, state, summary FROM verification_jobs WHERE id=$1', [row.job_id]);

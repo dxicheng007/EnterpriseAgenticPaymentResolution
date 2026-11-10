@@ -13,6 +13,9 @@ export function exceedsModelCeilings(
   tokens: { input: number; output: number },
   limits: ModelTurnV2['limits'],
 ): boolean {
+  if (!Number.isInteger(tokens.input) || !Number.isInteger(tokens.output) || tokens.input < 0 || tokens.output < 0) {
+    return true;
+  }
   return tokens.input > limits.maxInputTokens
     || tokens.output > limits.maxOutputTokens
     || tokens.input > modelLimits.maxInputTokens

@@ -358,7 +358,9 @@ test('requestVerification and readVerification complete through actual superviso
     });
 
     const [readStep] = await run.execute(owner, [{
-      id: 'read-verify', name: 'readVerification', arguments: { jobId: job.jobId },
+      id: 'read-verify', name: 'readVerification', arguments: {
+        proposalId: compiled.proposalId, revision: compiled.revision, jobId: job.jobId,
+      },
     }], 4, task);
     expect(await storedStep(readStep!)).toMatchObject({
       state: 'succeeded',
@@ -433,10 +435,13 @@ test('readVerification rejects foreign job ids', async () => {
   try {
     const run = await createRun('verif-foreign-read', model);
     const task = await delegateConnector(run, owner);
-    await draftCompileDemo(run, owner, task);
+    const compiled = await draftCompileDemo(run, owner, task);
     const [step] = await run.execute(owner, [{
       id: 'read-foreign', name: 'readVerification',
-      arguments: { jobId: '00000000-0000-4000-8000-000000000099' },
+      arguments: {
+        proposalId: compiled.proposalId, revision: compiled.revision,
+        jobId: '00000000-0000-4000-8000-000000000099',
+      },
     }], 3, task);
     expect(await storedStep(step!)).toMatchObject({
       state: 'failed',

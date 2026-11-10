@@ -68,6 +68,11 @@ export type LocalVerificationOptions = {
   registryRoot: string;
   roots: FinancialVerificationRoots;
   expectedMigrations: readonly MigrationIdentity[];
+  /**
+   * Gate J is not accepted. Keep production Discovery verification tools off until
+   * the separately recorded accepted integration step; tests inject deps directly.
+   */
+  mountDiscoveryVerificationTools?: boolean;
 };
 
 export async function composeVerification(
@@ -100,7 +105,9 @@ export async function composeVerification(
     },
   });
   // Discovery verification tools require control009 mapping; reviewer jobs only need registry (>=6).
-  const discoveryVerification = (migration.migrationVersion ?? 0) >= 9 ?
+  // Remain off by default until Gate J acceptance (finding 9); opt-in is test/explicit only.
+  const discoveryVerification = options.mountDiscoveryVerificationTools === true &&
+    (migration.migrationVersion ?? 0) >= 9 ?
     financial.discoveryVerification : undefined;
   return { registry, plugin, discoveryVerification };
 }
