@@ -56,13 +56,15 @@
 
 ### Task 3: Supervisor, CLI and operator setup
 
-**Files:** Modify `scripts/dev.ts`, only inject branch of `scripts/verify-slice.ts`, `tests/integration/demo-company-a-transport.test.ts` for mounted/process proof, and implementation-status/invocation text only in `docs/demo/demo-contract.md`. Create `scripts/demo-inject.ts`, `tests/integration/demo-inject-cli.test.ts`, `docs/demo/company-a-sync-setup.md`.
+**Files:** Modify `scripts/dev.ts`, `apps/control/src/composition.ts` (optional demo configuration using its existing source instance), `tests/fixtures/sync-apply.ts` (narrow fixture-only role setup projection), only inject branch of `scripts/verify-slice.ts`, `tests/integration/demo-company-a-transport.test.ts` for mounted/process proof, and implementation-status/invocation text only in `docs/demo/demo-contract.md`. Create `scripts/demo-inject.ts`, `tests/integration/demo-inject-cli.test.ts`, `tests/fixtures/demo-company-a-process.ts`, `docs/demo/company-a-sync-setup.md`.
+
+**Process-proof design:** Follow [grounded process delta](../../progress/2026-11-10/company-a-task3-process-design.md). Reuse actual role mounting and extracted explicit environment builder; fixture paths are injected only through typed test launcher APIs. Worker IPC/config receives only registry/policy paths, not control/protected paths. Single global-fetch guard + positive control in actual worker, accurately labeled bounded HTTP-path evidence (not all-egress). No new dependency or generic launcher/network framework.
 
 **Interfaces:** Existing `npm run demo:inject -- freshPaymentA` delegates to new CLI and the accepted Task 2 endpoints. Explicit supervisor enable/token mounts; token never reaches web/product tools. No package.json change needed.
 
 - [ ] Write failing CLI input/non-2xx/malformed/timeout/uncertainty tests and supervisor isolation/mount proof.
 - [ ] Implement fixed CLI and supervisor composition with explicit child environment allowlists and distinct tokens; validate safe receipt response before printing success.
 - [ ] Document isolated operator setup/retry and honest limitations; preserve frozen identities and money.
-- [ ] Run typecheck, CLI regressions and actual mounted transport/process proof with model credentials absent. Record commands and candidate; self-review and commit for fresh Astra review.
+- [ ] Run typecheck, CLI regressions, existing local-composition regression with absent demo config, affected fixture lifecycle cases and actual mounted transport/process proof with model credentials absent. Record commands and candidate; self-review and commit for fresh Astra review.
 
 T5 gate, T6 additional containment and T8 rehearsal follow only after these accepted interfaces. Root owns shared board/coordination updates and owner communication. Do not claim those tasks complete from prerequisite tests.
