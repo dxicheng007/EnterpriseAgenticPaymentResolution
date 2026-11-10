@@ -476,3 +476,13 @@ Task 1 is complete as an internal fixed service, not a mounted operator path. Re
 Source `0c3bcafe27a38d43c54c9e209c33b9d3a3d971c4` passes fresh Astra spec/quality/security and scoped verification, no findings. Independent3 app unit cases and all3 real HTTP/PG cases pass in the separate review checkout; reviewer stopped only its own55442 cluster. [Review](company-a-task2-review.md). Task3 now owns only the plan-listed supervisor/control-composition/CLI/process-proof/setup paths; existing source/capture/apply behavior remains accepted and unchanged.
 
 Periodic fetch found PR58 (`5605513`) independently replacing the same Task1 paths, materially different from accepted98bcc46. [Reconciliation request](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/58#issuecomment-6777775735) asks its owner to avoid merging competing source over the accepted service and preserve dependent transports. PR59 Experience controls (`f04bb07`) receives separate read-only Astra inspection; no UI paths are taken. Main remains49245de.
+
+## Experience PR59 source gate
+
+Fresh independent Astra inspection of `f04bb07819fb1e0e35be4fc2de6c2cab09d263c9` requests changes: dedicated authority GET, immutable unresolved command retry, terminal409 refresh/new deliberate attempt, and nondecreasing same-identity epochs. No machine/browser rerun occurred. [Source review](experience-pr59-source-review.md); [concrete owner request](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/59#issuecomment-6777833710). Existing T3 public proof, T4 unmeasured posture/shared-lane and observation work remain separate. PR59 is not integrated or accepted by Platform.
+
+## Supervisor/CLI and bounded recovery accepted
+
+Exact `158ce0695a3ecd498cfac64fcf745ec3d261b2f4` passes fresh Astra specification/quality/security review, with independent3 mounted process/security and12 CLI cases. [Review](company-a-task3-review.md). Normal startup now optionally mounts the fixed operator command with separate capability; real role launcher/env construction is used by isolated process proof. Tests show pre-apply capture survives interruption, fresh apply80000→50000, cutover80000, and original receipt after further process reconstruction. Runtime claim is bounded inspected worker global-fetch path, not all-egress. Original demo remains untouched.
+
+T1/T2 fixed path and minimum T6 proof are delivered at those exact candidates. Task4 is released for separate `demo-company-a-ai-off` evidence gate, preserving original full V5/V6 unavailable semantics. No browser/T8/joint acceptance follows from process tests.

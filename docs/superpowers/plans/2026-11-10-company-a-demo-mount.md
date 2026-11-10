@@ -68,3 +68,18 @@
 - [ ] Run typecheck, CLI regressions, existing local-composition regression with absent demo config, affected fixture lifecycle cases and actual mounted transport/process proof with model credentials absent. Record commands and candidate; self-review and commit for fresh Astra review.
 
 T5 gate, T6 additional containment and T8 rehearsal follow only after these accepted interfaces. Root owns shared board/coordination updates and owner communication. Do not claim those tasks complete from prerequisite tests.
+
+
+### Task 4: T5 bounded Company A evidence gate
+
+**Release:** Only after Task3 exact-candidate acceptance. Read [gate design](../../progress/2026-11-10/company-a-gate-design.md), including release refinement and bounded HTTP-path limitation.
+
+**Files:** Create `scripts/verify-demo-company-a.ts`, `scripts/verify-demo-company-a-evidence.ts`, `tests/integration/verify-demo-company-a-evidence.test.ts`. Modify `scripts/verify-slice.ts` new selector/usage branch only, `tests/integration/demo-company-a-transport.test.ts` strict public observation emission only, `scripts/AGENTS.md`, `tests/AGENTS.md`. Root owns board/coordination. No existing full V5/V6 logic changes.
+
+**Interfaces:** `npm run verify:slice -- demo-company-a-ai-off` runs exact accepted transport6/CLI12/app-unit3 cases and typecheck, validates run-bound public observation, emits an allowlisted evidence packet under its own gate directory. New runner may accept existing sourceIdentity result from verify-slice. Reuse normalizeReport/commandResult and bounded regular-file readers. Names/types of new parser functions are routine implementation choices; do not create a general framework. Independent review/joint acceptance remain pending in machine output, fullV5 not-established.
+
+- [ ] Pin exact actual test names/file sets. Add parser/outcome RED cases for missing/duplicate/skipped/failed/malformed commands; absent/stale/oversized/symlink/extra-secret-field observation; wrong scenario/scope/receipt/cents/time/version; replay-only or initial receipt substitution; missing runtime protection; and fullV5 remaining failed despite bounded success.
+- [ ] Add narrowly projected observation to existing mounted process test only after assertions and owned cleanup succeed; never serialize full source/proof/env/receipt objects.
+- [ ] Implement new selector runner, explicit bounded manifest/diagnostics and privacy cleanup. Reject trailing arguments; missing metadata/cleanup/proof fails closed. Preserve source identity provenance and exact contract hashes/tool/migration metadata.
+- [ ] Run typecheck, parser regressions, and actual new bounded invocation. Only bounded gate may pass; fullV5/V6/live/browser/joint remain separate. Retain exact packet/log/source paths.
+- [ ] Self-review and commit candidate for fresh Astra review; no unassigned product/UI changes.

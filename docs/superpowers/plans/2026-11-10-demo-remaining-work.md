@@ -78,7 +78,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T2 — Platform: post-activation injection + capture path for the demo event
 
-**Status:** Task 1 candidate `98bcc46` (base `f860564`) passes typecheck, 698 unit tests, 12 exact Company A integrations and 10 fixture/mount compatibility cases; independent review passes with independent5 unit/2 integration reruns. Task 2 private HTTP candidate `0c3bcaf` passes typecheck,701 units and3 real HTTP/PG integrations; fresh Astra spec/quality/security and scoped verification passes (independent3 units/3 integrations). Task 3 supervisor/CLI/process proof is released; not yet mounted through normal startup. Exact Company A event is frozen by T0; fixed operator HTTP transport and owned paths are specified by the bounded plan; transport implementation waits for Task 1 acceptance. No implementation acceptance yet.
+**Status:** Task 1 candidate `98bcc46` (base `f860564`) passes typecheck, 698 unit tests, 12 exact Company A integrations and 10 fixture/mount compatibility cases; independent review passes with independent5 unit/2 integration reruns. Task 2 private HTTP candidate `0c3bcaf` passes typecheck,701 units and3 real HTTP/PG integrations; fresh Astra spec/quality/security and scoped verification passes (independent3 units/3 integrations). Task 3 source `158ce06` mounts normal startup/CLI and passes fresh Astra review with independent3 process/security +12 CLI checks. T2 bounded path complete; full V5/V6/browser/joint remain separate. Exact Company A event is frozen by T0; fixed operator HTTP transport and owned paths are specified by the bounded plan; transport implementation waits for Task 1 acceptance. No implementation acceptance yet.
 **Lane:** Platform (sources/worker composition as reserved)  
 **Depends on:** T1 or a jointly agreed temporary harness seam owned by Integrator  
 **Outcome:** A controlled way to introduce one new Company A API (and optionally later Company B) event after activation and durably capture it into the inbox the applier consumes.  
@@ -106,7 +106,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T5 — Integrator: make V5 machine gate prove ongoing application
 
-**Status:** not started
+**Status:** design complete; Task 4 released for separate `demo-company-a-ai-off` bounded gate over accepted mounted proof. Original full V5 remains fail-closed and unchanged.
 **Lane:** Integrator  
 **Depends on:** T1 + T2 minimum proofs  
 **Outcome:** `verify:slice -- V5` cannot pass on capture/authority/health alone; mandatory observations include fresh conforming apply, updated money, preserved cutover, and receipt.  
@@ -115,7 +115,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T6 — Platform: minimum containment for the demo path
 
-**Status:** partial — accepted P1 storage/writer/race cases provide backend evidence; the chosen mounted demo still needs its own replay/crash/out-of-scope observations. Broader cross-stream and dependency-release proofs remain follow-on.
+**Status:** bounded minimum proof accepted at `158ce06` with Task2/3 reviews: exact receipt replay, response loss, durable capture before apply and worker-process reconstruction, foreign input held without money. Full crash/race/drift matrix remains separate. Broader cross-stream and dependency-release proofs remain follow-on.
 **Lane:** Platform  
 **Depends on:** T1  
 **Outcome:** Enough V6 behavior that the demo (and gate) can show: exact delivery replay is harmless; crash/retry around apply does not double-count; unknown/out-of-scope input does not corrupt enrolled money.  
