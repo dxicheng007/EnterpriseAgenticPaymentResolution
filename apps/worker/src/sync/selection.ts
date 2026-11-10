@@ -1,21 +1,22 @@
 import { MappingError, validateSourcePayload } from '@eapr/compiler/operations';
 import {
-  classifyBatch, type BatchClassificationV1, type BatchStopReason, type EventRef, type TypedPrerequisite,
+  classifyBatch, type BatchClassificationV1, type BatchStopReason, type ClassificationBinding, type EventRef,
+  type InputClassification, type MappedIdentity, type TypedPrerequisite,
 } from '@eapr/compiler/plan-batch';
 import {
-  canonicalJson, type CaptureIncidentSummaryV1, type CaptureLaneV1, type ChangePage,
+  MutationPlanSchema, canonicalJson, hashCanonical, hashPlan, hashTargetSnapshot, targetRecordId, type CaptureIncidentSummaryV1, type CaptureLaneV1, type ChangePage,
   type CommittedAuthorityIdentityV1, type CurrentAuthorityV1, type Cursor, type EconomicIdentity, type Hash,
-  type Hold, type Id, type IsoInstant, type RawIdentity, type RawSourceEvent, type Scope, type SourceContract,
+  type Hold, type Id, type IsoInstant, type MutationPlan, type RawIdentity, type RawSourceEvent, type Scope, type SourceContract,
 } from '@eapr/contracts';
-import type { FinancialRecord } from '@eapr/finance/validate';
+import { financialRecords, type FinancialRecord } from '@eapr/finance/validate';
 import type { StoredActivation } from '@eapr/parent/activation-store';
 import type { StoredTarget } from '@eapr/parent/snapshots';
 import {
-  syncEventRef, type CoverageCut, type ReceiptOrigin, type SyncEventOutcome, type SyncUnitAudit,
+  ReceiptOriginSchema, syncEventRef, type CoverageCut, type ReceiptOrigin, type SyncEventOutcome, type SyncUnitAudit,
 } from '@eapr/parent/sync-store';
 import { selectedProfile } from '../activation-validation.js';
 import type { readCaptureLane } from './capture-store.js';
-import { compareInbox } from './dependencies.js';
+import { compareInbox, DependencyError, dependencyOrder, MAX_INBOX_EVENTS } from './dependencies.js';
 
 export type ContractBinding = {
   sourceRef: Id; companyId: Id; streamId: Id; resource: Id; sourceContractHash: Hash;
@@ -394,4 +395,443 @@ export function routeSelectionCut(cut: SelectionCut): {
   const incompleteReason = limited ? 'limit' : routes.some(route => route.disposition === 'unknown_source_binding')
     ? 'unknown_source_binding' : guard.incompleteReason;
   return { routes, guard, blockers, classifications, incompleteReason };
+}
+
+export type DependencyWitness = {
+  consumer: EventRef; prerequisite: TypedPrerequisite;
+  resolution: { kind: 'target'; record: FinancialRecord; origin: ReceiptOrigin } |
+    { kind: 'candidate'; providers: { event: EventRef; group: EventRef[] }[] } |
+    { kind: 'missing'; mappedIndexHash: Hash };
+};
+export type ProposedGroup = {
+  identity: CommittedAuthorityIdentityV1; observedEpoch: number;
+  targetVersion: number; targetSnapshotHash: Hash; seed: EventRef;
+  members: EventRef[]; orderedMembers: EventRef[];
+  classifierBinding: ClassificationBinding; dependencies: DependencyWitness[];
+  plan: MutationPlan | null; replayOrigins: ReceiptOrigin[]; witnessHash: Hash;
+};
+
+type GroupSelection = {
+  proposal: Omit<ProposedGroup, 'witnessHash'> | null; blockers: SelectionBlocker[];
+  full: BatchClassificationV1 | null; selected: BatchClassificationV1 | null; dependencies: DependencyWitness[];
+};
+type Classified = Extract<BatchClassificationV1['details'], { kind: 'classified' }>;
+type MappedItem = InputClassification & { event: EventRef; mapped: MappedIdentity; groupIndex: number };
+type TypedKey = Pick<MappedIdentity, 'scope' | 'identity' | 'targetRecordId'>;
+
+class SelectionStorageError extends Error {
+  readonly code = 'SELECTION_STORAGE_INVALID';
+
+  constructor() {
+    super('Selection storage or classification is inconsistent');
+    this.name = 'SelectionStorageError';
+  }
+}
+
+function consistent(condition: unknown): asserts condition {
+  if (!condition) throw new SelectionStorageError();
+}
+
+const equal = (left: unknown, right: unknown) => canonicalJson(left) === canonicalJson(right);
+const sameIndexes = (left: readonly number[], right: readonly number[]) =>
+  equal([...left].sort((a, b) => a - b), [...right].sort((a, b) => a - b));
+const typedKey = ({ scope, identity, targetRecordId }: TypedKey) => canonicalJson([scope, identity, targetRecordId]);
+const globalKey = ({ identity, targetRecordId }: Omit<TypedKey, 'scope'>) => canonicalJson([identity, targetRecordId]);
+const recordKey = (record: FinancialRecord) => typedKey({ ...record, targetRecordId: record.id });
+
+function originalReceipts(subject: SelectionSubject) {
+  const origins = new Map<Id, ReceiptOrigin>();
+  for (const origin of subject.origins) {
+    consistent(!origins.has(origin.recordId));
+    origins.set(origin.recordId, origin);
+  }
+  const approved = new Map(financialRecords(subject.stored.approvedTarget.records).map(record => [record.id, record]));
+  const checked = new Set<Id>();
+  return (record: FinancialRecord): ReceiptOrigin => {
+    const origin = origins.get(record.id);
+    consistent(origin);
+    if (checked.has(record.id)) return origin;
+    const { receipt } = origin;
+    consistent(ReceiptOriginSchema.safeParse(origin).success && equal(receipt.scope, record.scope) &&
+      receipt.activationId === subject.identity.activationId && receipt.artifactHash === subject.stored.activation.artifactHash &&
+      receipt.eventIds.includes(record.sourceEventId));
+    if (origin.kind === 'initial') {
+      const prior = approved.get(record.id);
+      consistent(prior && equal(prior, record) && origin.importKey === subject.stored.request.idempotencyKey &&
+        equal(receipt, subject.stored.receipt));
+    }
+    checked.add(record.id);
+    return origin;
+  };
+}
+
+function subjectInputs(
+  cut: SelectionCut, subject: SelectionSubject, routed: ReturnType<typeof routeSelectionCut>,
+  originFor: ReturnType<typeof originalReceipts>,
+) {
+  const subjectKey = identityKey(subject.identity);
+  const routes = new Map(routed.routes.map(route => [canonicalJson(route.event), route]));
+  const outcomes = new Map(subject.outcomes.map(outcome => [canonicalJson(outcome.event), outcome]));
+  const units = new Map(subject.units.map(unit => [unit.unitHash, unit]));
+  const records = new Map(financialRecords(subject.target.records).map(record => [record.id, record]));
+  consistent(outcomes.size === subject.outcomes.length && units.size === subject.units.length);
+  const own = new Set<string>();
+  const inputs = cut.deliveries.flatMap(({ event }) => {
+    const ref = syncEventRef(event);
+    const key = canonicalJson(ref);
+    const route = routes.get(key);
+    consistent(route);
+    const applicability = route.applicability.find(row => identityKey(row.identity) === subjectKey);
+    if (!applicability?.applicable) return [];
+    const belongs = route.disposition === 'known' && route.identities.length === 1 && identityKey(route.identities[0]!) === subjectKey;
+    if (belongs) own.add(key);
+    if (event.kind === 'semantic_change') return [event];
+    if (!belongs) return [];
+    const outcome = outcomes.get(key);
+    if (!outcome) return [event];
+    const unit = units.get(outcome.unitHash);
+    const record = records.get(outcome.recordId);
+    consistent(unit && record && equal(outcome.identity, subject.identity) && equal(unit.identity, subject.identity) &&
+      equal(outcome.lane, applicability.lane) && equal(unit.lane, applicability.lane) &&
+      unit.members.some(member => equal(member.event, ref) && member.recordId === outcome.recordId &&
+        member.disposition === outcome.disposition && equal(member.origin, outcome.origin)) &&
+      equal(originFor(record), outcome.origin));
+    return [];
+  });
+  inputs.sort((left, right) => compareEventRefs(syncEventRef(left), syncEventRef(right)));
+  return { inputs, own };
+}
+
+function classifierIndex(
+  { details, outcome }: BatchClassificationV1 & { details: Classified },
+  inputs: RawSourceEvent[], binding: ClassificationBinding,
+) {
+  const { items, groups } = details;
+  consistent(equal(details.binding, binding) && items.length === inputs.length && details.sourceBlockers.length === 0);
+  const seen = new Set<number>();
+  for (const [groupIndex, group] of groups.entries()) {
+    consistent(group.inputIndexes.length && (group.disposition === 'held') === (group.holdIndexes.length > 0));
+    for (const inputIndex of group.inputIndexes) {
+      const item = items[inputIndex];
+      consistent(item && !seen.has(inputIndex) && 'groupIndex' in item && item.groupIndex === groupIndex && item.mapped &&
+        (item.disposition === 'held') === (group.disposition === 'held'));
+      if (item.disposition === 'held') consistent(equal(item.holdIndexes, group.holdIndexes));
+      seen.add(inputIndex);
+    }
+  }
+  const holdIndexes = new Set<number>();
+  const primaryIndexes = new Map<string, number>();
+  const representatives = new Map<string, MappedItem[]>();
+  const mapped: MappedItem[] = [];
+  for (const [index, item] of items.entries()) {
+    const input = inputs[index]!;
+    consistent(item.inputIndex === index && item.event && equal(item.event, syncEventRef(input)));
+    const delivery = canonicalJson(item.event);
+    const primaryIndex = primaryIndexes.get(delivery);
+    if (item.disposition === 'delivery_repeat') {
+      consistent(primaryIndex !== undefined && item.primaryInputIndex === primaryIndex);
+      continue;
+    }
+    consistent(primaryIndex === undefined);
+    primaryIndexes.set(delivery, index);
+    if (item.disposition === 'semantic_observed') {
+      consistent(input.kind === 'semantic_change' && equal(item.scope, binding.scope));
+      continue;
+    }
+    if (item.disposition === 'held') {
+      consistent(item.holdIndexes.length && new Set(item.holdIndexes).size === item.holdIndexes.length &&
+        item.holdIndexes.every(holdIndex => outcome.holds[holdIndex]?.eventIds.includes(input.id)) &&
+        (item.mapped === null) === (item.groupIndex === null));
+      for (const holdIndex of item.holdIndexes) holdIndexes.add(holdIndex);
+    }
+    if (!item.mapped) continue;
+    const { scope, identity, targetRecordId: id } = item.mapped;
+    consistent(seen.has(index) && equal(scope, binding.scope) && input.kind === identity.kind &&
+      input.sourceRef === identity.sourceRef && input.recordId === identity.recordId &&
+      input.rawIdentity.sellerEntityId === identity.sellerEntityId && id === targetRecordId(identity));
+    if (item.disposition === 'financial_coalesced') {
+      const producer = items[item.producerInputIndex];
+      consistent(producer?.disposition === 'financial_new' && producer.groupIndex === item.groupIndex &&
+        typedKey(producer.mapped) === typedKey(item.mapped));
+    }
+    const entry = item as MappedItem;
+    mapped.push(entry);
+    const key = typedKey(entry.mapped);
+    const providers = representatives.get(key) ?? [];
+    providers.push(entry);
+    representatives.set(key, providers);
+  }
+  consistent(holdIndexes.size === outcome.holds.length);
+  return { items, groups, mapped, representatives };
+}
+
+function dependencyIndex(
+  index: ReturnType<typeof classifierIndex>, subject: SelectionSubject, binding: ClassificationBinding,
+  originFor: ReturnType<typeof originalReceipts>,
+) {
+  const target = new Map(financialRecords(subject.target.records).map(record => [recordKey(record), record]));
+  const entries = index.mapped.map(({ inputIndex, event, mapped, groupIndex }) => ({
+    inputIndex, event, scope: mapped.scope, identity: mapped.identity, targetRecordId: mapped.targetRecordId, groupIndex,
+  }));
+  let mappedIndexHash: Hash | undefined;
+  const refs = (indexes: number[]) => indexes.map(inputIndex => index.items[inputIndex]!.event!).sort(compareEventRefs);
+  const groupRefs = index.groups.map(group => refs(group.inputIndexes));
+  const candidateProofs = new Map<string, Extract<DependencyWitness['resolution'], { kind: 'candidate' }>>();
+  const byInput = new Map<number, DependencyWitness[]>();
+  for (const item of index.mapped) {
+    const dependencies = item.mapped.prerequisites.map((prerequisite): DependencyWitness => {
+      consistent(equal(prerequisite.scope, item.mapped.scope) && prerequisite.identity.sourceRef === item.mapped.identity.sourceRef &&
+        prerequisite.identity.sellerEntityId === item.mapped.identity.sellerEntityId &&
+        prerequisite.targetRecordId === targetRecordId(prerequisite.identity));
+      const key = typedKey(prerequisite);
+      const record = target.get(key);
+      const providers = index.representatives.get(key) ?? [];
+      const { presence } = prerequisite;
+      if (presence.kind === 'target') {
+        consistent(record);
+        return { consumer: item.event, prerequisite, resolution: { kind: 'target', record,
+          origin: originFor(record) } };
+      }
+      consistent(!record);
+      if (presence.kind === 'candidate') {
+        consistent(providers.length && sameIndexes(presence.providerInputIndexes, providers.map(provider => provider.inputIndex)));
+        let resolution = candidateProofs.get(key);
+        if (!resolution) {
+          resolution = { kind: 'candidate', providers: providers.map(provider => ({
+            event: provider.event, group: groupRefs[provider.groupIndex]!,
+          })) };
+          candidateProofs.set(key, resolution);
+        }
+        return { consumer: item.event, prerequisite, resolution };
+      }
+      consistent(presence.kind === 'missing' && !providers.length && item.disposition === 'held');
+      mappedIndexHash ??= hashCanonical({ binding, entries });
+      return { consumer: item.event, prerequisite, resolution: { kind: 'missing', mappedIndexHash } };
+    });
+    byInput.set(item.inputIndex, dependencies);
+  }
+  return { target, byInput, refs };
+}
+
+function orderedDependencies(dependencies: DependencyWitness[]): DependencyWitness[] {
+  const byKey = new Map<string, DependencyWitness>();
+  for (const dependency of dependencies) {
+    const key = canonicalJson([dependency.consumer, dependency.prerequisite]);
+    const previous = byKey.get(key);
+    consistent(!previous || equal(previous, dependency));
+    byKey.set(key, dependency);
+  }
+  return [...byKey.values()].sort((left, right) =>
+    compareText(canonicalJson(left.consumer), canonicalJson(right.consumer)) ||
+    compareText(canonicalJson(left.prerequisite), canonicalJson(right.prerequisite)));
+}
+
+function conflictingClaim(
+  claim: GlobalClaim | undefined, item: MappedItem, originFor: ReturnType<typeof originalReceipts>, record?: FinancialRecord,
+) {
+  if (!claim) return false;
+  consistent(equal(claim.scope, claim.record.scope) && equal(claim.identity, claim.record.identity) &&
+    claim.targetRecordId === claim.record.id && claim.origin.recordId === claim.record.id &&
+    ReceiptOriginSchema.safeParse(claim.origin).success && equal(claim.origin.receipt.scope, claim.scope) &&
+    claim.origin.receipt.eventIds.includes(claim.record.sourceEventId));
+  if (!equal(claim.scope, item.mapped.scope)) return true;
+  consistent(record && equal(record, claim.record) && equal(originFor(record), claim.origin));
+  return false;
+}
+
+function selectedPlan(
+  full: BatchClassificationV1, selected: BatchClassificationV1, items: MappedItem[],
+  original: ReadonlyMap<string, MappedItem>, binding: ClassificationBinding, inputs: RawSourceEvent[],
+): MutationPlan | null {
+  const fresh = items.filter(item => item.disposition === 'financial_new');
+  const { plans } = selected.outcome;
+  if (!fresh.length) {
+    consistent(!plans.length && items.length && items.every(item => item.disposition === 'financial_replay'));
+    return null;
+  }
+  const plan = plans[0];
+  consistent(plans.length === 1 && plan && MutationPlanSchema.safeParse(plan).success && plan.hash === hashPlan(plan) &&
+    plan.artifactHash === binding.artifactHash && plan.profileHash === binding.profileHash &&
+    equal(plan.scope, binding.scope) && plan.expectedTargetVersion === binding.expectedTargetVersion && plan.asOf === binding.asOf &&
+    equal(plan.eventIds, items.map(item => item.event.eventId)) && plan.operations.length === fresh.length);
+  const operationIndexes = new Map<number, number>();
+  for (const item of fresh) {
+    const before = original.get(canonicalJson(item.event));
+    const operation = plan.operations[item.operationIndex];
+    consistent(item.planIndex === 0 && operation && !operationIndexes.has(item.operationIndex) &&
+      before?.disposition === 'financial_new');
+    const priorPlan = full.outcome.plans[before.planIndex];
+    const priorOperation = priorPlan?.operations[before.operationIndex];
+    consistent(priorOperation && 'identity' in operation.record && recordKey(operation.record) === typedKey(item.mapped) &&
+      operation.record.sourceEventId === item.event.eventId &&
+      operation.record.sourceRecordVersion === inputs[item.inputIndex]?.recordVersion && equal(operation, priorOperation));
+    const currentLineage = plan.lineage.filter(entry => entry.operationIndex === item.operationIndex);
+    const priorLineage = priorPlan.lineage.filter(entry => entry.operationIndex === before.operationIndex);
+    consistent(currentLineage.length && equal(currentLineage.map(entry => ({ ...entry, operationIndex: before.operationIndex })), priorLineage));
+    operationIndexes.set(item.operationIndex, before.operationIndex);
+  }
+  consistent(plan.operations.every((_, index) => index === 0 || operationIndexes.get(index - 1)! < operationIndexes.get(index)!) &&
+    plan.lineage.every((entry, index) => operationIndexes.has(entry.operationIndex) &&
+      (index === 0 || plan.lineage[index - 1]!.operationIndex <= entry.operationIndex)));
+  return plan;
+}
+
+export function selectSubjectGroup(
+  cut: SelectionCut, identity: CommittedAuthorityIdentityV1, routed: ReturnType<typeof routeSelectionCut>,
+): GroupSelection {
+  const result: GroupSelection = { proposal: null, blockers: [], full: null, selected: null, dependencies: [] };
+  const subjectKey = identityKey(identity);
+  const subject = cut.subjects.find(value => identityKey(value.identity) === subjectKey);
+  consistent(subject);
+  if (routed.incompleteReason || !routed.guard.sourceContractChecksComplete || subject.authority.status !== 'active' ||
+    routed.blockers.some(blocker => blocker.level === 'source' ||
+      blocker.identities.some(value => identityKey(value) === subjectKey))) return result;
+
+  const originFor = originalReceipts(subject);
+  const { inputs, own } = subjectInputs(cut, subject, routed, originFor);
+  const first = inputs.findIndex(event => event.kind !== 'semantic_change');
+  if (first < 0) return result;
+  const { artifact } = subject.stored.bundle;
+  const profile = selectedProfile(subject.stored.bundle);
+  const target = { ...subject.target.records, asOf: cut.input.asOf };
+  const binding: ClassificationBinding = { artifactHash: artifact.hash, profileHash: profile.hash, scope: identity.scope,
+    expectedTargetVersion: target.version, targetSnapshotHash: hashTargetSnapshot(target), asOf: target.asOf };
+  const approvedLimit = Math.min(MAX_INBOX_EVENTS, subject.stored.activation.limits.maxRecordsPerCycle,
+    artifact.normalizedPlan.limits.maxRecordsPerCycle);
+  const seed = syncEventRef(inputs[first]!);
+  const block = (code: BlockerCode, facts: Partial<Omit<SelectionBlocker, 'level' | 'code' | 'identities'>> = {}) => {
+    result.blockers.push(selectionBlocker('subject', code, { identities: [identity], events: [seed], ...facts }));
+  };
+  if (inputs.length > approvedLimit) {
+    block('group_limit', { events: inputs.map(syncEventRef) });
+    return result;
+  }
+
+  const classify = (events: RawSourceEvent[]) => classifyBatch(artifact, profile, events, target);
+  function stopped(batch: BatchClassificationV1, events: RawSourceEvent[]): boolean {
+    if (batch.details.kind !== 'not_classified') return false;
+    const { reason, holdIndexes } = batch.details;
+    const compilerHolds = holdIndexes.map(index => batch.outcome.holds[index]);
+    consistent(compilerHolds.every(hold => hold !== undefined));
+    const ids = new Set(compilerHolds.flatMap(hold => hold.eventIds));
+    block(reason === 'input_limit' ? 'group_limit' : 'classifier_blocked', {
+      classifierStopReason: reason, compilerHolds, events: events.filter(event => ids.has(event.id)).map(syncEventRef),
+    });
+    return true;
+  }
+
+  const full = result.full = classify(inputs);
+  if (stopped(full, inputs) || full.details.kind !== 'classified') return result;
+  const index = classifierIndex({ ...full, details: full.details }, inputs, binding);
+  const evidence = dependencyIndex(index, subject, binding, originFor);
+  const closure = new Set<number>();
+  const groups = new Set<number>();
+  const seedItem = index.items[first]!;
+  if ('groupIndex' in seedItem && seedItem.groupIndex !== null) groups.add(seedItem.groupIndex);
+  else closure.add(first);
+  for (const groupIndex of groups) {
+    for (const inputIndex of index.groups[groupIndex]!.inputIndexes) {
+      closure.add(inputIndex);
+      for (const { prerequisite } of evidence.byInput.get(inputIndex) ?? []) {
+        if (prerequisite.presence.kind !== 'candidate') continue;
+        for (const provider of prerequisite.presence.providerInputIndexes) {
+          const item = index.items[provider] as MappedItem;
+          groups.add(item.groupIndex);
+        }
+      }
+    }
+  }
+  const members = evidence.refs([...closure]);
+  result.dependencies = orderedDependencies([...closure].flatMap(inputIndex => evidence.byInput.get(inputIndex) ?? []));
+  const missing = result.dependencies.filter(edge => edge.resolution.kind === 'missing').map(edge => edge.prerequisite);
+  const held = [...closure].flatMap(inputIndex => {
+    const item = index.items[inputIndex]!;
+    return item.disposition === 'held' ? item.holdIndexes : [];
+  });
+  const compilerHolds = [...new Set(held)].sort((a, b) => a - b).map(holdIndex => full.outcome.holds[holdIndex]!);
+  const deferLater = () => {
+    const events = inputs.flatMap((event, inputIndex) =>
+      event.kind === 'semantic_change' || closure.has(inputIndex) || index.items[inputIndex]?.disposition === 'delivery_repeat'
+        ? [] : [syncEventRef(event)]);
+    if (events.length) block('earlier_hold', { events });
+  };
+  let order: number[];
+  try {
+    order = dependencyOrder([...closure].sort((a, b) => a - b).map(inputIndex => index.items[inputIndex]!));
+  } catch (error) {
+    if (!(error instanceof DependencyError) || error.code !== 'DEPENDENCY_CYCLE') throw error;
+    block('dependency_cycle', { events: members, compilerHolds });
+    deferLater();
+    return result;
+  }
+  const groupItems = index.mapped.filter(item => closure.has(item.inputIndex));
+  const claims = new Map<string, GlobalClaim>();
+  for (const claim of cut.globalClaims) {
+    const key = globalKey(claim);
+    consistent(!claims.has(key));
+    claims.set(key, claim);
+  }
+  const conflicts = groupItems.filter(item => conflictingClaim(
+    claims.get(globalKey(item.mapped)), item, originFor, evidence.target.get(typedKey(item.mapped)),
+  ));
+  if (conflicts.length) block('global_economic_conflict', { events: conflicts.map(item => item.event) });
+  if (compilerHolds.length) block(missing.length ? 'dependency_missing' : 'dependency_invalid', {
+    events: members, missing, compilerHolds,
+  });
+  if (result.blockers.length) {
+    deferLater();
+    return result;
+  }
+
+  const selectedInputs = inputs.filter((event, inputIndex) => {
+    const item = index.items[inputIndex]!;
+    return event.kind === 'semantic_change' || closure.has(inputIndex) ||
+      item.disposition === 'delivery_repeat' && closure.has(item.primaryInputIndex);
+  });
+  const selected = result.selected = classify(selectedInputs);
+  if (stopped(selected, selectedInputs) || selected.details.kind !== 'classified') return result;
+  const final = classifierIndex({ ...selected, details: selected.details }, selectedInputs, binding);
+  const finalEvidence = dependencyIndex(final, subject, binding, originFor);
+  const affectingHolds = final.items.flatMap(item =>
+    item.disposition === 'held' && own.has(canonicalJson(item.event)) ? item.holdIndexes : []);
+  if (affectingHolds.length) {
+    block('dependency_invalid', { events: members,
+      compilerHolds: [...new Set(affectingHolds)].sort((a, b) => a - b).map(index => selected.outcome.holds[index]!) });
+    deferLater();
+    return result;
+  }
+  consistent(final.groups.length === 1 && final.groups[0]!.disposition === 'accepted' &&
+    equal(final.mapped.map(item => item.event), members) && order.length === members.length);
+  // Compare compiler evidence across the two invocations using stable event refs, not invocation indexes.
+  const original = new Map(groupItems.map(item => [canonicalJson(item.event), item]));
+  const edges = (source: DependencyWitness[]) => source.map(({ prerequisite: { presence, ...key }, resolution }) => ({
+    key, presence: presence.kind,
+    resolution: resolution.kind === 'candidate' ? resolution.providers.map(provider => provider.event) : resolution,
+  }));
+  const replayOrigins = new Map<Id, ReceiptOrigin>();
+  for (const item of final.mapped) {
+    const before = original.get(canonicalJson(item.event));
+    consistent(before && typedKey(before.mapped) === typedKey(item.mapped) && before.disposition === item.disposition);
+    consistent(equal(edges(evidence.byInput.get(before.inputIndex)!), edges(finalEvidence.byInput.get(item.inputIndex)!)));
+    if (item.disposition === 'financial_replay') {
+      const record = evidence.target.get(typedKey(item.mapped));
+      consistent(record && equal(item.existing, {
+        identity: record.identity, targetRecordId: record.id, sourceEventId: record.sourceEventId,
+        sourceRecordVersion: record.sourceRecordVersion,
+      }));
+      replayOrigins.set(record.id, originFor(record));
+    }
+    if (item.disposition === 'financial_coalesced') {
+      consistent(before.disposition === 'financial_coalesced' &&
+        equal(index.items[before.producerInputIndex]?.event, final.items[item.producerInputIndex]?.event));
+    }
+  }
+  result.proposal = {
+    identity, observedEpoch: subject.authority.epoch, targetVersion: target.version, targetSnapshotHash: subject.target.snapshotHash,
+    seed, members, orderedMembers: order.map(inputIndex => index.items[inputIndex]!.event!),
+    classifierBinding: selected.details.binding, dependencies: result.dependencies,
+    plan: selectedPlan(full, selected, final.mapped, original, binding, selectedInputs),
+    replayOrigins: [...replayOrigins.values()].sort((a, b) => compareText(a.recordId, b.recordId) || compareText(a.receipt.id, b.receipt.id)),
+  };
+  return result;
 }
