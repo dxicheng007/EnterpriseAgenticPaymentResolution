@@ -10,6 +10,7 @@ The stack is Node 24, strict TypeScript with npm workspaces, Fastify, React/Vite
 
 ## Read before changing behavior
 
+- [Demo MVP path](docs/progress/2026-11-10/demo-mvp-path.md) — critical path to a runnable fixture/AI-off Company A demo (hardcoded connector, simulated inject; live construction deferred).
 - [Demo remaining work](docs/superpowers/plans/2026-11-10-demo-remaining-work.md) — active demo track and shared high-level task board; update it when dispatching or completing remaining work.
 - [Demo contract](docs/demo/demo-contract.md) — frozen T0 identities, construction modes, staged walkthrough, and pass/fail observations for the pregenerated-connector + AI-off sync track.
 - [PRD v2 product thesis](prdv2.md#1-product-thesis), [local process boundaries](prdv2.md#local-process-boundaries), and [acceptance criteria](prdv2.md#19-acceptance-criteria).

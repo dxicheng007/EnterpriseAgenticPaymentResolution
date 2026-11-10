@@ -71,4 +71,6 @@ Observed demo-contract beats on each pass: Health ready; Sources `legacy-a`; Dis
 
 ## Status boundary
 
-Experience-owned T3/T4 authority findings, focused browser proofs, independent source review PASS, and three timed Company A rehearsals are recorded for candidate `bac37fa`. Full V3/V5/V6 gates, live construction, Company B, joint user acceptance, and Platform integration onto current main remain separate and are **not** claimed here.
+Experience-owned T3/T4 authority findings, focused browser proofs, independent source review PASS, and three timed Company A rehearsals are recorded for candidate `bac37fa` and merged to `codex/platform-company-a-demo-mount` @ `a945586` (PR64). Full V3/V5/V6 gates, live construction, Company B, joint user acceptance, and landing on `main` remain separate and are **not** claimed here.
+
+**Next path:** [demo-mvp-path.md](demo-mvp-path.md) — integrate tip to `main`, disposable staging, on-stage fixture/AI-off script with simulated inject, joint user acceptance.
