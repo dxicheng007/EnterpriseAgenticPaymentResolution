@@ -1,7 +1,7 @@
 /**
  * V5 AI-off browser harness: worker and control run with model credentials
- * absent and modelMode disabled. Full post-activation apply / Connections UI
- * and joint G5 remain pending; this proves model-free readiness surfaces.
+ * absent and modelMode disabled. Browser provider requests are observed, but
+ * runtime model-call counts are not instrumented or measured by this case.
  */
 import { expect, test } from '@playwright/test';
 import { createServer } from 'vite';
@@ -13,7 +13,7 @@ import {
 
 test.use({ trace: 'off' });
 
-test('AI-off worker stays ready without model credentials or provider attempts', async ({ page, browser }) => {
+test('configured AI-off services stay ready with no browser-observed provider attempts', async ({ page, browser }) => {
   for (const name of modelCredentialEnvNames) process.env[name] = 'browser-must-scrub';
   scrubModelCredentials();
   assertModelCredentialsAbsent();
