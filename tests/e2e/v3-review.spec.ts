@@ -175,3 +175,63 @@ test('binds one-customer approval, reuses the saved key, gates stale packages, a
     await close();
   }
 });
+
+async function prepareAccountWithoutApproveCheck(page: Page, origin: string, accountId: string) {
+  await page.getByLabel('Registered account').selectOption(accountId);
+  const wait = apiResponse(page, '/api/review/' + accountId + '/prepare', 'POST');
+  await page.getByRole('button', { name: 'Prepare review package' }).click();
+  const response = await wait;
+  expect(response.status()).toBe(200);
+  await expectBrowserMutation(response, origin);
+  return ReviewPackageSchema.parse(await response.json());
+}
+
+test('retries a failed details read and offers earlier unresolved approvals only as an explicit action', async ({ page }) => {
+  const harness = await openLocalReview({ activation: true });
+  const { origin, close, accounts } = harness;
+  if (!accounts) throw new Error('Activation review harness did not expose accounts');
+  const { b: accountB } = accounts();
+  const activations: string[] = [];
+  page.on('request', request => {
+    if (request.method() === 'POST' && request.url().includes('/activate')) activations.push(request.url());
+  });
+
+  try {
+    await startReview(page, origin, 'review');
+    let failures = 1;
+    await page.route('**/api/review/*/packages/*/details', route => {
+      if (failures-- > 0) return route.fulfill({ status: 503, contentType: 'application/json',
+        body: JSON.stringify({ code: 'DEPENDENCY_UNAVAILABLE', message: 'Details temporarily unavailable', diagnostics: [] }) });
+      return route.continue();
+    });
+    const prepared = await prepareAccountWithoutApproveCheck(page, origin, accountB);
+    await expect(page.getByRole('button', { name: 'Retry decision details' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Approve this customer only' })).toBeDisabled();
+    await page.getByRole('button', { name: 'Retry decision details' }).click();
+    await expect(page.getByRole('region', { name: 'Decision details' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Approve this customer only' })).toBeEnabled();
+    await expect(page.getByText('Automatic sync stops').first()).toBeVisible();
+
+    const earlier = ActivationRequestSchema.parse({
+      reviewPackageId: 'earlier-' + prepared.id, expectedPackageHash: 'f'.repeat(64),
+      expectedArtifactHash: prepared.artifactHash, expectedProfileHash: prepared.profileHash,
+      expectedTargetVersion: prepared.expectedTargetVersion, idempotencyKey: 'earlier-key-' + accountB,
+    });
+    await page.evaluate(({ accountId, request }) => {
+      sessionStorage.setItem('eapr-review-approval:' + accountId, JSON.stringify([request]));
+    }, { accountId: accountB, request: earlier });
+    await page.getByLabel('Registered account').selectOption('');
+    await page.getByLabel('Registered account').selectOption(accountB);
+    const panel = page.getByRole('region', { name: 'Unresolved earlier approvals' });
+    await expect(panel).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Approve this customer only' })).toBeEnabled();
+    expect(activations).toEqual([]);
+
+    const original = apiResponse(page, '/api/review/' + accountB + '/activate', 'POST');
+    await panel.getByRole('button', { name: /Retry original approval/ }).click();
+    expect((await original).request().postDataJSON()).toEqual(earlier);
+    expect(activations).toHaveLength(1);
+  } finally {
+    await close();
+  }
+});
