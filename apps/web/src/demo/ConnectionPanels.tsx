@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { formatUsdCents } from '../features/preview/preview-values.js';
 import { DemoWorking } from './DemoWorking.js';
 import {
@@ -15,7 +15,11 @@ import { formatDisplayDate } from './staged-company-a.js';
 
 function useBeat(accountId: string) {
   const [beat, setBeat] = useState(() => getConnectionBeat(accountId));
-  useEffect(() => onConnectionBeatChange(() => setBeat(getConnectionBeat(accountId))), [accountId]);
+  useEffect(() => {
+    // Re-read when the selected account changes; listeners alone only fire on writes.
+    setBeat(getConnectionBeat(accountId));
+    return onConnectionBeatChange(() => setBeat(getConnectionBeat(accountId)));
+  }, [accountId]);
   return beat;
 }
 
@@ -303,8 +307,15 @@ export function ConnectionAuthorizePanel({ allowedAccountIds }: { allowedAccount
   </section>;
 }
 
-export function ConnectionParentPanel({ allowedAccountIds }: { allowedAccountIds?: readonly string[] }) {
-  const [accountId, setAccountId] = useState('');
+export function ConnectionParentPanel({
+  allowedAccountIds,
+  accountId,
+  onAccountIdChange,
+}: {
+  allowedAccountIds?: readonly string[];
+  accountId: string;
+  onAccountIdChange: (id: string) => void;
+}) {
   const company = accountId ? companyFromAccount(accountId) : undefined;
   const beat = useBeat(accountId || 'none');
   const [asOf, setAsOf] = useState('');
@@ -329,7 +340,7 @@ export function ConnectionParentPanel({ allowedAccountIds }: { allowedAccountIds
       <h2>Parent records</h2>
       <p>Read stored balances and imported records for an authorized customer.</p>
     </header>
-    <AccountPicker value={accountId} onChange={setAccountId} allowedAccountIds={allowedAccountIds} />
+    <AccountPicker value={accountId} onChange={onAccountIdChange} allowedAccountIds={allowedAccountIds} />
     {!company && <p>Select an account to inspect parent books.</p>}
     {company && <>
       <label className="review-selection">Balance date
@@ -374,12 +385,21 @@ export function ConnectionParentPanel({ allowedAccountIds }: { allowedAccountIds
   </section>;
 }
 
-export function ConnectionOperationsPanel({ allowedAccountIds }: { allowedAccountIds?: readonly string[] }) {
-  const [accountId, setAccountId] = useState('');
+export function ConnectionOperationsPanel({
+  allowedAccountIds,
+  accountId,
+  onAccountIdChange,
+}: {
+  allowedAccountIds?: readonly string[];
+  accountId: string;
+  onAccountIdChange: (id: string) => void;
+}) {
   const company = accountId ? companyFromAccount(accountId) : undefined;
   const beat = useBeat(accountId || 'none');
   const [phase, setPhase] = useState<'idle' | 'working' | 'done'>('idle');
   const [action, setAction] = useState<'refresh' | 'inject' | 'replay'>('refresh');
+  const actionRef = useRef(action);
+  actionRef.current = action;
 
   useEffect(() => { setPhase('idle'); }, [accountId]);
 
@@ -389,10 +409,11 @@ export function ConnectionOperationsPanel({ allowedAccountIds }: { allowedAccoun
 
   const finish = useCallback(() => {
     if (!accountId) return;
-    if (action === 'inject') setConnectionBeat(accountId, 'synced');
-    else if (action === 'replay') setConnectionBeat(accountId, 'replayed');
+    const completed = actionRef.current;
+    if (completed === 'inject') setConnectionBeat(accountId, 'synced');
+    else if (completed === 'replay') setConnectionBeat(accountId, 'replayed');
     setPhase('done');
-  }, [accountId, action]);
+  }, [accountId]);
 
   function start(next: 'refresh' | 'inject' | 'replay') {
     setAction(next);
@@ -405,7 +426,7 @@ export function ConnectionOperationsPanel({ allowedAccountIds }: { allowedAccoun
       <h2>Connection operations</h2>
       <p>Apply new source activity after go-live, or safely replay the last sync.</p>
     </header>
-    <AccountPicker value={accountId} onChange={setAccountId} allowedAccountIds={allowedAccountIds} />
+    <AccountPicker value={accountId} onChange={onAccountIdChange} allowedAccountIds={allowedAccountIds} />
     {!company && <p>Select an account to manage its connection.</p>}
     {company && <>
       {phase === 'working' ? (
