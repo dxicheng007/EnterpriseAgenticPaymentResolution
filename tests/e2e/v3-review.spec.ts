@@ -1,5 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
-import { ActivationRequestSchema, ActivationStateV1Schema, ReviewPackageSchema } from '@eapr/contracts';
+import {
+  ActivationRequestSchema, ActivationStateV1Schema, ReceiptResponseSchema, ReviewPackageSchema,
+} from '@eapr/contracts';
 import { formatUsdCents } from '../../apps/web/src/features/preview/preview-values.js';
 import { apiResponse, expectBrowserMutation, openLocalReview, startReview } from './support/local-review.js';
 
@@ -128,7 +130,7 @@ test('binds one-customer approval, reuses the saved key, gates stale packages, a
     await expect(page.getByRole('button', { name: /Approve this customer only|Retry same approval/ })).toBeEnabled();
 
     // --- Parent inspect remains read-only; only A is active ---
-    await page.getByRole('link', { name: 'Parent' }).click();
+    await page.goto(origin + '/#parent');
     await expect(page.getByRole('heading', { name: 'Parent records', exact: true })).toBeVisible();
     const parentSelect = page.getByLabel('Registered account');
 
@@ -337,6 +339,70 @@ test('recovers the original receipt after a lost reply and a newer head, and sen
 
     const after = await system.db.runtime.query('SELECT 1 FROM runtime_activation_imports WHERE account_id = $1', [accountB]);
     expect(after.rowCount).toBe(1);
+  } finally {
+    await close();
+  }
+});
+
+test('rejects unauthorized approval requests and deterministically replays one public receipt', async ({ page }) => {
+  const { origin, close, accounts } = await openLocalReview({ activation: true });
+  if (!accounts) throw new Error('Activation review harness did not expose accounts');
+  const { a: accountA, b: accountB } = accounts();
+
+  try {
+    await startReview(page, origin, 'review');
+    const prepared = await prepareAccount(page, origin, accountA);
+    const approval = ActivationRequestSchema.parse({
+      reviewPackageId: prepared.id,
+      expectedPackageHash: prepared.hash,
+      expectedArtifactHash: prepared.artifactHash,
+      expectedProfileHash: prepared.profileHash,
+      expectedTargetVersion: prepared.expectedTargetVersion,
+      idempotencyKey: 'browser-public-replay-' + accountA,
+    });
+    await page.evaluate(({ accountId, request }) => {
+      sessionStorage.setItem('eapr-review-approval:' + accountId, JSON.stringify(request));
+    }, { accountId: accountA, request: approval });
+    await page.getByLabel('Registered account').selectOption('');
+    await page.getByLabel('Registered account').selectOption(accountA);
+
+    const withoutCsrf = await page.request.post(origin + '/api/review/' + accountA + '/activate', {
+      headers: { origin }, data: approval,
+    });
+    expect(withoutCsrf.status()).toBe(403);
+
+    const firstWait = apiResponse(page, '/api/review/' + accountA + '/activate', 'POST');
+    await page.getByRole('button', { name: 'Retry same approval' }).click();
+    const firstResponse = await firstWait;
+    expect(firstResponse.status()).toBe(200);
+    const first = ReceiptResponseSchema.parse(await firstResponse.json());
+    expect(first.replayed).toBe(false);
+    const csrf = (await firstResponse.request().allHeaders())['x-eapr-csrf'];
+    expect(csrf).toBeTruthy();
+
+    const wrongAccount = await page.request.post(origin + '/api/review/' + accountB + '/activate', {
+      headers: { origin, 'x-eapr-csrf': csrf! }, data: approval,
+    });
+    expect(wrongAccount.status()).toBe(404);
+
+    const replayResponse = await page.request.post(origin + '/api/review/' + accountA + '/activate', {
+      headers: { origin, 'x-eapr-csrf': csrf! }, data: approval,
+    });
+    expect(replayResponse.status()).toBe(200);
+    const replay = ReceiptResponseSchema.parse(await replayResponse.json());
+    expect(replay.replayed).toBe(true);
+    expect(replay.receipt).toEqual(first.receipt);
+
+    await test.info().attach('sanitized-activation-evidence.json', {
+      body: JSON.stringify({
+        receiptId: replay.receipt.id,
+        activationId: replay.receipt.activationId,
+        epoch: replay.receipt.epoch,
+        beforeBalanceCents: replay.receipt.beforeBalanceCents,
+        afterBalanceCents: replay.receipt.afterBalanceCents,
+      }),
+      contentType: 'application/json',
+    });
   } finally {
     await close();
   }

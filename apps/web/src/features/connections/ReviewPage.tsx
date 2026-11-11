@@ -9,6 +9,7 @@ import { ActivationRequestSchema, type ActivationRequest, type ReviewPackage } f
 import { formatUsdCents } from '../preview/preview-values.js';
 import { EvidencePanel } from '../sources/EvidencePanel.js';
 import { citationBinding, explainSafetyRule, explainValidator, lineageByOperation, mappingLabel } from '../../../../../packages/client/src/review-explain.js';
+import { connectionCompanies } from '../../demo/connection-catalog.js';
 import { Diagnostics, RequestFailure } from '../sources/review-details.js';
 import { UnresolvedDecision } from '../review/UnresolvedDecision.js';
 
@@ -263,6 +264,8 @@ function AccountReview({ accountId, session }: { accountId: string; session: Loc
   const [earlierApprovals, setEarlierApprovals] = useState<ActivationRequest[]>([]);
   const [recovered, setRecovered] = useState<{ request: ActivationRequest; outcome: ActivationOutcome }>();
   const inFlight = useRef(false);
+  const loadGeneration = useRef(0);
+  const loadAbort = useRef<AbortController | undefined>(undefined);
 
   function accept(value: ReviewPackage) {
     setReviewPackage(value);
@@ -271,15 +274,30 @@ function AccountReview({ accountId, session }: { accountId: string; session: Loc
     setStale(false);
   }
 
+  /** Drop any in-flight saved-package read so it cannot overwrite a newer prepare/reload. */
+  function invalidateLoads() {
+    loadGeneration.current += 1;
+    loadAbort.current?.abort();
+    loadAbort.current = undefined;
+  }
+
   function load(signal?: AbortSignal) {
+    const generation = ++loadGeneration.current;
+    const controller = new AbortController();
+    loadAbort.current?.abort();
+    loadAbort.current = controller;
+    if (signal) {
+      if (signal.aborted) controller.abort();
+      else signal.addEventListener('abort', () => controller.abort(), { once: true });
+    }
     setLoading(true);
     setError(undefined);
-    void readReview(accountId, signal).then(value => {
-      if (signal?.aborted) return;
+    void readReview(accountId, controller.signal).then(value => {
+      if (controller.signal.aborted || generation !== loadGeneration.current) return;
       accept(value);
       setLoading(false);
     }, failure => {
-      if (signal?.aborted) return;
+      if (controller.signal.aborted || generation !== loadGeneration.current) return;
       setLoading(false);
       if (!(failure instanceof LocalApiError && failure.status === 404)) setError(failure);
       else { setReviewPackage(undefined); setSavedApproval(undefined); setEarlierApprovals(loadOtherApprovals(accountId, undefined)); }
@@ -289,7 +307,10 @@ function AccountReview({ accountId, session }: { accountId: string; session: Loc
   useEffect(() => {
     const controller = new AbortController();
     load(controller.signal);
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      loadAbort.current?.abort();
+    };
   }, [accountId, session]);
 
   useEffect(() => {
@@ -317,8 +338,18 @@ function AccountReview({ accountId, session }: { accountId: string; session: Loc
   }
 
   const prepare = () => run(async () => {
+    // Preparing advances head; an older in-flight GET must not clobber the new package
+    // (that race makes Approve hit REVIEW_STALE against a newer head).
+    invalidateLoads();
+    setLoading(false);
     setOutcome(undefined);
-    accept(await prepareReview(accountId));
+    try {
+      accept(await prepareReview(accountId));
+    } catch (failure) {
+      if (!(failure instanceof LocalApiError) || failure.status !== 409 || failure.code !== 'STALE_REVIEW') throw failure;
+      // One retry after a concurrent head rewrite (second tab / overlapping prepare).
+      accept(await prepareReview(accountId));
+    }
   });
 
   const approve = () => run(async () => {
@@ -349,9 +380,12 @@ function AccountReview({ accountId, session }: { accountId: string; session: Loc
   return <>
     {loading && <p role="status">Loading saved review package…</p>}
     {!loading && !reviewPackage && error == null && <p>No review package is prepared for this account.</p>}
-    {error != null && <RequestFailure error={error} next={stale
-      ? 'The package changed. Reload the saved package or prepare again, then review it before approving.'
-      : 'Nothing was assumed. Check the saved state before retrying.'} />}
+    {error != null && stale && <div className="review-error" role="alert">
+      <strong>The package changed.</strong>
+      <p>Reload the saved package or prepare again, then review it before approving.</p>
+    </div>}
+    {error != null && !stale &&
+      <RequestFailure error={error} next="Nothing was assumed. Check the saved state before retrying." />}
     {reviewPackage && <ReviewPackageView reviewPackage={reviewPackage} />}
     {reviewPackage && reviewPackage.diagnostics.some(item => item.severity === 'blocker') &&
       <UnresolvedDecision diagnostics={reviewPackage.diagnostics} />}
@@ -392,24 +426,42 @@ function AccountReview({ accountId, session }: { accountId: string; session: Loc
   </>;
 }
 
-export function ReviewPage({ session }: { session: LocalSession }) {
+export function ReviewPage({ session, embedded = false }: { session: LocalSession; embedded?: boolean }) {
   const [chosen, setAccountId] = useState('');
   const accountId = authorizedAccountId(chosen, session.allowedAccountIds);
+  const body = <>
+    {session.allowedAccountIds.length === 0 && <p>No accounts are authorized for this reviewer session.</p>}
+    {session.allowedAccountIds.length > 0 && <>
+      <label className="review-selection">Registered account
+        <select value={accountId} onChange={event => setAccountId(event.target.value)}>
+          <option value="">Select an account</option>
+          {session.allowedAccountIds.map(id => {
+            const company = connectionCompanies.find(item => item.accountId === id);
+            return <option key={id} value={id}>
+              {company ? company.name + ' · ' + company.parentCustomerName : id}
+            </option>;
+          })}
+        </select>
+      </label>
+      {accountId && <AccountReview key={accountId} accountId={accountId} session={session} />}
+    </>}
+  </>;
+  if (embedded) {
+    return <section className="workspace-section" aria-label="Customer review">
+      <header>
+        <p className="review-eyebrow">Per-customer review</p>
+        <h2>Customer review</h2>
+        <p>Review one customer's prepared package. Approval grants bounded standing authority for that customer only.</p>
+      </header>
+      {body}
+    </section>;
+  }
   return <main className="review-main">
     <header>
       <p className="review-eyebrow">Per-customer review</p>
       <h1>Customer review</h1>
       <p>Review one customer's prepared package. Approval grants bounded standing authority for that customer only.</p>
     </header>
-    {session.allowedAccountIds.length === 0 && <p>No accounts are authorized for this reviewer session.</p>}
-    {session.allowedAccountIds.length > 0 && <>
-      <label className="review-selection">Registered account
-        <select value={accountId} onChange={event => setAccountId(event.target.value)}>
-          <option value="">Select an account</option>
-          {session.allowedAccountIds.map(id => <option key={id} value={id}>{id}</option>)}
-        </select>
-      </label>
-      {accountId && <AccountReview key={accountId} accountId={accountId} session={session} />}
-    </>}
+    {body}
   </main>;
 }

@@ -1,8 +1,22 @@
-# Experience MVP completion — exclusive handoff
+# Experience MVP completion — exclusive handoff (historical + status)
 
-User-directed split on November 10, 2026. Developer 0 retains Platform and integration; the receiving agent owns the Experience MVP below. Work on separate branches/worktrees, never the preserved original demo checkout.
+User-directed split on November 10, 2026. This file remains the ownership reservation record. **Current path to a runnable demo:** [demo-mvp-path.md](demo-mvp-path.md). **Delivery record:** [experience-mvp-completion.md](experience-mvp-completion.md).
 
-## Exact starting point and ownership
+## Status (updated November 10, 2026)
+
+| Item | State |
+| --- | --- |
+| Successor branch | `codex/experience-company-a-mvp` |
+| Implementation candidate | `bac37fa15cb8c085f56a27a5d928c23f413e8c58` |
+| Merged tip | [PR64](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/64) → `codex/platform-company-a-demo-mount` @ `a945586` |
+| Independent review | PASS on `bac37fa` (PR59 four authority findings closed) |
+| Three timed rehearsals | PASS on lease `55444/3251/3252/5184`; lease released |
+| On `main` | **Not yet** — `main` is `12f6595`; Integrator owns land |
+| Next Experience slice | Step 1 item 3: `runtimeModelCalls: null` + AI-off · Not measured; Step 2: [disposable staging](../../demo/disposable-staging.md). Then help Step 3 after Integrator lands tip on `main` |
+
+Do not reopen overlapping Platform/gate/board ownership. Do not claim joint demo acceptance from the agent rehearsals alone.
+
+## Exact starting point and ownership (original reservation)
 
 Start from `85023c899367f2e93eead74b5bcd9513ef51fac1` on `origin/codex/platform-company-a-demo-mount`, plus the documentation-only handoff commit containing this file. Fetch first and record your exact base SHA. Create a separate worktree/branch `codex/experience-company-a-mvp`; do not edit Developer 0's integration worktree. Platform source at85023c8 passes the bounded gate and final independent scoped review: three selected mounted success/containment cases passed, with observation collection disabled.
 
@@ -33,7 +47,7 @@ Deliver the frozen **single Company A, development-fixture, AI-off** browser wal
 1. Reuse PR59 (`f04bb07819fb1e0e35be4fc2de6c2cab09d263c9`) as reference, not accepted code. Its four-file diff has not been integrated. Read `experience-pr59-source-review.md` in this directory and PR59 comments. Announce the successor ownership on PR59 and coordinate with its previous owner before accepting further overlapping changes. Do not merge/cherry-pick PR59 blindly.
 2. Close the four authority findings: dedicated current-authority GET controls command availability; persist immutable unresolved account/action/body/key for exact retry despite refresh/navigation; terminal409 retires attempt and refreshes both reads before a deliberate new action/new key; same-identity current epochs never move backward and historical replay never overwrites current authority.
 3. Finish T3 browser coverage for approve, replay/idempotent second click, stale and unauthorized rejection, with genuine public run-specific evidence. Preserve existing protection and fixture setup. Read the existing V3 evidence requirements before claiming acceptance.
-4. Finish T4 observation using existing authenticated Connections/Parent reads. Show actual worker receipts and honest unmeasured fields/shared-lane limitations. Literal `runtimeModelCalls:0` is not measured zero; label the configured fixture/AI-off posture truthfully. Platform source85023c8 already checks this mounted Connections API after real application; browser proof remains yours.
+4. Finish T4 observation using existing authenticated Connections/Parent reads. Show actual worker receipts and honest unmeasured fields/shared-lane limitations. Literal `runtimeModelCalls:0` on the tip base was never a measured zero; label the configured fixture/AI-off posture truthfully. Step 1 follow-up aligns the tip to PR61/`main` `runtimeModelCalls: null` with AI-off · **Not measured**. Platform source85023c8 already checks this mounted Connections API after real application; browser proof remains yours.
 5. Record three timed single-company rehearsals with exact source/run IDs, timings, pass/fail observations and retained sanitized evidence. Use fresh isolated staging for each first-apply run; replay is a separate beat. A unit/process test is not a rehearsal, and only the user can waive three rehearsals. If a prerequisite blocks, report the exact dependency and finish independent work; never mark the MVP finished prematurely.
 
 ## Execution and isolation

@@ -5,6 +5,7 @@ import { previewConnector } from '../../../../../packages/client/src/preview.js'
 import { DemoCandidatesResponseSchema, type DemoCandidatesResponse } from '../../../../../packages/contracts/src/local-demo.js';
 import type { SourceCoverageResponse } from '../../../../../packages/contracts/src/source-coverage.js';
 import type { PreviewResponse } from '../../../../../packages/contracts/src/runtime.js';
+import { ConnectionPreviewPanel } from '../../demo/ConnectionPanels.js';
 import { Diagnostics, RequestFailure } from '../sources/review-details.js';
 import { PreviewResult } from './PreviewResult.js';
 import { SourceCoverage } from './SourceCoverage.js';
@@ -13,15 +14,26 @@ import { VerificationPanel } from './VerificationPanel.js';
 
 type Candidate = DemoCandidatesResponse['candidates'][number];
 
-export function PreviewPage() {
+export function PreviewPage({ embedded = false }: { embedded?: boolean }) {
   const [attempt, setAttempt] = useState(0);
+  const body = <CandidateList key={attempt} refresh={() => setAttempt(value => value + 1)} />;
+  if (embedded) {
+    return <section className="workspace-section" aria-label="Connector preview">
+      <header>
+        <p className="review-eyebrow">Dry-run</p>
+        <h2>Connector preview</h2>
+        <p>Review proposed imports and the amount still owed using the scoped parent records.</p>
+      </header>
+      {body}
+    </section>;
+  }
   return <main className="review-main">
     <header>
       <p className="review-eyebrow">Development fixtures</p>
       <h1>Connector preview</h1>
       <p>Review proposed imports and the amount still owed using the scoped parent records.</p>
     </header>
-    <CandidateList key={attempt} refresh={() => setAttempt(value => value + 1)} />
+    {body}
   </main>;
 }
 
@@ -47,18 +59,10 @@ function CandidateList({ refresh }: { refresh: () => void }) {
     return () => abort.abort();
   }, []);
 
-  if (error != null) return <>
-    <h2>Preview candidates unavailable</h2>
-    <RequestFailure error={error} next="Refresh the candidate list after the local source service is ready." />
-    <button type="button" onClick={refresh}>Refresh candidates</button>
-  </>;
+  if (error != null || (catalog && catalog.candidates.length === 0)) {
+    return <ConnectionPreviewPanel />;
+  }
   if (!catalog) return <p role="status">Loading preview candidates…</p>;
-  if (!catalog.candidates.length) return <>
-    <h2>Preview candidates unavailable</h2>
-    <p>Completed source captures are needed to bind development candidates to evidence.</p>
-    <Diagnostics items={catalog.diagnostics} />
-    <button type="button" onClick={refresh}>Refresh candidates</button>
-  </>;
   const candidate = catalog.candidates.find(item => item.id === candidateId);
   return <>
     <Diagnostics items={catalog.diagnostics} />

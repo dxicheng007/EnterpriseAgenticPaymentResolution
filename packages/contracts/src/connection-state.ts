@@ -36,6 +36,7 @@ export const ConnectionStateV1Schema = strict({
   receipts: z.array(ConnectionReceiptV1Schema).max(50),
   counts: strict({ appliedBatches: count, pendingEvents: measured, quarantinedEvents: measured }),
   lastReceiptId: IdSchema.nullable(),
+  // Null means model calls are not measured for this AI-off worker posture — never a literal zero count.
   runtimeModelCalls: z.null(),
 });
 

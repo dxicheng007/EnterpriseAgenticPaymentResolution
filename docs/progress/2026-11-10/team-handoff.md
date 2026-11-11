@@ -1,6 +1,10 @@
 # Current team handoff and remaining tasks — November 10, 2026
 
-For the latest implementation checkpoints and delivered owner requests, read [Platform coordination](platform-coordination.md). For the active demo track (pregenerated connector + AI-off sync) and the shared high-level T0–T9 board that cold-start agents should update when dispatching or completing work, read [demo remaining work](../../superpowers/plans/2026-11-10-demo-remaining-work.md). Frozen T0 script and identities: [demo contract](../../demo/demo-contract.md). The following is the roadmap snapshot at main `0f0184e13d63df435aedda17810b07a08e9fcedc`, which merged [PR40](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/40). Earlier progress reports and the original team-expansion plan remain historical evidence; use their exact-candidate reviews rather than their old completion summaries. No open PRs were observed when preparing this handoff. This task list is not a source-path or migration reservation.
+**Active demo MVP path (fixture + AI-off, hardcoded connector, simulated inject):** [demo-mvp-path.md](demo-mvp-path.md) Steps 1–4. Staged UI is optional theater only. Next Experience: Step 1 item 3 (`runtimeModelCalls: null` consumer) + Step 2 [disposable staging](../../demo/disposable-staging.md). Integrator still owns landing the platform tip on `main`, then joint user acceptance. Live construction stays deferred (T9).
+
+For Platform checkpoints and delivered owner requests, read [Platform coordination](platform-coordination.md). For the shared high-level T0–T9 board, read [demo remaining work](../../superpowers/plans/2026-11-10-demo-remaining-work.md) (T3/T4/T8 delivered on the platform tip; not yet on `main`). Frozen T0 script and identities: [demo contract](../../demo/demo-contract.md). Experience delivery: [experience-mvp-completion.md](experience-mvp-completion.md).
+
+The tables below are the **roadmap snapshot at main `0f0184e` / merged PR40** and remain historical evidence for older lane tasks. Prefer exact-candidate reviews over old completion summaries. This task list is not a source-path or migration reservation.
 
 ## Completed work to preserve
 

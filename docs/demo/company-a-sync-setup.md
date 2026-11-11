@@ -1,5 +1,7 @@
 # Local Company A sync
 
+For a cold first-apply lease (fresh DBs, full setup chain, inject/observe/replay), prefer the ordered [disposable staging](disposable-staging.md) checklist. This page remains the inject/sync detail once that lease is approve-ready.
+
 Use a dedicated checkout and its own ignored `.local` directory, PostgreSQL 18 cluster and loopback ports. Use Node 24 and run `npm ci`. Set the ports in every setup and startup shell for this checkout. The following example uses the reserved local review namespace. Choose unused ports.
 
 ```sh

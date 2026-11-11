@@ -164,7 +164,9 @@ export async function createLocalComposition(dependencies: UploadDependencies, o
         { dependencies, catalog: localSourceCatalog, service }, options.verification, captureBindings, session.authorizeReviewer,
       );
       catalog.verificationAvailable = true;
-    } catch {
+    } catch (error) {
+      // Keep the catalog mounted; surface the mount failure for local operators without exposing pins.
+      console.error('Local verification mount failed:', error instanceof Error ? error.message : 'unknown error');
       setupCode = 'VERIFICATION_FIXTURE_CONFLICT';
     }
   }

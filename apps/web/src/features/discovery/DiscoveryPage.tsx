@@ -40,11 +40,11 @@ function ModelAvailability() {
 
 function runFromLocation() {
   const [page, query] = window.location.hash.slice(1).split('?', 2);
-  if (page !== 'discovery') return '';
+  if (page !== 'discovery' && page !== 'understand') return '';
   return new URLSearchParams(query).get('runId') ?? '';
 }
 
-export function DiscoveryPage() {
+export function DiscoveryPage({ embedded = false }: { embedded?: boolean }) {
   const [selected, setSelected] = useState(runFromLocation);
   const [input, setInput] = useState(selected);
   const [invalid, setInvalid] = useState(false);
@@ -69,12 +69,12 @@ export function DiscoveryPage() {
     }
     setInvalid(false);
     if (run === selected) setRetry(value => value + 1);
-    window.location.hash = 'discovery?' + new URLSearchParams({ runId: run });
+    const page = embedded ? 'understand' : 'discovery';
+    window.location.hash = page + '?' + new URLSearchParams({ runId: run });
   }
 
   const invalidLink = selected !== '' && !IdSchema.safeParse(selected).success;
-  return <main className="review-main">
-    <h1>Discovery</h1>
+  const body = <>
     <ModelAvailability />
     <form className="review-actions review-selection" onSubmit={openRun}>
       <label>Run ID
@@ -89,6 +89,20 @@ export function DiscoveryPage() {
     {!selected && <p>Enter a saved discovery run ID to see its state and recent activity.</p>}
     {selected && !invalidLink && <RunMonitor key={selected + '/' + retry} runId={selected}
       retry={() => setRetry(value => value + 1)} />}
+  </>;
+  if (embedded) {
+    return <section className="workspace-section" aria-label="Discovery">
+      <header>
+        <p className="review-eyebrow">Exploration</p>
+        <h2>Discovery</h2>
+        <p>Monitor a saved agent exploration run for this acquisition.</p>
+      </header>
+      {body}
+    </section>;
+  }
+  return <main className="review-main">
+    <h1>Discovery</h1>
+    {body}
   </main>;
 }
 

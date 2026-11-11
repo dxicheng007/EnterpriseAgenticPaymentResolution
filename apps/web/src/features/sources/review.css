@@ -1,35 +1,91 @@
 .review-main {
   max-width: 70rem;
-  margin-block: 2.5rem;
+  margin: 2rem auto 3.5rem;
+  padding: 0 max(1.25rem, calc((100vw - 70rem) / 2));
   overflow-wrap: anywhere;
 }
-.review-main h1 { margin: .15rem 0; }
-.review-main h2 { margin-top: 0; }
+.review-main > .review-eyebrow {
+  margin-bottom: .4rem;
+}
+.review-main h1 {
+  margin: 0 0 1.15rem;
+  font-size: clamp(2rem, 3.2vw, 2.85rem);
+  line-height: 1.05;
+  letter-spacing: -.035em;
+  font-weight: 400;
+}
+.review-main h2 {
+  margin-top: 0;
+  font-weight: 400;
+  letter-spacing: -.02em;
+}
+.review-main h3 {
+  font-weight: 500;
+  letter-spacing: -.015em;
+}
 .review-eyebrow {
-  font-size: .8rem;
-  font-weight: 700;
-  letter-spacing: .09em;
+  font-size: .72rem;
+  font-weight: 500;
+  letter-spacing: .12em;
   text-transform: uppercase;
   margin: 0;
+  color: var(--ink-muted);
 }
 .review-card {
-  margin-block: 1.25rem;
-  padding: clamp(1rem, 3vw, 1.75rem);
-  border: 1px solid color-mix(in srgb, currentColor 26%, transparent);
-  border-radius: .65rem;
+  margin-block: 1.1rem;
+  padding: clamp(1.15rem, 2.4vw, 1.65rem);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
 }
-.review-facts { grid-template-columns: minmax(7rem, 1fr) minmax(0, 3fr); }
-.review-facts dd { overflow-wrap: anywhere; }
+.review-card > p:first-of-type:not(.review-eyebrow):not(.status-ready):not(.status-blocked) {
+  color: var(--ink-muted);
+}
+.review-facts {
+  grid-template-columns: minmax(7.5rem, 1fr) minmax(0, 3fr);
+  background: var(--mist);
+  border-color: var(--line);
+}
+.review-facts dt {
+  color: var(--ink-muted);
+  font-size: .92rem;
+  font-weight: 400;
+}
+.review-facts dd {
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: .9rem;
+  font-weight: 500;
+}
 .review-facts code { font-weight: normal; }
-.review-main label { display: grid; gap: .35rem; font-weight: 600; }
+.review-main label {
+  display: grid;
+  gap: .35rem;
+  font-weight: 500;
+  color: var(--ink);
+}
 .review-main input, .review-main select {
   box-sizing: border-box;
   width: 100%;
   max-width: 100%;
   min-width: 0;
+  min-height: 2.75rem;
   font: inherit;
-  font-weight: normal;
-  padding: .4rem;
+  font-weight: 400;
+  padding: .7rem .85rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+  color: var(--ink);
+  transition: border-color .3s var(--ease), background .3s var(--ease);
+}
+.review-main input:hover, .review-main select:hover {
+  border-color: color-mix(in srgb, var(--ink) 28%, var(--line));
+}
+.review-main input:focus, .review-main select:focus {
+  outline: 2px solid var(--azure);
+  outline-offset: 2px;
+  border-color: var(--ink);
 }
 .review-selection { width: min(100%, 40rem); }
 .review-fields {
@@ -47,23 +103,44 @@
 }
 .review-actions label { flex: 1 1 15rem; min-width: 0; }
 .review-main details { margin-block: .75rem; }
-.review-main summary { cursor: pointer; }
+.review-main summary { cursor: pointer; font-weight: 500; }
 .review-main pre {
   white-space: pre-wrap;
-  padding: .75rem;
-  background: color-mix(in srgb, currentColor 8%, transparent);
+  padding: .85rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--mist);
+  font-family: var(--font-mono);
+  font-size: .86rem;
 }
-.review-main small { display: block; }
+.review-main small { display: block; color: var(--ink-muted); }
 .review-diagnostics p, .review-error p { margin: .25rem 0; }
 .review-diagnostics li { margin-bottom: .5rem; }
-.review-error { border-inline-start: .25rem solid currentColor; padding-inline-start: .75rem; margin-block: 1rem; }
+.review-error {
+  border-inline-start: .28rem solid var(--ember);
+  padding-inline-start: .85rem;
+  margin-block: 1rem;
+}
 .balance-diff dd { font-variant-numeric: tabular-nums; font-size: 1.15rem; }
-.review-table { border-collapse: collapse; width: 100%; text-align: start; }
+.review-table {
+  border-collapse: collapse;
+  width: 100%;
+  text-align: start;
+  font-size: .92rem;
+}
 .review-table th, .review-table td {
   text-align: start;
-  padding: .35rem .5rem;
-  border-bottom: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+  padding: .55rem .45rem;
+  border-bottom: 1px solid var(--line);
 }
+.review-table th {
+  color: var(--ink-muted);
+  font-size: .72rem;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+.review-table td { font-family: var(--font-mono); font-size: .86rem; }
 .citation-button { margin: .25rem; overflow-wrap: anywhere; }
 
 .coverage-totals, .coverage-accounts {
@@ -72,12 +149,13 @@
   gap: .75rem;
 }
 .coverage-totals > div, .coverage-accounts > article, .coverage-unresolved {
-  padding: .85rem;
-  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
-  border-radius: .45rem;
+  padding: .95rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
 }
 .coverage-totals { margin: 1rem 0; padding: 0; border: 0; }
-.coverage-totals dt { font-size: 1.05rem; font-weight: 700; }
+.coverage-totals dt { font-size: 1.05rem; font-weight: 500; }
 .coverage-totals dd { margin-top: .25rem; font-weight: normal; }
 .coverage-accounts h4, .coverage-unresolved h3 { margin-top: 0; }
 .coverage-accounts .review-facts {
@@ -85,8 +163,9 @@
   margin-block: .75rem;
   padding: 0;
   border: 0;
+  background: transparent;
 }
-.coverage-accounts .review-facts dd { font-weight: 600; }
+.coverage-accounts .review-facts dd { font-weight: 500; }
 .coverage-profiles details { margin-block: .25rem; }
 .coverage-kinds {
   display: flex;
@@ -96,12 +175,24 @@
   padding: 0;
 }
 .coverage-kinds li {
-  padding: .15rem .45rem;
-  background: color-mix(in srgb, currentColor 8%, transparent);
-  border-radius: .35rem;
+  padding: .25rem .5rem;
+  background: color-mix(in srgb, var(--accent) 34%, var(--mist));
+  border-radius: var(--radius-xs);
+  font-size: .85rem;
+  font-weight: 400;
 }
 .coverage-profiles, .preview-holds { padding-inline-start: 1.25rem; }
 .coverage-unresolved { margin-top: 1rem; }
-.balance-diff dd:first-of-type { font-size: 1.55rem; }
+.balance-diff dd:first-of-type {
+  font-size: 1.7rem;
+  letter-spacing: -.03em;
+  font-family: var(--font-sans);
+  font-weight: 400;
+}
 
-.preview-balance-note { margin: .35rem 0 .75rem; font-size: 1rem; font-weight: normal; }
+.preview-balance-note {
+  margin: .35rem 0 .75rem;
+  font-size: 1rem;
+  font-weight: normal;
+  color: var(--ink-muted);
+}

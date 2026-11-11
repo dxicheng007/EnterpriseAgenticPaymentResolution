@@ -87,7 +87,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T3 — Experience: finish Approve-and-enable browser workflow
 
-**Status:** partial — backend and existing browser work are available; exact remaining browser scenarios/public packet remain Experience-owned. Existing delivered reviewer/authority follow-ups still apply.
+**Status:** delivered on `codex/platform-company-a-demo-mount` via [PR64](https://github.com/dxicheng007/EnterpriseAgenticPaymentResolution/pull/64) merge `a945586` (candidate `bac37fa`); unauthorized/stale/replay browser coverage + run-specific attachments recorded in [experience-mvp-completion.md](../../progress/2026-11-10/experience-mvp-completion.md). **Not yet on `main` (`12f6595`).** Full V3 slice acceptance and joint user acceptance remain separate.
 **Lane:** Experience  
 **Depends on:** activation backend already mounted; Integrator gate/parser fixes if still open  
 **Outcome:** Reviewer can prepare, inspect package details/evidence, approve one customer, and see parent import + receipt without inventing authority in the UI.  
@@ -97,7 +97,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T4 — Experience: Connections / sync observation surface
 
-**Status:** partial — existing operations surface and reviewed authority API are prerequisites. Shared-lane visibility, honest unmeasured runtime-model metric, explicit authority-action refresh and demo observation proof remain Experience-owned.
+**Status:** delivered on `codex/platform-company-a-demo-mount` via PR64 `a945586` — dedicated authority GET gates controls; immutable unresolved-command retry; 409 refresh/new key; nondecreasing epoch floor; honest unmeasured/AI-off model-call labeling on the prior literal-`0` schema. **Step 1 follow-up (Experience tip):** port PR61 `runtimeModelCalls: null` producer/contract and keep AI-off · **Not measured** UI (never a measured zero) so the tip matches `main` before Integrator land. Shared-lane backend truth remains Platform (PR61/PR63).
 **Lane:** Experience  
 **Depends on:** T1 progress reads / receipts (design freeze with Platform first)  
 **Outcome:** Demo-visible connection state: active customer, pinned artifact, last receipt, applied vs held/gap counts, and clear AI-off posture.  
@@ -133,7 +133,7 @@ Suggested lane tags: **Platform** (runtime/authority/contracts), **Experience** 
 
 ### T8 — Experience + Integrator: two-company or single-company rehearsal packet
 
-**Status:** assigned to the successor Experience MVP agent under the exclusive handoff; three timed rehearsals remain outstanding. Platform verification lease released; successor owns next isolated lease.
+**Status:** three timed single-Company-A fixture/AI-off rehearsals **passed** on isolated lease `55444/3251/3252/5184` for candidate `bac37fa` (merged PR64 / tip `a945586`). Receipts prove 80000→50000 and replayed same id; sanitized evidence under ignored `.evidence/experience-mvp-rehearsals/`. Experience lease released. **Still open:** integrate tip onto `main` (Step 1), cold-operator [disposable staging](../../demo/disposable-staging.md) checklist for Step 2, and **joint user** acceptance of one on-stage live-API run (Step 4; staged UI off). Company B stretch remains out.
 **Lane:** Experience leads; Integrator records  
 **Depends on:** T3 + T1–T5; T6 for replay beat  
 **Outcome:** One rehearsable runbook and evidence packet for the hackathon-style walkthrough in §3. Prefer one Company A happy path first; add Company B only when CSV/file capture apply is actually available.  
@@ -188,6 +188,7 @@ Parallelism that is usually safe after T0:
 
 ## 7. Related documents
 
+- [Demo MVP path](../../progress/2026-11-10/demo-mvp-path.md) — critical path to a runnable on-stage fixture/AI-off demo
 - [Demo contract](../../demo/demo-contract.md) — frozen T0 identities, modes, cents, injection, and pass/fail
 - [PRD v2](../../../prdv2.md) — thesis, demo walkthrough, acceptance criteria
 - [Implementation plan](2026-11-08-implementation-plan.md) — original V0–V8 slices
@@ -198,16 +199,12 @@ Parallelism that is usually safe after T0:
 
 ## 8. Current integrator checkpoint and preserved follow-on work
 
-PR54 merged at `7de9366c8543ba4ae9c455006e55c70af16e33fd`; its complete tree equals reviewed continuation head `01bc534`. PR55/T0 is already merged. On November 10 the integrator checked the clean designated worktree and pulled main (already current), then created `codex/platform-company-a-demo-mount`. The original demo checkout and database remain preserved.
+**Demo MVP path (authoritative next steps):** [demo-mvp-path.md](../../progress/2026-11-10/demo-mvp-path.md) — Steps 1–4: land tip on `main` (including Experience `runtimeModelCalls: null` follow-up), [disposable staging](../../demo/disposable-staging.md), on-stage fixture/AI-off script, joint user acceptance. Staged UI is theater only. Strategy remains hardcoded fixture + simulated `freshPaymentA` inject; live construction stays T9.
 
-Fresh Astra design and independent review freeze the narrow T1/T2 mount; required receipt recovery corrections are incorporated. Integrator owns board/coordination documents; PR56 is integrated; the sole Sol Task 1 writer resumes the revised T2 scope and isolated test lease after fresh Astra reconciliation. Once design and paths are frozen, one Sol implementer will own the source and isolated tests, followed by fresh Astra exact-candidate review. Latest inspected CI runs `42873005041`, `42872902546`, and `42872595578` report startup failure; no green CI claim is made.
+PR57 Platform mount and PR64 Experience T3/T4/T8 are merged on `codex/platform-company-a-demo-mount` @ `a945586` (+ later staged-UI tip). `main` remains `12f6595` (PR57/59/61) without PR64. Open Platform drafts: PR62 (V5 evidence allowlist), PR63 (Connections boundary tests). Original demo checkout/database remain preserved. Experience lease `55444/3251/3252/5184` released after rehearsals.
 
-General multi-customer capture/history selection, dependency journal/application scheduling, Discovery Gate J/live construction, and the explicit proposed-scope grant workflow remain preserved follow-on work, with their accepted designs/reviews and unresolved owner contracts. They are not new blocking requirements for this board's one-customer pregenerated AI-off demo. The user's explicit read/verification grant decision remains binding if that workflow is later implemented; no automatic grant is permitted. See [Platform coordination](../../progress/2026-11-10/platform-coordination.md) for exact source ownership, reviews, policy decision and delivered requests.
+General multi-customer capture/history selection, dependency journal/application scheduling, Discovery Gate J/live construction, and the explicit proposed-scope grant workflow remain preserved follow-on work. They are not blocking requirements for the one-customer pregenerated AI-off demo. See [Platform coordination](../../progress/2026-11-10/platform-coordination.md).
 
-## 9. User-directed MVP ownership split
+## 9. User-directed MVP ownership split (status)
 
-Developer 0 retains Platform source, bounded verification, shared board and integration. The successor Experience agent owns the exact UI/client/browser paths and T3/T4/T8 delivery in [Experience MVP handoff](../../progress/2026-11-10/experience-mvp-handoff.md), starting from Platform source85023c8. No overlapping implementation ownership is authorized. Three timed rehearsals and independent browser evidence remain required; the new agent returns a draft PR and completion report for Developer 0 to integrate.
-
-### Merged-main checkpoint
-
-PR57/59/61 are merged into main12f6595. Platform continuation `codex/platform-mvp-integration` contains reviewed legacy V5 title correction3e791e6 (89 independent database-free checks), without unlocking full V5/V6. PR61 delivers honest unmeasured model posture and committed-manifest shared-lane reads; it does not close PR59 authority UX findings or T3/T4 browser acceptance. Experience successor has claimed its isolated lease and must reconcile main before fresh proof staging. Developer 0 retains source review/integration and will not run services during that lease. See [coordination record](../../progress/2026-11-10/platform-coordination.md).
+Successor Experience delivery for T3/T4/T8 is recorded in [experience-mvp-completion.md](../../progress/2026-11-10/experience-mvp-completion.md) and merged via PR64. Developer 0 retains Platform source, shared board, and **main integration**. Remaining Experience work per [demo-mvp-path.md](../../progress/2026-11-10/demo-mvp-path.md): Step 1 item 3 (`runtimeModelCalls: null` consumer + tip producer align) and Step 2 disposable staging checklist. Historical reservation text: [experience-mvp-handoff.md](../../progress/2026-11-10/experience-mvp-handoff.md).
