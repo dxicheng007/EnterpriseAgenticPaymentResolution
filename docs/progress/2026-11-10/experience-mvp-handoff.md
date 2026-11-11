@@ -61,3 +61,7 @@ Use gpt-6.1-sol for implementation and fresh gpt-6-astra for design/independent 
 ## Return contract
 
 Return exact base/candidate SHAs, owned changed files, commands/results, fresh independent review, browser evidence locations, three rehearsal records, cleanup/lease status, remaining blockers and draft PR link. Populate only your completion report; ask Developer 0 to update shared board and integrate. General selector/scheduling/grants/live construction, Company B and cosmetic redesign remain deferred.
+
+## Update after PR57/59/61 merged
+
+Main12f6595 now includes the handoff base and PR59/61. At the next clean checkpoint, reconcile that main before staging fresh financial/bootstrap proofs; connection-state changed and old protected build attestations must not be reused. PR59 merging does not resolve its four authority findings. The successor has claimed isolated55444/3251/3252/5184 on its own machine; Developer 0 acknowledged and is not using services. Since the original target branch is now merged, open the successor draft PR against `main` and request Developer 0 review through PR57 coordination. Developer 0's separate continuation is `codex/platform-mvp-integration`; do not take its gate/script paths. If Astra is unavailable in the successor environment, publish exact candidate and local review/verification evidence for Developer 0's fresh Astra review before acceptance.

@@ -7,7 +7,7 @@ import { afterAll, beforeAll, expect, test } from 'vitest';
 import {
   BootstrapManifestSchema, LocalSessionResponseSchema, RawSourceEventSchema, ReviewPackageSchema,
   canonicalJson, hashBytes, hashCanonical, hashEvent, hashFinancialReservation, hashManifest, hashProfile,
-  type BootstrapManifest, type ChangePage, type CommittedCaptureIdentityV1, type RawSourceEvent,
+  type BootstrapManifest, type ChangePage, type CommittedCaptureIdentityV1, type ConnectionStateV1, type RawSourceEvent,
 } from '@eapr/contracts';
 import { compile } from '@eapr/compiler/compile';
 import { createEvidenceStore } from '@eapr/evidence';
@@ -24,6 +24,7 @@ import { loadActivationPolicy } from '@eapr/storage/activation-policy';
 import { createControlDb } from '@eapr/storage/control-db';
 import { createRuntimeDb } from '@eapr/storage/runtime-db';
 import { withTransaction } from '@eapr/storage/transaction';
+import { createConnectionReads } from '../../apps/worker/src/connections.js';
 import { createRegisteredScopePublication } from '../../apps/control/src/activation-publication.js';
 import { buildDemoCandidate } from '../../apps/control/src/demo-candidates.js';
 import { createFinancialCaptureReader } from '../../apps/control/src/financial-capture.js';
@@ -78,6 +79,7 @@ let fixture: { a: Committed; b: Committed; source: ReturnType<typeof createSourc
   operator: ReturnType<typeof createScenarioAdmin> };
 let sharedA: Committed;
 let sharedB: Committed;
+let sharedScopes: ReturnType<typeof createRegisteredScopeReader>;
 let peerSource: ReturnType<typeof createSourceService>;
 let peerOperator: ReturnType<typeof createScenarioAdmin>;
 let peerA: Committed;
@@ -204,10 +206,39 @@ const captureTables = [
   'runtime_inbox', 'runtime_capture_incidents',
 ] as const;
 
-async function state(tableNames: readonly string[]) {
+async function state(tableNames: readonly string[], db: Pool = runtime) {
   return Object.fromEntries(await Promise.all(tableNames.map(async table => [
-    table, (await runtime.query('SELECT to_jsonb(t)::text AS row FROM ' + table + ' t ORDER BY to_jsonb(t)::text')).rows,
+    table, (await db.query('SELECT to_jsonb(t)::text AS row FROM ' + table + ' t ORDER BY to_jsonb(t)::text')).rows,
   ])));
+}
+
+async function connectionDatabaseState(db: Pool) {
+  const tables = (await db.query<{ name: string }>(`
+    SELECT quote_ident(tablename) AS name FROM pg_tables
+    WHERE schemaname = 'public' ORDER BY tablename
+  `)).rows;
+  return state(tables.map(({ name }) => name), db);
+}
+
+function expectOwnConnection(
+  view: ConnectionStateV1,
+  subject: Committed,
+  stored: NonNullable<Awaited<ReturnType<typeof readStoredActivation>>>,
+) {
+  const { scope, activationId } = subject.identity;
+  const { receipt, approvedTarget } = stored;
+  const parentVersion = approvedTarget.records.version;
+  expect(view).toMatchObject({
+    scope, activationId, status: 'active', epoch: 1, parentVersion,
+    lastReceiptId: receipt.id, runtimeModelCalls: null,
+  });
+  expect(view.counts).toEqual({ appliedBatches: 0, pendingEvents: null, quarantinedEvents: null });
+  expect(view.receipts).toEqual([{
+    id: receipt.id, kind: 'initial', activationId, epoch: receipt.epoch, planHash: receipt.planHash,
+    beforeVersion: null, afterVersion: parentVersion, eventCount: receipt.eventIds.length,
+    recordCount: receipt.targetRecordIds.length, beforeBalanceCents: receipt.beforeBalanceCents,
+    afterBalanceCents: receipt.afterBalanceCents, committedAt: receipt.committedAt,
+  }]);
 }
 
 async function immutableParent() {
@@ -831,6 +862,64 @@ test('serializes first initialization and keeps each genuine manifest baseline v
   expect(memberships.rowCount).toBe(0);
 });
 
+test('connection reads exclude other committed manifests of the same source without writes', async () => {
+  const sourceRef = peerA.manifest.sourceRef;
+  expect(peerB.manifest.sourceRef).toBe(sourceRef);
+  expect(peerA.manifest.hash).not.toBe(peerB.manifest.hash);
+  expect(peerA.identity.scope).not.toEqual(peerB.identity.scope);
+  expect(peerA.identity.activationId).not.toBe(peerB.identity.activationId);
+  const oldApi = peerCursor(api);
+  const oldSemantic = peerCursor(semantic);
+  const newApi = peerB.manifest.streams.find(stream => stream.streamId === api)!.resumeAfter;
+  const newSemantic = peerB.manifest.streams.find(stream => stream.streamId === semantic)!.resumeAfter;
+  expect(newApi).toBe(oldApi);
+  expect(oldSemantic).toBe('0');
+  expect(newSemantic).toBe('1');
+
+  const capture = createRuntimeCapture({ db: peer, clock });
+  const old = await capture.openCommitted(peerA.identity);
+  const current = await capture.openCommitted(peerB.identity);
+  expect(old.lane.manifestHash).toBe(peerA.manifest.hash);
+  expect(current.lane.manifestHash).toBe(peerB.manifest.hash);
+  const incidentAt = instant;
+  await expect(old.capturePage({
+    sourceRef, streamId: api, after: oldApi, next: oldApi, complete: false, events: [],
+  })).rejects.toMatchObject(failure('GAP', 409));
+  await expect(current.capturePage({
+    sourceRef, streamId: semantic, after: newSemantic, next: newSemantic, complete: false, events: [],
+  })).rejects.toMatchObject(failure('GAP', 409));
+
+  const storedA = await withTransaction(peer, client => readStoredActivation(client, peerA.identity.scope));
+  const storedB = await withTransaction(peer, client => readStoredActivation(client, peerB.identity.scope));
+  expect(storedA).not.toBeNull();
+  expect(storedB).not.toBeNull();
+  expect(storedA!.receipt.id).not.toBe(storedB!.receipt.id);
+
+  const reads = createConnectionReads(peer, sharedScopes);
+  const before = await connectionDatabaseState(peer);
+  const [viewA, viewB] = await Promise.all([
+    reads.readConnection(peerA.identity.scope.accountId), reads.readConnection(peerB.identity.scope.accountId),
+  ]);
+  expect(await connectionDatabaseState(peer)).toEqual(before);
+
+  for (const { view, apiCursor, semanticCursor, gapStream } of [
+    { view: viewA, apiCursor: oldApi, semanticCursor: oldSemantic, gapStream: api },
+    { view: viewB, apiCursor: newApi, semanticCursor: newSemantic, gapStream: semantic },
+  ]) {
+    expect(view.streams).toEqual([
+      { sourceRef, streamId: api, transport: 'api', baselineCursor: Number(apiCursor),
+        capturedThrough: Number(apiCursor), capturedPages: 0, lastCapturedAt: null, lagEvents: null },
+      { sourceRef, streamId: semantic, transport: 'semantic', baselineCursor: Number(semanticCursor),
+        capturedThrough: Number(semanticCursor), capturedPages: 0, lastCapturedAt: null, lagEvents: null },
+    ]);
+    expect(view.incidents).toEqual([{
+      sourceRef, streamId: gapStream, code: 'CAPTURE_GAP', observedAt: incidentAt, sourceIds: [],
+    }]);
+  }
+  expectOwnConnection(viewA, peerA, storedA!);
+  expectOwnConnection(viewB, peerB, storedB!);
+});
+
 test('concurrent capture of one delivery across lanes adds one global fact and two distinct memberships', async () => {
   const capture = createRuntimeCapture({ db: peer, clock });
   const [a, b] = await Promise.all([capture.openCommitted(peerA.identity), capture.openCommitted(peerB.identity)]);
@@ -891,6 +980,7 @@ async function preparePeerFixtures() {
     bootstrapRoots: { sidecarRoot: join(root, 'paired-bootstrap'), evidencePinRoot: join(root, 'paired-evaluator'),
       servedRoots: [roots.visibleRoot, storeRoot, registryRoot, join(root, 'visible-epoch-2')] },
   };
+  sharedScopes = context.scopeReader;
   peerSource = createSourceService(dependencies, localSourceCatalog);
   peerOperator = createScenarioAdmin(dependencies, { DEMO_OPERATOR_ENABLED: 'true', DEMO_OPERATOR_TOKEN: operatorToken });
   await generateSecondQualifyingAccount(roots);
@@ -927,7 +1017,15 @@ test('a second independently approved account on the same lane preserves existin
   const first = await capture.openCommitted(sharedA.identity);
   const page = prefix(await peerPage());
   expect(await first.capturePage(page)).toMatchObject({ disposition: 'captured', captured: 1 });
+  const sourceRef = sharedA.manifest.sourceRef;
+  const incidentAt = instant;
+  await expect(first.capturePage({
+    sourceRef, streamId: api, after: page.next, next: page.next, complete: false, events: [],
+  })).rejects.toMatchObject(failure('GAP', 409));
   const progress = await first.readProgress();
+  expect(progress.streams.find(stream => stream.streamId === api)?.lastIncident).toMatchObject({
+    code: 'CAPTURE_GAP', observedAt: incidentAt, sourceIds: [],
+  });
   expect(sharedA.identity.scope).not.toEqual(sharedB.identity.scope);
   expect(sharedA.identity.activationId).not.toBe(sharedB.identity.activationId);
   const second = await capture.openCommitted(sharedB.identity);
@@ -935,6 +1033,35 @@ test('a second independently approved account on the same lane preserves existin
   expect(await second.readProgress()).toEqual(progress);
   expect((await sharedDb.query('SELECT initial_activation_id FROM runtime_capture_lanes')).rows)
     .toEqual([{ initial_activation_id: sharedA.identity.activationId }]);
+
+  const storedA = await withTransaction(sharedDb, client => readStoredActivation(client, sharedA.identity.scope));
+  const storedB = await withTransaction(sharedDb, client => readStoredActivation(client, sharedB.identity.scope));
+  expect(storedA).not.toBeNull();
+  expect(storedB).not.toBeNull();
+  expect(storedA!.receipt.id).not.toBe(storedB!.receipt.id);
+
+  const reads = createConnectionReads(sharedDb, sharedScopes);
+  const before = await connectionDatabaseState(sharedDb);
+  const [viewA, viewB] = await Promise.all([
+    reads.readConnection(sharedA.identity.scope.accountId), reads.readConnection(sharedB.identity.scope.accountId),
+  ]);
+  expect(await connectionDatabaseState(sharedDb)).toEqual(before);
+
+  const apiBaseline = Number(sharedA.manifest.streams.find(stream => stream.streamId === api)!.resumeAfter);
+  const semanticBaseline = Number(sharedA.manifest.streams.find(stream => stream.streamId === semantic)!.resumeAfter);
+  for (const view of [viewA, viewB]) {
+    expect(view.streams).toEqual([
+      { sourceRef, streamId: api, transport: 'api', baselineCursor: apiBaseline,
+        capturedThrough: Number(page.next), capturedPages: 1, lastCapturedAt: incidentAt, lagEvents: null },
+      { sourceRef, streamId: semantic, transport: 'semantic', baselineCursor: semanticBaseline,
+        capturedThrough: semanticBaseline, capturedPages: 0, lastCapturedAt: null, lagEvents: null },
+    ]);
+    expect(view.incidents).toEqual([{
+      sourceRef, streamId: api, code: 'CAPTURE_GAP', observedAt: incidentAt, sourceIds: [],
+    }]);
+  }
+  expectOwnConnection(viewA, sharedA, storedA!);
+  expectOwnConnection(viewB, sharedB, storedB!);
 });
 
 async function generateSecondQualifyingAccount({ visibleRoot, truthRoot }: EvidenceRoots) {
