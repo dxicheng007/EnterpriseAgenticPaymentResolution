@@ -9,6 +9,7 @@ import {
 } from '../../../../../packages/contracts/src/authority-ingress.js';
 import type { ConnectionStateV1 } from '../../../../../packages/contracts/src/connection-state.js';
 import type { CurrentAuthorityV1 } from '../../../../../packages/contracts/src/current-authority.js';
+import { connectionCompanies } from '../../demo/connection-catalog.js';
 import { formatUsdCents } from '../preview/preview-values.js';
 import { RequestFailure } from '../sources/review-details.js';
 
@@ -250,24 +251,42 @@ function AccountOperations({ accountId, session }: { accountId: string; session:
   </>;
 }
 
-export function OperationsPage({ session }: { session: LocalSession }) {
+export function OperationsPage({ session, embedded = false }: { session: LocalSession; embedded?: boolean }) {
   const [chosen, setAccountId] = useState('');
   const accountId = session.allowedAccountIds.includes(chosen) ? chosen : '';
+  const body = <>
+    {session.allowedAccountIds.length === 0 && <p>No accounts are authorized for this reviewer session.</p>}
+    {session.allowedAccountIds.length > 0 && <>
+      <label className="review-selection">Registered account
+        <select value={accountId} onChange={event => setAccountId(event.target.value)}>
+          <option value="">Select an account</option>
+          {session.allowedAccountIds.map(id => {
+            const company = connectionCompanies.find(item => item.accountId === id);
+            return <option key={id} value={id}>
+              {company ? company.name + ' · ' + company.parentCustomerName : id}
+            </option>;
+          })}
+        </select>
+      </label>
+      {accountId && <AccountOperations key={accountId} accountId={accountId} session={session} />}
+    </>}
+  </>;
+  if (embedded) {
+    return <section className="workspace-section" aria-label="Connection operations">
+      <header>
+        <p className="review-eyebrow">Sync authority</p>
+        <h2>Connection operations</h2>
+        <p>Authoritative worker reads for one customer: authority state, captured streams, gaps and receipts.</p>
+      </header>
+      {body}
+    </section>;
+  }
   return <main className="review-main">
     <header>
       <p className="review-eyebrow">Operations</p>
       <h1>Connection operations</h1>
       <p>Authoritative worker reads for one customer: authority state, captured streams, gaps and receipts.</p>
     </header>
-    {session.allowedAccountIds.length === 0 && <p>No accounts are authorized for this reviewer session.</p>}
-    {session.allowedAccountIds.length > 0 && <>
-      <label className="review-selection">Registered account
-        <select value={accountId} onChange={event => setAccountId(event.target.value)}>
-          <option value="">Select an account</option>
-          {session.allowedAccountIds.map(id => <option key={id} value={id}>{id}</option>)}
-        </select>
-      </label>
-      {accountId && <AccountOperations key={accountId} accountId={accountId} session={session} />}
-    </>}
+    {body}
   </main>;
 }

@@ -8,45 +8,64 @@ import { DiscoveryPage } from './features/discovery/DiscoveryPage.js';
 import { HealthPage } from './features/health/HealthPage.js';
 import { PreviewPage } from './features/preview/PreviewPage.js';
 import { SourcesPage } from './features/sources/SourcesPage.js';
+import { AuthorizePage } from './features/workspaces/AuthorizePage.js';
+import { ConnectPage } from './features/workspaces/ConnectPage.js';
+import { HealthChip } from './features/workspaces/HealthChip.js';
+import { OperatePage } from './features/workspaces/OperatePage.js';
+import { UnderstandPage } from './features/workspaces/UnderstandPage.js';
 import './features/sources/review.css';
+import './features/workspaces/workspace.css';
 import { AcquisitionDemo } from './demo/AcquisitionDemo.js';
-import { DemoStubBanner, DemoWorking } from './demo/DemoWorking.js';
-import {
-  StagedDiscoveryPanel, StagedHealthPanel, StagedOperationsPanel, StagedParentPanel, StagedPreviewPanel,
-  StagedReviewPanel, StagedSourcesPanel,
-} from './demo/StagedSurfaces.js';
-import { stagedCompanyA } from './demo/staged-company-a.js';
-import { isDemoStubEnabled, onDemoStubChange, setDemoStubEnabled } from './demo/stub-mode.js';
+import { demoWorkspaceSession } from './demo/connection-catalog.js';
+import { DemoWorking } from './demo/DemoWorking.js';
 
 const pages = [
   { id: 'theater', label: 'Theater' },
-  { id: 'health', label: 'Health' }, { id: 'sources', label: 'Sources' }, { id: 'preview', label: 'Preview' },
-  { id: 'review', label: 'Review' }, { id: 'parent', label: 'Parent' }, { id: 'operations', label: 'Operations' }, { id: 'discovery', label: 'Discovery' },
+  { id: 'understand', label: 'Understand' },
+  { id: 'connect', label: 'Connect' },
+  { id: 'authorize', label: 'Authorize' },
+  { id: 'operate', label: 'Operate' },
 ] as const;
 
-type PageId = typeof pages[number]['id'];
+type WorkspaceId = typeof pages[number]['id'];
+type LiveId = 'sources' | 'discovery' | 'preview' | 'review' | 'parent' | 'operations';
+type PageId = WorkspaceId | LiveId | 'health';
 
 const titles = {
-  sources: 'Sources and evidence', review: 'Customer review', preview: 'Connector preview', parent: 'Parent records', operations: 'Operations', discovery: 'Discovery',
+  understand: 'Understand the acquisition',
+  connect: 'Connect into our books',
+  authorize: 'Authorize this customer',
+  operate: 'Operate in our books',
 } as const;
 
-const stagedSession: LocalSession = {
+const fallbackSession: LocalSession = {
   demoOnly: true,
-  reviewer: { reviewerId: 'demo-reviewer', sessionId: 'staged-session-company-a' },
-  allowedSourceRefs: ['legacy-a', 'legacy-b'],
-  allowedAccountIds: [stagedCompanyA.accountId, 'company-b.seller-b.cust-b-d22feb38e846-1'],
+  reviewer: demoWorkspaceSession.reviewer,
+  allowedSourceRefs: [...demoWorkspaceSession.allowedSourceRefs],
+  allowedAccountIds: [...demoWorkspaceSession.allowedAccountIds],
 };
 
 function currentPage(): PageId {
-  return pages.find(page => '#' + page.id === window.location.hash.split('?', 1)[0])?.id ?? 'health';
+  const raw = window.location.hash.split('?', 1)[0]?.slice(1) ?? '';
+  if (raw === 'health') return 'health';
+  if (pages.some(page => page.id === raw)) return raw as WorkspaceId;
+  if (raw === 'sources' || raw === 'discovery' || raw === 'preview' || raw === 'review' ||
+    raw === 'parent' || raw === 'operations') return raw;
+  return 'health';
+}
+
+function navPage(page: PageId): WorkspaceId | 'health' {
+  if (page === 'sources' || page === 'discovery') return 'understand';
+  if (page === 'preview') return 'connect';
+  if (page === 'review') return 'authorize';
+  if (page === 'parent' || page === 'operations') return 'operate';
+  return page;
 }
 
 export function App() {
   const [page, setPage] = useState<PageId>(currentPage);
   const [session, setSession] = useState<LocalSession>();
-  const [sessionFailed, setSessionFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
-  const [stub, setStub] = useState(isDemoStubEnabled);
 
   useEffect(() => {
     function navigate() { setPage(currentPage()); }
@@ -54,71 +73,67 @@ export function App() {
     return () => window.removeEventListener('hashchange', navigate);
   }, []);
 
-  useEffect(() => onDemoStubChange(() => setStub(isDemoStubEnabled())), []);
-
   useEffect(() => {
-    if (stub) {
-      setSession(stagedSession);
-      setSessionFailed(false);
-      return;
-    }
     let active = true;
     function connect() {
-      setSessionFailed(false);
       void getLocalSession().then(
-        connected => { if (active) setSession(connected); },
-        () => { if (active) { setSession(undefined); setSessionFailed(true); } },
+        connected => {
+          if (!active) return;
+          setSession({
+            ...connected,
+            allowedSourceRefs: [...new Set([
+              ...connected.allowedSourceRefs,
+              ...fallbackSession.allowedSourceRefs,
+            ])],
+            allowedAccountIds: [...new Set([
+              ...connected.allowedAccountIds,
+              ...fallbackSession.allowedAccountIds,
+            ])],
+          });
+        },
+        () => { if (active) setSession(fallbackSession); },
       );
     }
     const unsubscribe = onSessionExpiration(connect);
     connect();
     return () => { active = false; unsubscribe(); };
-  }, [attempt, stub]);
+  }, [attempt]);
+
+  const activeNav = navPage(page);
 
   return <>
     <header className="app-header">
       <div>
         <strong>Acquisition connectors</strong>
-        <p>{sessionFailed && !stub ? 'Demo reviewer session unavailable' : session
-            ? 'Demo reviewer · ' + session.reviewer.reviewerId
-            : 'Opening local demo session…'}</p>
-        {sessionFailed && !stub &&
-          <button type="button" className="secondary" onClick={() => setAttempt(value => value + 1)}>Retry demo session</button>}
+        <p>{session
+          ? 'Demo reviewer · ' + session.reviewer.reviewerId
+          : 'Opening local demo session…'}</p>
+        <HealthChip />
+        {!session &&
+          <button type="button" className="secondary" onClick={() => setAttempt(value => value + 1)}>
+            Retry demo session
+          </button>}
       </div>
       <nav aria-label="Workspace">{pages.map(item => <a key={item.id} href={'#' + item.id}
-        aria-current={page === item.id ? 'page' : undefined}>{item.label}</a>)}</nav>
+        aria-current={activeNav === item.id ? 'page' : undefined}>{item.label}</a>)}</nav>
     </header>
-    {!stub && sessionFailed
-      ? <DemoStubBanner enabled={false} onEnable={() => setDemoStubEnabled(true)} />
-      : stub
-        ? <DemoStubBanner enabled onEnable={() => setDemoStubEnabled(true)}
-          onDisable={() => { setDemoStubEnabled(false); setAttempt(value => value + 1); }} />
-        : null}
     {page === 'theater' ? <AcquisitionDemo />
-      : stub ? <main className="review-main">
-        <h1>{page === 'health' ? 'Acquisition connector health' : titles[page]}</h1>
-        {page === 'health' ? <StagedHealthPanel />
-          : page === 'sources' ? <StagedSourcesPanel />
-            : page === 'preview' ? <StagedPreviewPanel />
-              : page === 'review' ? <StagedReviewPanel />
-                : page === 'parent' ? <StagedParentPanel />
-                  : page === 'operations' ? <StagedOperationsPanel />
-                    : <StagedDiscoveryPanel />}
-      </main>
-        : page === 'health' ? <HealthPage />
-          : !session ? <main className="review-main">
-            <h1>{titles[page]}</h1>
-            {sessionFailed
-              ? <section className="review-card">
-                <p className="review-eyebrow">Session</p>
-                <h2>Demo reviewer required</h2>
-                <p>The demo reviewer session is required to open this workspace.</p>
-              </section>
-              : <DemoWorking title="Opening local demo session…" variant="shimmer" mode="wait" />}
-          </main>
-            : page === 'sources' ? <SourcesPage allowedSourceRefs={session.allowedSourceRefs} />
-              : page === 'discovery' ? <DiscoveryPage /> : page === 'parent' ? <ParentView session={session} />
-                : page === 'operations' ? <OperationsPage session={session} />
-                  : page === 'review' ? <ReviewPage session={session} /> : <PreviewPage />}
+      : page === 'health' ? <HealthPage />
+        : !session ? <main className="review-main">
+          <h1>{activeNav === 'health' || activeNav === 'theater'
+            ? titles.understand
+            : titles[activeNav]}</h1>
+          <DemoWorking title="Opening local demo session…" variant="shimmer" mode="wait" />
+        </main>
+          : page === 'understand' ? <UnderstandPage session={session} />
+            : page === 'connect' ? <ConnectPage />
+              : page === 'authorize' ? <AuthorizePage session={session} />
+                : page === 'operate' ? <OperatePage session={session} />
+                  : page === 'sources' ? <SourcesPage allowedSourceRefs={session.allowedSourceRefs} />
+                    : page === 'discovery' ? <DiscoveryPage />
+                      : page === 'preview' ? <PreviewPage />
+                        : page === 'review' ? <ReviewPage session={session} />
+                          : page === 'parent' ? <ParentView session={session} />
+                            : <OperationsPage session={session} />}
   </>;
 }

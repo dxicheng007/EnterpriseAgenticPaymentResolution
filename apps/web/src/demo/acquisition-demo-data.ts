@@ -177,7 +177,7 @@ export const demoCompanies: readonly DemoCompany[] = [
   },
   {
     id: 'company-b',
-    name: 'Company B',
+    name: 'DASDummies',
     tagline: 'Regional ledger · multi-seller book',
     acquiredOn: '2026-09-18',
     unknownBlurb: 'Status unknown. Agent exploration has not opened this acquisition yet.',

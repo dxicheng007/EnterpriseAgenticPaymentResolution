@@ -20,8 +20,12 @@ async function activate(page: Parameters<typeof startReview>[0], origin: string,
   await expect(page.getByRole('region', { name: 'Activation receipt' })).toBeVisible();
 }
 
-async function openOperations(page: Parameters<typeof startReview>[0], accountId: string) {
-  await page.getByRole('link', { name: 'Operations' }).click();
+async function openOperations(
+  page: Parameters<typeof startReview>[0],
+  origin: string,
+  accountId: string,
+) {
+  await page.goto(origin + '/#operations');
   await expect(page.getByRole('heading', { name: 'Connection operations' })).toBeVisible();
   await page.getByLabel('Registered account').selectOption(accountId);
   await expect(page.getByRole('region', { name: 'Current authority' })).toBeVisible();
@@ -41,7 +45,7 @@ test('shows dedicated authority, immutable receipts, honest AI-off posture and c
     await activate(page, origin, accountA);
     const overviewRead = apiResponse(page, '/api/connections/' + accountA);
     const authorityRead = apiResponse(page, '/api/connections/' + accountA + '/authority');
-    await openOperations(page, accountA);
+    await openOperations(page, origin, accountA);
     const [overviewResponse, authorityResponse] = await Promise.all([overviewRead, authorityRead]);
     const state = ConnectionStateV1Schema.parse(await overviewResponse.json());
     const authority = CurrentAuthorityV1Schema.parse(await authorityResponse.json());
@@ -100,7 +104,7 @@ test('keeps authority command availability independent from the overview', async
       status: 503, contentType: 'application/json',
       body: JSON.stringify({ code: 'DEPENDENCY_UNAVAILABLE', message: 'overview unavailable', diagnostics: [] }),
     }));
-    await openOperations(page, accountA);
+    await openOperations(page, origin, accountA);
     const controls = page.getByRole('region', { name: 'Current authority' });
     await expect(controls.getByRole('button', { name: 'Pause this customer' })).toBeEnabled();
     await expect(page.getByRole('alert')).toBeVisible();
@@ -136,12 +140,11 @@ test('persists an uncertain command across navigation and retries its exact body
       await route.fetch();
       await route.abort('failed');
     });
-    await openOperations(page, accountA);
+    await openOperations(page, origin, accountA);
     const controls = page.getByRole('region', { name: 'Current authority' });
     await controls.getByRole('button', { name: 'Pause this customer' }).click();
     await expect(controls.getByRole('button', { name: 'Retry original pause' })).toBeEnabled();
-    await page.getByRole('link', { name: 'Parent' }).click();
-    await openOperations(page, accountA);
+    await openOperations(page, origin, accountA);
     await expect(controls.getByRole('button', { name: 'Retry original pause' })).toBeEnabled();
     const retry = apiResponse(page, path, 'POST');
     await controls.getByRole('button', { name: 'Retry original pause' }).click();
@@ -175,7 +178,7 @@ test('retires a 409 attempt, refreshes both reads and requires a new deliberate 
         body: JSON.stringify({ code: 'AUTHORITY_STALE', message: 'stale authority', diagnostics: [] }),
       });
     });
-    await openOperations(page, accountA);
+    await openOperations(page, origin, accountA);
     const controls = page.getByRole('region', { name: 'Current authority' });
     await controls.getByRole('button', { name: 'Pause this customer' }).click();
     await expect(controls.getByText(/paused.*epoch 2/i).first()).toBeVisible();
@@ -202,7 +205,7 @@ test('keeps a same-identity epoch floor and never displays a historical replay a
   try {
     await activate(page, origin, accountA);
     const initialRead = apiResponse(page, authorityPath);
-    await openOperations(page, accountA);
+    await openOperations(page, origin, accountA);
     const initialAuthority = CurrentAuthorityV1Schema.parse(await (await initialRead).json());
     const controls = page.getByRole('region', { name: 'Current authority' });
     await page.route('**' + authorityPath, async route => {
@@ -228,8 +231,7 @@ test('keeps a same-identity epoch floor and never displays a historical replay a
     await page.evaluate(({ accountId, operation }) => {
       sessionStorage.setItem('eapr-authority-operation:' + accountId, JSON.stringify(operation));
     }, { accountId: accountA, operation: historical });
-    await page.getByRole('link', { name: 'Parent' }).click();
-    await openOperations(page, accountA);
+    await openOperations(page, origin, accountA);
     await expect(controls.getByText(/revoked.*epoch 4/i).first()).toBeVisible();
     await controls.getByRole('button', { name: 'Retry original pause' }).click();
     await expect(controls.getByText(/replayed historical result/i)).toBeVisible();

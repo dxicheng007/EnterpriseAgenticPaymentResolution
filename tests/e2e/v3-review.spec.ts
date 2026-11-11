@@ -130,7 +130,7 @@ test('binds one-customer approval, reuses the saved key, gates stale packages, a
     await expect(page.getByRole('button', { name: /Approve this customer only|Retry same approval/ })).toBeEnabled();
 
     // --- Parent inspect remains read-only; only A is active ---
-    await page.getByRole('link', { name: 'Parent' }).click();
+    await page.goto(origin + '/#parent');
     await expect(page.getByRole('heading', { name: 'Parent records', exact: true })).toBeVisible();
     const parentSelect = page.getByLabel('Registered account');
 

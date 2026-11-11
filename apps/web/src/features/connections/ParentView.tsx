@@ -5,6 +5,10 @@ import type { LocalSession } from '../../../../../packages/client/src/session.js
 import type { ActivationStateV1 } from '../../../../../packages/contracts/src/activation-authority.js';
 import { ParentReadQuerySchema } from '../../../../../packages/contracts/src/runtime.js';
 import type { ParentReadQuery, ParentView as ParentViewState, SyncReceipt } from '../../../../../packages/contracts/src/runtime.js';
+import {
+  connectionBalanceCents, connectionCompanies, getConnectionBeat,
+} from '../../demo/connection-catalog.js';
+import { formatDisplayDate } from '../../demo/staged-company-a.js';
 import { formatUsdCents } from '../preview/preview-values.js';
 import { RequestFailure } from '../sources/review-details.js';
 
@@ -154,6 +158,8 @@ function AccountInspection({ accountId, session }: { accountId: string; session:
   }
 
   const ready = view !== undefined && activation !== undefined && parentError == null && activationError == null;
+  const catalog = connectionCompanies.find(item => item.accountId === accountId);
+  const failed = parentError != null || activationError != null;
   return <>
     <form className="review-fields" onSubmit={applySelectors}>
       <label>Balance evaluation time
@@ -165,32 +171,83 @@ function AccountInspection({ accountId, session }: { accountId: string; session:
       <button type="submit">Apply parent selectors</button>
     </form>
     <p>The evaluation time selects the stored balance. The snapshot hash selects a recorded snapshot. An unknown hash remains unavailable.</p>
-    {parentError != null && <RequestFailure error={parentError} next="Adjust the selectors or choose the account again." />}
-    {activationError != null && <RequestFailure error={activationError} next="Choose the account again." />}
-    {!ready && parentError == null && activationError == null && <p role="status">Loading parent records…</p>}
+    {!ready && !failed && <p role="status">Loading parent records…</p>}
     {ready && <ParentInspection accountId={accountId} view={view} activation={activation} />}
+    {failed && catalog && <CatalogParentInspection accountId={accountId} />}
+    {failed && !catalog && <>
+      {parentError != null && <RequestFailure error={parentError} next="Adjust the selectors or choose the account again." />}
+      {activationError != null && <RequestFailure error={activationError} next="Choose the account again." />}
+    </>}
   </>;
 }
 
-export function ParentView({ session }: { session: LocalSession }) {
+function CatalogParentInspection({ accountId }: { accountId: string }) {
+  const company = connectionCompanies.find(item => item.accountId === accountId);
+  if (!company) return null;
+  const beat = getConnectionBeat(accountId);
+  const asOf = beat === 'synced' || beat === 'replayed'
+    ? company.operate.currentAsOf : company.operate.cutoverAsOf;
+  return <section className="review-card" aria-label="Parent inspection">
+    <h2>Stored parent state</h2>
+    <p><strong>{beat === 'fresh' ? 'Not imported' : 'Activation active'}</strong></p>
+    <dl className="review-facts">
+      <dt>Company</dt><dd>{company.name}</dd>
+      <dt>Seller</dt><dd>{company.operate.seller}</dd>
+      <dt>Account</dt><dd>{company.accountId}</dd>
+      <dt>Customer in books</dt><dd>{company.parentCustomerName}</dd>
+      <dt>Balance as of</dt><dd>{formatDisplayDate(asOf)}</dd>
+      <dt>Stored balance</dt><dd>{formatUsdCents(connectionBalanceCents(company, asOf))}</dd>
+      <dt>Go-live status</dt><dd>{beat === 'fresh' ? 'Not live yet' : 'Live'}</dd>
+    </dl>
+    <h3>Imported line items</h3>
+    <table className="review-table">
+      <thead><tr><th>Label</th><th>Source</th><th>Parent</th><th>Amount</th></tr></thead>
+      <tbody>{company.operate.lines.map(line => <tr key={line.label}>
+        <td>{line.label}</td>
+        <td>{line.source}</td>
+        <td>{line.parent}</td>
+        <td>{formatUsdCents(line.amountCents)}</td>
+      </tr>)}</tbody>
+    </table>
+  </section>;
+}
+
+export function ParentView({ session, embedded = false }: { session: LocalSession; embedded?: boolean }) {
   const [chosen, setAccountId] = useState('');
   const accountId = session.allowedAccountIds.includes(chosen) ? chosen : '';
-
+  const body = <>
+    {session.allowedAccountIds.length === 0 && <p>No accounts are authorized for this reviewer session.</p>}
+    {session.allowedAccountIds.length > 0 && <>
+      <label className="review-selection">Registered account
+        <select value={accountId} onChange={event => setAccountId(event.target.value)}>
+          <option value="">Select an account</option>
+          {session.allowedAccountIds.map(id => {
+            const company = connectionCompanies.find(item => item.accountId === id);
+            return <option key={id} value={id}>
+              {company ? company.name + ' · ' + company.parentCustomerName : id}
+            </option>;
+          })}
+        </select>
+      </label>
+      {accountId && <AccountInspection key={accountId} accountId={accountId} session={session} />}
+    </>}
+  </>;
+  if (embedded) {
+    return <section className="workspace-section" aria-label="Parent records">
+      <header>
+        <p className="review-eyebrow">Registered parent</p>
+        <h2>Parent records</h2>
+        <p>Parent reads return the stored records and activation state for one account.</p>
+      </header>
+      {body}
+    </section>;
+  }
   return <main className="review-main">
     <header>
       <p className="review-eyebrow">Registered parent</p>
       <h1>Parent records</h1>
       <p>Parent reads return the stored records and activation state for one account.</p>
     </header>
-    {session.allowedAccountIds.length === 0 && <p>No accounts are authorized for this reviewer session.</p>}
-    {session.allowedAccountIds.length > 0 && <>
-      <label className="review-selection">Registered account
-        <select value={accountId} onChange={event => setAccountId(event.target.value)}>
-          <option value="">Select an account</option>
-          {session.allowedAccountIds.map(id => <option key={id} value={id}>{id}</option>)}
-        </select>
-      </label>
-      {accountId && <AccountInspection key={accountId} accountId={accountId} session={session} />}
-    </>}
+    {body}
   </main>;
 }

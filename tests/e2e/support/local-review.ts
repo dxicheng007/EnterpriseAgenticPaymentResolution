@@ -278,13 +278,25 @@ export async function expectBrowserMutation(response: Response, origin: string, 
   }
 }
 
+const reviewSections = {
+  // Live control surfaces keep their original hashes for harnessed e2e.
+  sources: 'sources',
+  understand: 'understand',
+  preview: 'preview',
+  connect: 'connect',
+  parent: 'parent',
+  operate: 'operate',
+  review: 'review',
+  authorize: 'authorize',
+} as const;
+
 export async function startReview(
   page: Page,
   origin: string,
-  section: 'sources' | 'preview' | 'parent' | 'review',
+  section: keyof typeof reviewSections,
 ) {
   const bootstrap = apiResponse(page, '/api/local-session', 'POST');
-  await page.goto(origin + '/#' + section);
+  await page.goto(origin + '/#' + reviewSections[section]);
   const session = await bootstrap;
   expect(session.status()).toBe(200);
   await expectBrowserMutation(session, origin, { bootstrap: true });
@@ -294,7 +306,7 @@ export async function startReview(
   await expect(page.getByText('Demo reviewer · demo-reviewer')).toBeVisible();
   await expect(page.getByRole('button', { name: /sign in|log in|sign up/i })).toHaveCount(0);
   await expect(page.getByLabel(/password|sign-in code/i)).toHaveCount(0);
-  if (section === 'review') {
+  if (section === 'review' || section === 'authorize') {
     await expect(page.getByRole('heading', { name: 'Customer review', exact: true })).toBeVisible();
   }
 }
